@@ -772,3 +772,47 @@ Review (fill after implementation):
 - Runtime process path confirmed env python: `C:\Users\k1190\miniconda3\envs\sector-rotation\python.exe`.
 - Residual risks / follow-ups:
 - On machines with non-standard conda install paths and missing `CONDA_EXE`, launcher falls back to `call conda ...`; those environments may still require PATH/conda setup.
+
+## 23) Railway Deployment Setup for Streamlit (2026-02-23)
+
+Pre-Implementation Check-in:
+- 2026-02-23: Plan reviewed. Scope is deployment enablement for Railway with minimal, production-safe startup config for Streamlit:
+- bind Streamlit to Railway-assigned `PORT`,
+- keep app headless and externally reachable (`0.0.0.0`),
+- document step-by-step deploy flow and required environment variables.
+
+Execution Checklist:
+- [x] Add this section to `tasks/todo.md` with checklist + review area.
+- [x] Add Railway config-as-code start command in `railway.toml` for Streamlit.
+- [x] Add `runtime.txt` to pin Python runtime expected by the project.
+- [x] Add deployment guide doc for Railway (`docs/railway-deploy.md`).
+- [x] Run local startup smoke with explicit `PORT` to validate command semantics.
+- [x] Run focused verification (`py_compile` + selected pytest) after config/docs changes.
+- [x] Record commands, outcomes, and residual risks in review.
+
+Verification Gates:
+- [x] `railway.toml` exists and sets `deploy.startCommand` with `--server.port $PORT --server.address 0.0.0.0 --server.headless true`.
+- [x] `runtime.txt` exists and aligns with project Python baseline.
+- [x] Railway guide includes env vars for `ECOS_API_KEY` and `KOSIS_API_KEY`.
+- [x] Local smoke starts app with `PORT` override without command errors.
+
+Review (fill after implementation):
+- Commands run:
+- `Get-ChildItem -Force`
+- `rg --files`
+- `Get-Content -Raw app.py`
+- `Get-Content -Raw .streamlit/config.toml`
+- `Get-Content -Raw .streamlit/secrets.toml.example`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m py_compile app.py src/data_sources/krx_indices.py src/data_sources/ecos.py src/data_sources/kosis.py tests/test_ui_components.py tests/test_integration.py`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m pytest -q tests/test_ui_components.py tests/test_integration.py`
+- `Start-Process ... streamlit run app.py --server.headless true --server.address 0.0.0.0 --server.port 8812` + `netstat -ano | Select-String ':8812'`
+- `Start-Process cmd /c "set PORT=8814 && ...python.exe -m streamlit run app.py --server.headless true --server.address 0.0.0.0 --server.port %PORT%"` + `netstat -ano | Select-String ':8814'`
+- Results:
+- Added `railway.toml` with explicit Railpack builder and deployment start command.
+- Added `runtime.txt` (`3.11`) to reduce runtime drift across deployments.
+- Added `docs/railway-deploy.md` with end-to-end Railway deploy steps and required env vars.
+- Focused verification passed: `16 passed, 1 warning in 8.37s`.
+- Startup smoke passed: Streamlit process listened on `0.0.0.0:8812` and command-style run with `PORT` env also listened on `0.0.0.0:8814`.
+- Residual risks / follow-ups:
+- Railway build/runtime behavior can differ if service-level start command is manually overridden in UI; keep `railway.toml` and UI command consistent.
+- Without valid `ECOS_API_KEY`/`KOSIS_API_KEY`, production deploy will run in fallback (`SAMPLE`) mode by design.
