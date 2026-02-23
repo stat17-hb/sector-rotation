@@ -706,3 +706,69 @@ Review (fill after implementation):
 - Remote branch verification passed via `git ls-remote --heads origin main`.
 - Residual risks / follow-ups:
 - `gh` CLI is still not installed; future repo admin tasks will require API/manual UI unless `gh` is installed.
+
+## 21) Batch Launcher No-Output Fix (`run_streamlit.bat`) (2026-02-23)
+
+Pre-Implementation Check-in:
+- 2026-02-23: User reported that running `scripts/run_streamlit.bat` shows no window/output. Target is to make launcher reliably start Streamlit from `sector-rotation` env and expose activation failures.
+
+Execution Checklist:
+- [x] Inspect current `scripts/run_streamlit.bat`.
+- [x] Fix conda activation call semantics for batch-to-batch execution.
+- [x] Add activation failure handling message and stop path.
+- [x] Preserve runtime argument forwarding for Streamlit options.
+- [x] Verify launcher by running batch with headless port probe.
+
+Verification Gates:
+- [x] `scripts/run_streamlit.bat` uses `call conda activate sector-rotation`.
+- [x] `scripts/run_streamlit.bat` runs `python -m streamlit run app.py %*`.
+- [x] Runtime probe confirms `LISTENING` python process from `...envs\\sector-rotation\\python.exe`.
+
+Review (fill after implementation):
+- Commands run:
+- `Get-Content -Raw scripts/run_streamlit.bat`
+- `cmd /c "scripts\\run_streamlit.bat --server.headless true --server.port 8540"` (port unavailable signal confirmed launcher executed)
+- `cmd /c "scripts\\run_streamlit.bat --server.headless true --server.port 8799"` (timeout while app running)
+- `netstat -ano | Select-String ":8799"`
+- `Get-Process -Id 26496 | Select-Object Id,ProcessName,Path`
+- `Stop-Process -Id 26496 -Force`
+- Results:
+- Root cause matched batch semantics: removing `call` before `conda` prevented expected script flow for chained batch execution.
+- Launcher updated to `call conda activate sector-rotation`, error branch with message/pause, and `%*` forwarding.
+- Probe verified Streamlit listener on `:8799` and process path `C:\Users\k1190\miniconda3\envs\sector-rotation\python.exe`.
+- Residual risks / follow-ups:
+- If `conda` is not initialized for CMD on another machine, activation can still fail; message now instructs that condition explicitly.
+
+## 22) Conda Init Error Fix for CMD Launcher (2026-02-23)
+
+Pre-Implementation Check-in:
+- 2026-02-23: User reported `CondaError: Run 'conda init' before 'conda activate'` when launching `scripts/run_streamlit.bat`. Target is to remove CMD init dependency and keep env activation reliable.
+
+Execution Checklist:
+- [x] Reproduce/confirm launcher context and conda path signals (`CONDA_EXE`, `conda.bat`).
+- [x] Update batch launcher to resolve and call `conda.bat` directly.
+- [x] Keep fallback path when `conda.bat` cannot be resolved.
+- [x] Verify launcher startup using headless Streamlit port probe.
+- [x] Confirm runtime process uses `sector-rotation` env python.
+
+Verification Gates:
+- [x] `scripts/run_streamlit.bat` resolves `CONDA_BAT` and invokes `call "%CONDA_BAT%" activate sector-rotation`.
+- [x] Fallback branch still supports `call conda activate sector-rotation`.
+- [x] Probe run opens listener port and process path points to `...\\envs\\sector-rotation\\python.exe`.
+
+Review (fill after implementation):
+- Commands run:
+- `Get-Content -Raw scripts/run_streamlit.bat`
+- `Write-Output "CONDA_EXE=$env:CONDA_EXE"; Get-Command conda`
+- `Test-Path "$env:USERPROFILE\\miniconda3\\condabin\\conda.bat"`
+- `cmd /c "scripts\\run_streamlit.bat --server.headless true --server.port 8801"` (timeout while app running)
+- `netstat -ano | Select-String ":8801"`
+- `Get-Process -Id 18320 | Select-Object Id,ProcessName,Path`
+- `Stop-Process -Id 18320 -Force`
+- Results:
+- `CONDA_EXE` existed and pointed to `C:\Users\k1190\miniconda3\Scripts\conda.exe`.
+- `C:\Users\k1190\miniconda3\condabin\conda.bat` existed and is now used directly in launcher activation path.
+- Batch probe launched Streamlit successfully; `:8801` listener confirmed.
+- Runtime process path confirmed env python: `C:\Users\k1190\miniconda3\envs\sector-rotation\python.exe`.
+- Residual risks / follow-ups:
+- On machines with non-standard conda install paths and missing `CONDA_EXE`, launcher falls back to `call conda ...`; those environments may still require PATH/conda setup.
