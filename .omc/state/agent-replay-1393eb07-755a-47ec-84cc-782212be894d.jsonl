@@ -1,9 +1,0 @@
-{"t":0,"agent":"adc136b","agent_type":"Explore","event":"agent_start","parent_mode":"none"}
-{"t":0,"agent":"ade9ef6","agent_type":"Explore","event":"agent_start","parent_mode":"none"}
-{"t":0,"agent":"adc136b","agent_type":"Explore","event":"agent_stop","success":true,"duration_ms":39555}
-{"t":0,"agent":"ade9ef6","agent_type":"Explore","event":"agent_stop","success":true,"duration_ms":177685}
-{"t":0,"agent":"system","event":"keyword_detected","keyword":"pipeline"}
-{"t":0,"agent":"system","event":"skill_invoked","skill_name":"oh-my-claudecode:pipeline"}
-{"t":0,"agent":"aade236","agent_type":"executor","event":"agent_start","parent_mode":"none"}
-{"t":0,"agent":"aade236","agent_type":"executor","event":"agent_stop","success":true,"duration_ms":59593}
-{"t":0,"agent":"a1e6641","agent_type":"unknown","event":"agent_stop","success":true}
