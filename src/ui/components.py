@@ -3,6 +3,7 @@ Reusable Streamlit UI components.
 
 Components:
 - render_macro_tile: Current regime metrics
+- render_action_summary: Action distribution KPI + bar chart
 - render_rs_scatter: 4-quadrant RS vs trend scatter
 - render_returns_heatmap: Sector × period returns heatmap
 - render_signal_table: Full signal table with action/regime filter
@@ -371,6 +372,47 @@ def render_returns_heatmap(signals: list) -> go.Figure:
     )
 
     return fig
+
+
+def render_action_summary(signals: list) -> None:
+    """Render action-distribution KPI row and bar chart."""
+    if not signals:
+        st.info("신호 데이터 없음")
+        return
+
+    action_order = ["Strong Buy", "Watch", "Hold", "Avoid", "N/A"]
+    action_counts = {action: 0 for action in action_order}
+    for s in signals:
+        action_counts[s.action] = action_counts.get(s.action, 0) + 1
+
+    total_count = sum(action_counts.values())
+    metric_cols = st.columns(len(action_order) + 1)
+    with metric_cols[0]:
+        st.metric("Total", total_count)
+    for idx, action in enumerate(action_order, start=1):
+        with metric_cols[idx]:
+            st.metric(action, action_counts[action])
+
+    template = get_plotly_template()
+    fig = go.Figure(
+        data=go.Bar(
+            x=action_order,
+            y=[action_counts[action] for action in action_order],
+            marker_color=[ACTION_COLORS[action] for action in action_order],
+            text=[str(action_counts[action]) for action in action_order],
+            textposition="outside",
+        )
+    )
+    fig.update_layout(
+        **template,
+        title="Action 분포",
+        xaxis_title="",
+        yaxis_title="섹터 수",
+        height=280,
+        showlegend=False,
+    )
+    fig.update_yaxes(dtick=1, rangemode="tozero")
+    st.plotly_chart(fig, use_container_width=True)
 
 
 def render_signal_table(

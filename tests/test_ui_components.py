@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 from src.signals.matrix import SectorSignal
-from src.ui.components import render_rs_momentum_bar, render_rs_scatter
+from src.ui.components import (
+    render_action_summary,
+    render_rs_momentum_bar,
+    render_rs_scatter,
+)
 from src.ui.styles import ACTION_COLORS, BLUE, DARK_GREY, GREY
 
 
@@ -98,3 +102,76 @@ def test_action_colors_watch_hold_mapping():
     assert ACTION_COLORS["Watch"] == BLUE
     assert ACTION_COLORS["Hold"] == GREY
     assert ACTION_COLORS["N/A"] == DARK_GREY
+
+
+class _DummyColumn:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def test_render_action_summary_renders_metrics_and_bar(monkeypatch):
+    signals = [
+        _signal("A", "Strong Buy", 1.10, 1.00),
+        _signal("B", "Watch", 1.05, 1.00),
+        _signal("C", "Watch", 1.01, 1.00),
+        _signal("D", "Hold", 0.98, 1.00),
+        _signal("E", "Avoid", 0.94, 1.00),
+        _signal("F", "N/A", 1.00, 1.00),
+    ]
+
+    metric_calls: list[tuple[str, int]] = []
+    chart_calls: list[tuple[object, bool]] = []
+
+    monkeypatch.setattr(
+        "src.ui.components.st.columns",
+        lambda n: [_DummyColumn() for _ in range(n)],
+    )
+    monkeypatch.setattr(
+        "src.ui.components.st.metric",
+        lambda label, value, *_, **__: metric_calls.append((label, value)),
+    )
+    monkeypatch.setattr(
+        "src.ui.components.st.plotly_chart",
+        lambda fig, use_container_width=False: chart_calls.append((fig, use_container_width)),
+    )
+
+    render_action_summary(signals)
+
+    assert ("Total", 6) in metric_calls
+    assert ("Strong Buy", 1) in metric_calls
+    assert ("Watch", 2) in metric_calls
+    assert ("Hold", 1) in metric_calls
+    assert ("Avoid", 1) in metric_calls
+    assert ("N/A", 1) in metric_calls
+    assert len(chart_calls) == 1
+    fig, use_container_width = chart_calls[0]
+    assert use_container_width is True
+    assert list(fig.data[0].x) == ["Strong Buy", "Watch", "Hold", "Avoid", "N/A"]
+    assert list(fig.data[0].y) == [1, 2, 1, 1, 1]
+    assert list(fig.data[0].marker.color) == [
+        ACTION_COLORS["Strong Buy"],
+        ACTION_COLORS["Watch"],
+        ACTION_COLORS["Hold"],
+        ACTION_COLORS["Avoid"],
+        ACTION_COLORS["N/A"],
+    ]
+
+
+def test_render_action_summary_handles_empty_signal_list(monkeypatch):
+    info_calls: list[str] = []
+    chart_calls: list[object] = []
+
+    monkeypatch.setattr("src.ui.components.st.info", lambda text: info_calls.append(text))
+    monkeypatch.setattr(
+        "src.ui.components.st.plotly_chart",
+        lambda fig, use_container_width=False: chart_calls.append(fig),
+    )
+
+    render_action_summary([])
+
+    assert info_calls
+    assert info_calls[0] == "신호 데이터 없음"
+    assert not chart_calls

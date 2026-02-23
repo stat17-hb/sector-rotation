@@ -525,3 +525,53 @@ Review (fill after implementation):
 - Runtime smoke confirmed desktop/mobile profile values and preserved 1:1 axis lock (`scaleanchor=x`, `scaleratio=1`).
 - Residual risks / follow-ups:
 - Mobile detection is best-effort via user-agent header tokens; edge-case tablet/desktop-class browsers on mobile OS may be classified differently.
+
+## 17) Dashboard IA Refactor for Decision-First Flow (2026-02-23)
+
+Pre-Implementation Check-in:
+- 2026-02-23: Plan reviewed. Scope is limited to IA/UI restructuring with no backend analytics contract changes:
+- 1) rename/reorder tabs to `오늘의 결론 | 근거 분석 | 전체 신호`,
+- 2) move action/regime filters to sidebar as global filters,
+- 3) add action summary + top picks in the first tab,
+- 4) keep momentum and signal computation logic unchanged.
+
+Execution Checklist:
+- [x] Add this section to `tasks/todo.md` with checklist + review area.
+- [x] In `app.py`, replace current tab labels/order with decision-first labels.
+- [x] In `app.py`, move action/regime filters from Signals tab to sidebar and persist as global session state (`filter_action_global`, `filter_regime_only_global`).
+- [x] In `app.py`, derive `signals_filtered` once and reuse across all tabs.
+- [x] In `app.py`, implement "오늘의 결론" layout with:
+- [x] macro tile + status summary,
+- [x] action summary component,
+- [x] top picks table sorted by `Action priority -> RS divergence desc`,
+- [x] returns heatmap based on global filters.
+- [x] In `app.py`, keep momentum visuals in "근거 분석" and make warnings filter-aware.
+- [x] In `app.py`, keep signal table in "전체 신호" using globally filtered dataset.
+- [x] In `src/ui/components.py`, add `render_action_summary(signals: list) -> None`.
+- [x] In `tests/test_ui_components.py`, add action-summary tests and keep momentum tests green.
+- [x] Run verification: `pytest -q tests/test_ui_components.py tests/test_signals.py tests/test_integration.py`.
+- [x] Record commands, outcomes, and residual risks in review.
+
+Verification Gates:
+- [x] `app.py` contains sidebar-global filter controls and `signals_filtered` reuse.
+- [x] `src/ui/components.py` contains `render_action_summary`.
+- [x] `tests/test_ui_components.py` includes action-summary coverage.
+- [x] `pytest -q tests/test_ui_components.py tests/test_signals.py tests/test_integration.py` passes.
+
+Review (fill after implementation):
+- Commands run:
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m pytest -q tests/test_ui_components.py tests/test_signals.py tests/test_integration.py`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m py_compile app.py src/ui/components.py tests/test_ui_components.py`
+- `git diff -- app.py src/ui/components.py tests/test_ui_components.py tasks/todo.md`
+- Results:
+- Updated IA to decision-first tabs: `오늘의 결론 (Decision) | 근거 분석 (Evidence) | 전체 신호 (Signals)`.
+- Added sidebar-global filters (`filter_action_global`, `filter_regime_only_global`) and centralized `signals_filtered` reuse across all tabs.
+- Added first-tab decision widgets: Action summary (KPI + bar), Top Picks table with `Action priority -> RS divergence desc`, and filter-aware returns heatmap.
+- Kept momentum visual logic intact while making benchmark warning/filter behavior operate on `signals_filtered`.
+- Added `render_action_summary(signals: list) -> None` in `src/ui/components.py`.
+- Added UI tests for action summary rendering/empty-state handling in `tests/test_ui_components.py`.
+- Verification:
+- Targeted pytest: `19 passed, 1 warning in 7.70s`.
+- `py_compile` for touched files passed without errors.
+- Residual risks / follow-ups:
+- Global filters can intentionally hide warning-trigger rows (for example, strict action filter), so users may see "필터 조건에 맞는 신호 없음" instead of benchmark-missing warning; this is expected under global-filter semantics.

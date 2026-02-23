@@ -281,6 +281,10 @@ if "asof_date_str" not in st.session_state:
     st.session_state["asof_date_str"] = date.today().strftime("%Y%m%d")
 if "epsilon" not in st.session_state:
     st.session_state["epsilon"] = float(settings.get("epsilon", 0))
+if "filter_action_global" not in st.session_state:
+    st.session_state["filter_action_global"] = "전체"
+if "filter_regime_only_global" not in st.session_state:
+    st.session_state["filter_regime_only_global"] = False
 
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -492,16 +496,75 @@ if not macro_df.empty:
     if len(_fx_s) >= 2:
         fx_change = float((_fx_s.iloc[-1] / _fx_s.iloc[-2] - 1) * 100)
 
+# ── Global filters ─────────────────────────────────────────────────────────────
+
+with st.sidebar:
+    st.divider()
+    st.subheader("🔎 글로벌 필터")
+    st.selectbox(
+        "액션 필터",
+        options=["전체", "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
+        key="filter_action_global",
+    )
+    st.checkbox(
+        f"현재 국면 섹터만 보기 ({current_regime})",
+        key="filter_regime_only_global",
+    )
+
+filter_action_global = str(st.session_state.get("filter_action_global", "전체"))
+filter_regime_only_global = bool(st.session_state.get("filter_regime_only_global", False))
+
+signals_filtered = list(signals)
+if filter_regime_only_global:
+    signals_filtered = [s for s in signals_filtered if s.macro_regime == current_regime]
+if filter_action_global != "전체":
+    signals_filtered = [s for s in signals_filtered if s.action == filter_action_global]
+
+
+def _format_return_pct(returns: dict[str, float], period: str) -> str:
+    value = returns.get(period, float("nan"))
+    if pd.isna(value):
+        return "N/A"
+    return f"{value * 100:+.1f}%"
+
+
+def _rs_divergence_pct(signal) -> float:
+    if pd.isna(signal.rs) or pd.isna(signal.rs_ma) or signal.rs_ma == 0:
+        return float("nan")
+    return float((signal.rs - signal.rs_ma) / signal.rs_ma * 100)
+
+
+action_priority = {
+    "Strong Buy": 0,
+    "Watch": 1,
+    "Hold": 2,
+    "Avoid": 3,
+    "N/A": 4,
+}
+
+
+def _top_pick_sort_key(signal) -> tuple[int, float]:
+    rs_div = _rs_divergence_pct(signal)
+    rs_div_rank = -rs_div if not pd.isna(rs_div) else float("inf")
+    return action_priority.get(signal.action, 99), rs_div_rank
+
+
+top_pick_signals = sorted(signals_filtered, key=_top_pick_sort_key)
+
 # ── Tabs Interface ─────────────────────────────────────────────────────────────
 
-tab_dashboard, tab_momentum, tab_signals = st.tabs([
-    "📊 대시보드 (Dashboard)", 
-    "📈 모멘텀 (Momentum)", 
-    "🔍 통합 신호 (Signals)"
+tab_decision, tab_evidence, tab_all_signals = st.tabs([
+    "✅ 오늘의 결론 (Decision)",
+    "📈 근거 분석 (Evidence)",
+    "🔍 전체 신호 (Signals)",
 ])
 
-with tab_dashboard:
-    from src.ui.components import render_macro_tile, render_returns_heatmap
+with tab_decision:
+    from src.ui.components import (
+        render_action_summary,
+        render_macro_tile,
+        render_returns_heatmap,
+    )
 
     st.markdown("<br>", unsafe_allow_html=True)
     render_macro_tile(
@@ -512,59 +575,47 @@ with tab_dashboard:
         is_provisional=is_provisional,
     )
 
-    # Regime history chart
-    if not macro_result.empty:
-        regime_col1, regime_col2 = st.columns([3, 1])
-        with regime_col1:
-            import plotly.graph_objects as go
-            from src.ui.styles import get_plotly_template
-
-            template = get_plotly_template()
-            regime_colors = {
-                "Recovery": "#4ade80",
-                "Expansion": "#60a5fa",
-                "Slowdown": "#fbbf24",
-                "Contraction": "#f87171",
-                "Indeterminate": "#52525b",
-            }
-
-            fig_regime = go.Figure()
-            for regime_name, color in regime_colors.items():
-                mask = macro_result["regime"] == regime_name
-                if mask.any():
-                    regime_dates = macro_result.index[mask]
-                    fig_regime.add_trace(
-                        go.Scatter(
-                            x=regime_dates.to_list(),
-                            y=[1] * mask.sum(),
-                            mode="markers",
-                            name=regime_name,
-                            marker=dict(color=color, size=10, symbol="square"),
-                        )
-                    )
-            fig_regime.update_layout(
-                **template,
-                title="경기 국면 히스토리",
-                height=200,
-                showlegend=True,
-            )
-            fig_regime.update_yaxes(visible=False)
-            st.plotly_chart(fig_regime, use_container_width=True)
-
-        with regime_col2:
-            st.metric("현재 국면", current_regime)
-            st.metric("데이터 상태 (가격)", price_status)
-            st.metric("데이터 상태 (매크로)", macro_status)
+    status_col1, status_col2, status_col3 = st.columns(3)
+    with status_col1:
+        st.metric("현재 국면", current_regime)
+    with status_col2:
+        st.metric("데이터 상태 (가격)", price_status)
+    with status_col3:
+        st.metric("데이터 상태 (매크로)", macro_status)
 
     st.divider()
-    
-    if signals:
-        fig_heatmap = render_returns_heatmap(signals)
+    st.subheader("Action 분포")
+    render_action_summary(signals_filtered)
+
+    st.divider()
+    st.subheader("Top Picks")
+    if top_pick_signals:
+        top_rows = []
+        for rank, signal in enumerate(top_pick_signals[:8], start=1):
+            rs_div = _rs_divergence_pct(signal)
+            top_rows.append(
+                {
+                    "순위": rank,
+                    "섹터": signal.sector_name + (" *" if signal.is_provisional else ""),
+                    "액션": signal.action,
+                    "RS 이탈도": f"{rs_div:+.2f}%" if not pd.isna(rs_div) else "N/A",
+                    "1M": _format_return_pct(signal.returns, "1M"),
+                    "3M": _format_return_pct(signal.returns, "3M"),
+                    "알림": ", ".join(signal.alerts) if signal.alerts else "-",
+                }
+            )
+        st.dataframe(pd.DataFrame(top_rows), use_container_width=True, hide_index=True)
+    else:
+        st.info("글로벌 필터 조건에 맞는 섹터가 없습니다.")
+
+    st.divider()
+    if signals_filtered:
+        fig_heatmap = render_returns_heatmap(signals_filtered)
         st.plotly_chart(fig_heatmap, use_container_width=True)
     else:
-        st.info("신호 데이터를 계산 중이거나 데이터가 없습니다.")
+        st.info("수익률 히트맵을 표시할 신호가 없습니다.")
 
-with tab_momentum:
+with tab_evidence:
     from src.ui.components import render_rs_momentum_bar, render_rs_scatter
 
     st.markdown("<br>", unsafe_allow_html=True)
@@ -587,9 +638,9 @@ with tab_momentum:
 **점 색상** — Strong Buy (초록) › Watch (파랑) › Hold (회색) › Avoid (빨강)
 """)
 
-    if signals:
+    if signals_filtered:
         benchmark_missing = any(
-            "Benchmark Missing" in getattr(s, "alerts", []) for s in signals
+            "Benchmark Missing" in getattr(s, "alerts", []) for s in signals_filtered
         )
         if benchmark_missing:
             st.warning("벤치마크(KOSPI, 1001) 데이터 누락으로 모멘텀 차트를 계산할 수 없습니다. 시장데이터 갱신 후 재시도하세요.")
@@ -602,7 +653,7 @@ with tab_momentum:
                 else dict(l=72, r=32, t=64, b=64)
             )
             fig_scatter = render_rs_scatter(
-                signals,
+                signals_filtered,
                 height=scatter_height,
                 margin=scatter_margin,
             )
@@ -624,37 +675,23 @@ with tab_momentum:
 - **해석 포인트**: 위 산점도의 대각선(RS = RS MA)에서 얼마나 이탈했는지 수치로 보여줍니다.
 """
             )
-            fig_bar = render_rs_momentum_bar(signals)
+            fig_bar = render_rs_momentum_bar(signals_filtered)
             if fig_bar.data:
                 st.plotly_chart(fig_bar, use_container_width=True)
             else:
                 st.info("RS/RS MA 데이터가 충분하지 않습니다.")
     else:
-        st.info("신호 데이터를 계산 중이거나 데이터가 없습니다.")
+        st.info("글로벌 필터 조건에 맞는 신호가 없습니다.")
 
-with tab_signals:
+with tab_all_signals:
     from src.ui.components import render_signal_table
 
     st.markdown("<br>", unsafe_allow_html=True)
-    filter_col1, filter_col2 = st.columns(2)
-    with filter_col1:
-        filter_action = st.selectbox(
-            "액션 필터",
-            options=["전체", "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
-            index=0,
-        )
-    with filter_col2:
-        filter_regime_only = st.checkbox(
-            f"현재 국면 섹터만 보기 ({current_regime})",
-            value=False,
-        )
-
-    render_signal_table(
-        signals,
-        filter_action=filter_action if filter_action != "전체" else None,
-        filter_regime_only=filter_regime_only,
-        current_regime=current_regime,
+    st.caption(
+        f"적용 필터: 액션={filter_action_global}, "
+        f"현재 국면만 보기={'ON' if filter_regime_only_global else 'OFF'}"
     )
+    render_signal_table(signals_filtered, current_regime=current_regime)
 
 # ── Footer ─────────────────────────────────────────────────────────────────────
 
