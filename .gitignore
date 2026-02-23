@@ -1,0 +1,26 @@
+# Security-sensitive local secrets
+.streamlit/secrets.toml
+.env
+.env.*
+!.env.example
+
+# Local AI/tool state (can contain command/session context)
+.omc/
+.claude/settings.local.json
+
+# Python cache/build/test artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Coverage/test outputs
+.coverage
+.coverage.*
+htmlcov/
+
+# Local temporary logs and scratch files
+.tmp*
+.tmp_test/

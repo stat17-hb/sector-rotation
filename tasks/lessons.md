@@ -13,3 +13,5 @@
 - Pattern: User explicitly requested implementation of an already-agreed plan.
 - Rule: When the user says "implement this plan", start coding immediately; do not re-propose alternatives unless a blocker is discovered.
 - Rule: For approved plans, record execution checklist + verification evidence in `tasks/todo.md` as part of implementation (not as a follow-up suggestion).
+- Pattern: `pre-commit` local hook used `language: system` with `entry: python ...`, causing Windows commit failures (`exit code 9009`) when commit-time PATH lacked `python`.
+- Rule: For Python-based local pre-commit hooks, prefer `language: python` to avoid PATH-dependent failures across IDE/CLI commit environments.

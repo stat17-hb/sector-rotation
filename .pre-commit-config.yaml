@@ -1,0 +1,16 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: detect-private-key
+      - id: check-merge-conflict
+
+  - repo: local
+    hooks:
+      - id: secret-pattern-scan
+        name: secret pattern scan
+        entry: python scripts/security/scan_secrets.py
+        language: python
+        pass_filenames: true
+        types: [text]
+        exclude: "(^\\.omc/|^\\.tmp|^\\.tmp_test/|^data/|__pycache__/|\\.pyc$|\\.parquet$)"

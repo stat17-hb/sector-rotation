@@ -575,3 +575,92 @@ Review (fill after implementation):
 - `py_compile` for touched files passed without errors.
 - Residual risks / follow-ups:
 - Global filters can intentionally hide warning-trigger rows (for example, strict action filter), so users may see "필터 조건에 맞는 신호 없음" instead of benchmark-missing warning; this is expected under global-filter semantics.
+
+## 18) Public Repository Security Audit + Hardening (2026-02-23)
+
+Pre-Implementation Check-in:
+- 2026-02-23: Plan reviewed. Scope is repository security hardening for public exposure:
+- 1) detect credential leakage and secret-tracking risks,
+- 2) harden Git tracking rules for local/semi-sensitive artifacts,
+- 3) verify no known dependency CVEs from project requirements.
+
+Execution Checklist:
+- [x] Add this section to `tasks/todo.md` with checklist + review area.
+- [x] Run tracked-file secret scan (`rg` patterns + `.streamlit` tracked-file check).
+- [x] Run dependency vulnerability audit on project requirements.
+- [x] Add/strengthen `.gitignore` to block local secrets and local-runtime artifacts.
+- [x] Remove `.streamlit/secrets.toml` from Git tracking while keeping local file for runtime.
+- [x] Verify no tracked secret file remains and no raw key patterns remain in tracked files.
+- [x] Record commands, outcomes, and residual risks in review.
+
+Verification Gates:
+- [x] `git ls-files .streamlit` contains only `config.toml` and `secrets.toml.example` (no `secrets.toml`).
+- [x] `.gitignore` includes secret/runtime ignores (`.streamlit/secrets.toml`, `.omc/`, `.tmp*`, `__pycache__/`, `*.pyc`, etc.).
+- [x] `conda run -n sector-rotation python -m pip_audit -r requirements.txt` reports no known vulnerabilities.
+- [x] Secret-pattern scan does not report active keys from tracked files.
+
+Review (fill after implementation):
+- Commands run:
+- `git ls-files`
+- `rg -n --hidden --glob '!*.parquet' --glob '!.git/*' --glob '!__pycache__/*' --glob '!*.pyc' "(ECOS_API_KEY|KOSIS_API_KEY|api[_-]?key|secret|token|password|passwd|AKIA[0-9A-Z]{16}|BEGIN (RSA|OPENSSH|EC|DSA) PRIVATE KEY|xox[baprs]-|ghp_[A-Za-z0-9]{36})"`
+- `conda run -n sector-rotation python -m pip install pip-audit`
+- `conda run -n sector-rotation python -m pip_audit -r requirements.txt`
+- `git rm --cached -r --ignore-unmatch .streamlit/secrets.toml .omc .claude/settings.local.json .tmp_streamlit_krx_warn_fix.log .tmp_streamlit_momentum_responsive.log .tmp_streamlit_sector_rotation.log .tmp_test`
+- `git ls-files .streamlit`
+- `git check-ignore -v .streamlit/secrets.toml .omc/sessions/1393eb07-755a-47ec-84cc-782212be894d.json .tmp_streamlit_krx_warn_fix.log`
+- `git grep -n "<redacted_exposed_key_literal_1>\|<redacted_exposed_key_literal_2>"`
+- Results:
+- Identified critical risk: `.streamlit/secrets.toml` (real API keys) was tracked in Git and therefore exposed in public repository context.
+- Added new `.gitignore` with explicit secret/runtime protections (`.streamlit/secrets.toml`, `.omc/`, `.claude/settings.local.json`, `.tmp*`, `.tmp_test/`, `__pycache__/`, `*.py[cod]`, test/cache artifacts).
+- Removed tracked local artifacts from Git index (`.streamlit/secrets.toml`, `.omc/*`, `.claude/settings.local.json`, `.tmp*`, `.tmp_test/*`) via `git rm --cached`; local files remain on disk.
+- Verification passed: `git ls-files .streamlit` now returns only `config.toml` + `secrets.toml.example`; `git check-ignore` confirms ignore rules are active.
+- Tracked-file key search using leaked key literals returned no matches after untracking.
+- Dependency audit result: `No known vulnerabilities found`.
+- Residual risks / follow-ups:
+- Because keys were already committed previously, treat both ECOS/KOSIS keys as compromised and rotate/revoke them immediately at providers.
+- For complete historical remediation on GitHub, rewrite history (for example with `git filter-repo` or BFG) and force-push, then invalidate cached forks/clones as feasible.
+
+## 19) Secret Scanning Automation Setup (2026-02-23)
+
+Pre-Implementation Check-in:
+- 2026-02-23: Plan reviewed. Scope is preventive controls before public re-publish:
+- 1) local pre-commit secret detection gate,
+- 2) CI secret scan workflow on push/PR,
+- 3) reproducible setup commands + verification evidence.
+
+Execution Checklist:
+- [x] Add this section to `tasks/todo.md` with checklist + review area.
+- [x] Add `.pre-commit-config.yaml` with secret-detection hook(s).
+- [x] Add `.github/workflows/secret-scan.yml` for automated scan on push/PR.
+- [x] Install `pre-commit` in project env and register local git hooks.
+- [x] Run local pre-commit scan (`pre-commit run --all-files`) and resolve failures.
+- [x] Record commands, outcomes, and residual risks in review.
+
+Verification Gates:
+- [x] `.pre-commit-config.yaml` exists and includes secret detection.
+- [x] `.github/workflows/secret-scan.yml` exists and runs on `push` + `pull_request`.
+- [x] `pre-commit install` completes in `sector-rotation` env.
+- [x] `pre-commit run --all-files` completes without secret findings.
+
+Review (fill after implementation):
+- Commands run:
+- `conda run -n sector-rotation python -m pip install pre-commit detect-secrets`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m pre_commit run detect-secrets --all-files -v` (diagnostic; hook migration decision)
+- `conda run -n sector-rotation pre-commit install`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m pre_commit run --all-files`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe scripts/security/scan_secrets.py .streamlit/secrets.toml`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe scripts/security/scan_secrets.py .streamlit/secrets.toml.example`
+- Results:
+- Added `.pre-commit-config.yaml` with three local guards: `detect-private-key`, `check-merge-conflict`, and custom `secret pattern scan` hook.
+- Added custom scanner `scripts/security/scan_secrets.py` to block high-risk secret formats (AWS/GitHub/Slack/OpenAI/private-key headers + hardcoded ECOS/KOSIS key assignments).
+- Added CI workflow `.github/workflows/secret-scan.yml` with two jobs:
+- pre-commit checks on all files (`push`/`pull_request`/manual),
+- Gitleaks full scan (`gitleaks/gitleaks-action@v2`) for repository-level leak detection.
+- Local hook installation succeeded (`pre-commit installed at .git/hooks/pre-commit`).
+- Local verification succeeded: `pre-commit run --all-files` passed all configured hooks.
+- Scanner behavior verified:
+- real keys in `.streamlit/secrets.toml` are detected and block (exit 1),
+- placeholders in `.streamlit/secrets.toml.example` are allowed (exit 0).
+- Residual risks / follow-ups:
+- Custom local scanner is intentionally pattern-based; keep CI Gitleaks enabled to cover broader entropy/signature classes.
+- If you later add new provider keys, extend `scripts/security/scan_secrets.py` patterns to keep local pre-commit coverage aligned.
