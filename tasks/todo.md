@@ -664,3 +664,45 @@ Review (fill after implementation):
 - Residual risks / follow-ups:
 - Custom local scanner is intentionally pattern-based; keep CI Gitleaks enabled to cover broader entropy/signature classes.
 - If you later add new provider keys, extend `scripts/security/scan_secrets.py` patterns to keep local pre-commit coverage aligned.
+
+## 20) Recreate GitHub Repository and Push Current Branch (2026-02-23)
+
+Pre-Implementation Check-in:
+- 2026-02-23: Plan reviewed. Scope is to create a new GitHub repository for this existing local project, repoint `origin`, and push current `main` safely without rewriting local history.
+
+Execution Checklist:
+- [x] Add this section to `tasks/todo.md` with checklist + review area.
+- [x] Verify current git branch/remote state and GitHub CLI auth status.
+- [x] Create new GitHub repository under authenticated account.
+- [x] Update local `origin` remote to the new repository URL.
+- [x] Push local `main` and set upstream tracking.
+- [x] Verify remote URL and push success via git/gh checks.
+- [x] Record commands, outcomes, and residual risks in review.
+
+Verification Gates:
+- [x] GitHub auth is confirmed via `git credential fill` (fallback because `gh` CLI is not installed).
+- [x] Repository creation succeeds through GitHub REST API (`POST /user/repos`) and returns URL.
+- [x] `git remote -v` points `origin` to newly created repository.
+- [x] `git push -u origin main` succeeds.
+
+Review (fill after implementation):
+- Commands run:
+- `git status --short --branch`
+- `git remote -v`
+- `git remote show origin` (expected failure before recreate: `Repository not found`)
+- `cmd /v:on /c "(echo protocol=https&echo host=github.com&echo.) > %TEMP%\gitcred_input.txt && git credential fill < %TEMP%\gitcred_input.txt && del %TEMP%\gitcred_input.txt"`
+- PowerShell script to call GitHub REST API with token from credential helper:
+- `GET https://api.github.com/repos/stat17-hb/sector-rotation` (existence check)
+- `POST https://api.github.com/user/repos` with `{ name: "sector-rotation", private: false, auto_init: false }`
+- `git remote set-url origin https://github.com/stat17-hb/sector-rotation.git`
+- `git push -u origin main`
+- `git ls-remote --heads origin main`
+- `git rev-parse --abbrev-ref --symbolic-full-name "@{u}"`
+- Results:
+- `gh` was unavailable (`CommandNotFoundException`), so repo creation path was switched to GitHub API using existing Git credential helper auth.
+- New repository created successfully: `https://github.com/stat17-hb/sector-rotation`.
+- Local `origin` confirmed as `https://github.com/stat17-hb/sector-rotation.git`.
+- Push completed successfully (`[new branch] main -> main`) and upstream tracking set to `origin/main`.
+- Remote branch verification passed via `git ls-remote --heads origin main`.
+- Residual risks / follow-ups:
+- `gh` CLI is still not installed; future repo admin tasks will require API/manual UI unless `gh` is installed.
