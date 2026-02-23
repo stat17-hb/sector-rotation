@@ -1,0 +1,50 @@
+benchmark:
+  code: "1001"
+  name: "KOSPI"
+
+regimes:
+  Recovery:
+    description: "성장 Up, 물가/금리 Down"
+    sectors:
+      - code: "5044"
+        name: "KRX 반도체"
+        export_sector: true
+      - code: "1155"
+        name: "KOSPI200 정보기술"
+        export_sector: true
+  Expansion:
+    description: "성장 Up, 물가/금리 Up"
+    sectors:
+      - code: "5042"
+        name: "KRX 산업재"
+        export_sector: false
+      - code: "1168"
+        name: "KOSPI200 금융"
+        export_sector: false
+      - code: "1165"
+        name: "KOSPI200 경기소비재"
+        export_sector: false
+  Slowdown:
+    description: "성장 Down, 물가/금리 Up"
+    sectors:
+      - code: "5048"
+        name: "KRX 에너지화학"
+        export_sector: false
+      - code: "5049"
+        name: "KRX 철강"
+        export_sector: true
+      - code: "1170"
+        name: "KOSPI200 유틸리티"
+        export_sector: false
+  Contraction:
+    description: "성장 Down, 물가/금리 Down"
+    sectors:
+      - code: "5045"
+        name: "KRX 헬스케어"
+        export_sector: false
+      - code: "1157"
+        name: "KOSPI200 생활소비재"
+        export_sector: false
+      - code: "5046"
+        name: "KRX 미디어통신"
+        export_sector: false

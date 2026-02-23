@@ -1,0 +1,59 @@
+﻿# ECOS Open API series (Bank of Korea)
+ecos:
+  base_rate:
+    enabled: true
+    stat_code: "722Y001"
+    cycle: "M"
+    item_code: "0101000"
+    item_codes:
+      - "0101000"
+    label: "Base Rate"
+    unit: "%"
+  bond_3y:
+    enabled: true
+    stat_code: "817Y002"
+    cycle: "D"
+    item_code: "010200000"
+    item_codes:
+      - "010200000"
+    label: "KTB 3Y Yield"
+    unit: "%"
+  usdkrw:
+    enabled: true
+    stat_code: "731Y004"
+    cycle: "M"
+    item_code: "0000001"
+    item_codes:
+      - "0000001"
+    label: "USD/KRW"
+    unit: "KRW"
+
+# KOSIS Open API (Statistics Korea)
+kosis:
+  cpi_yoy:
+    enabled: true
+    org_id: "101"
+    tbl_id: "DT_1J22003"
+    item_id: "T"
+    obj_params:
+      objL1: "T10"
+    label: "CPI YoY"
+    unit: "%"
+  export_growth:
+    enabled: false
+    org_id: "142"
+    tbl_id: "DT_142N_0200"
+    item_id: "T10"
+    obj_params:
+      objL1: "ALL"
+    label: "Export Growth"
+    unit: "%"
+  leading_index:
+    enabled: true
+    org_id: "101"
+    tbl_id: "DT_1C8015"
+    item_id: "T1"
+    obj_params:
+      objL1: "A03"
+    label: "Leading Index Cycle"
+    unit: "p"

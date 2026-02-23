@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo:*)",
+      "Bash(py:*)",
+      "Bash(python3:*)",
+      "Bash(pip install:*)",
+      "Bash(where:*)",
+      "Bash(C:/Users/k1190/miniconda3/python.exe:*)"
+    ]
+  }
+}

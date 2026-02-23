@@ -1,0 +1,302 @@
+"""
+Reusable Streamlit UI components.
+
+Components:
+- render_macro_tile: Current regime metrics
+- render_rs_scatter: 4-quadrant RS vs trend scatter
+- render_returns_heatmap: Sector × period returns heatmap
+- render_signal_table: Full signal table with action/regime filter
+"""
+from __future__ import annotations
+
+import math
+
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+
+from src.ui.styles import ACTION_COLORS, GREY, get_plotly_template
+
+# SectorSignal is imported inline to avoid circular imports at module level
+# from src.signals.matrix import SectorSignal
+
+
+def render_macro_tile(
+    regime: str,
+    growth_val: float | None = None,
+    inflation_val: float | None = None,
+    fx_change: float | None = None,
+    is_provisional: bool = False,
+) -> None:
+    """Render current macro regime summary tile.
+
+    Args:
+        regime: Current regime name (Recovery/Expansion/Slowdown/Contraction/Indeterminate).
+        growth_val: Latest growth indicator value (e.g. 경기선행지수).
+        inflation_val: Latest inflation value (e.g. CPI YoY %).
+        fx_change: Recent USD/KRW change % (positive = KRW weakening).
+        is_provisional: Show provisional data warning badge.
+    """
+    regime_colors = {
+        "Recovery": "#2ECC71",
+        "Expansion": "#3498DB",
+        "Slowdown": "#F39C12",
+        "Contraction": "#E74C3C",
+        "Indeterminate": GREY,
+    }
+    color = regime_colors.get(regime, GREY)
+
+    regime_labels_kr = {
+        "Recovery": "회복기",
+        "Expansion": "확장기",
+        "Slowdown": "둔화기",
+        "Contraction": "수축기",
+        "Indeterminate": "미분류",
+    }
+    kr_label = regime_labels_kr.get(regime, regime)
+
+    provisional_html = '<span class="provisional-badge">잠정치</span>' if is_provisional else ""
+    st.markdown(
+        f'<div style="background:linear-gradient(135deg,#1E1E2E 0%,#2A2A3E 100%);'
+        f'border-left:6px solid {color};border-radius:8px;padding:16px 20px;margin-bottom:16px;">'
+        f'<div style="font-size:24px;font-weight:700;color:{color};">{regime} ({kr_label})</div>'
+        f'{provisional_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if growth_val is not None and not math.isnan(growth_val):
+            st.metric("경기선행지수", f"{growth_val:.2f}p")
+        else:
+            st.metric("경기선행지수", "N/A")
+    with col2:
+        if inflation_val is not None and not math.isnan(inflation_val):
+            st.metric("CPI YoY", f"{inflation_val:.1f}%")
+        else:
+            st.metric("CPI YoY", "N/A")
+    with col3:
+        if fx_change is not None and not math.isnan(fx_change):
+            delta_color = "inverse" if fx_change > 0 else "normal"
+            st.metric("USD/KRW 변동", f"{fx_change:+.1f}%", delta_color=delta_color)
+        else:
+            st.metric("USD/KRW 변동", "N/A")
+
+
+def render_rs_scatter(signals: list) -> go.Figure:
+    """Render 4-quadrant Relative Strength vs Trend scatter plot.
+
+    Quadrants:
+    - Top-right: RS Strong + Trend OK (momentum_strong=True)
+    - Top-left: RS Strong + Trend Weak
+    - Bottom-right: RS Weak + Trend OK
+    - Bottom-left: RS Weak + Trend Weak
+
+    Args:
+        signals: list[SectorSignal].
+
+    Returns:
+        Plotly Figure.
+    """
+    template = get_plotly_template()
+
+    x_vals, y_vals, texts, colors, hovers = [], [], [], [], []
+
+    for s in signals:
+        if s.action == "N/A":
+            continue
+        x_vals.append(s.rs)
+        y_vals.append(s.rs_ma)
+        texts.append(s.sector_name.split(" ")[-1])  # short label
+        colors.append(ACTION_COLORS.get(s.action, GREY))
+        hover = (
+            f"<b>{s.sector_name}</b><br>"
+            f"Action: {s.action}<br>"
+            f"RS: {s.rs:.4f}<br>"
+            f"RS MA: {s.rs_ma:.4f}<br>"
+            f"RSI(D): {s.rsi_d:.1f}<br>"
+            f"Trend: {'OK' if s.trend_ok else 'Weak'}<br>"
+            f"Alerts: {', '.join(s.alerts) or 'None'}"
+        )
+        hovers.append(hover)
+
+    fig = go.Figure()
+    fig.add_trace(
+        go.Scatter(
+            x=x_vals,
+            y=y_vals,
+            mode="markers+text",
+            text=texts,
+            textposition="top center",
+            marker=dict(color=colors, size=12, line=dict(width=1, color="#FFFFFF")),
+            hovertext=hovers,
+            hoverinfo="text",
+        )
+    )
+
+    # Diagonal reference line (RS = RS_MA)
+    if x_vals:
+        mn = min(min(x_vals), min(y_vals)) * 0.99
+        mx = max(max(x_vals), max(y_vals)) * 1.01
+        fig.add_shape(
+            type="line",
+            x0=mn, y0=mn, x1=mx, y1=mx,
+            line=dict(color=GREY, dash="dash", width=1),
+        )
+
+    fig.update_layout(
+        **template,
+        title="Relative Strength vs RS 이동평균",
+        xaxis_title="RS",
+        yaxis_title="RS MA",
+        height=450,
+        showlegend=False,
+    )
+
+    return fig
+
+
+def render_returns_heatmap(signals: list) -> go.Figure:
+    """Render sector × period returns heatmap.
+
+    Args:
+        signals: list[SectorSignal].
+
+    Returns:
+        Plotly Figure.
+    """
+    template = get_plotly_template()
+
+    periods = ["1W", "1M", "3M", "6M", "12M"]
+    sector_names = []
+    z_values = []
+
+    for s in signals:
+        if s.action == "N/A" or not s.returns:
+            continue
+        sector_names.append(s.sector_name.split()[-1])
+        row = [s.returns.get(p, float("nan")) for p in periods]
+        z_values.append([r * 100 if not math.isnan(r) else None for r in row])
+
+    if not sector_names:
+        fig = go.Figure()
+        fig.update_layout(**template, title="데이터 없음")
+        return fig
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=z_values,
+            x=periods,
+            y=sector_names,
+            colorscale=[
+                [0.0, "#E74C3C"],
+                [0.5, "#2A2A3E"],
+                [1.0, "#2ECC71"],
+            ],
+            zmid=0,
+            hovertemplate="%{y} %{x}: %{z:.1f}%<extra></extra>",
+        )
+    )
+
+    fig.update_layout(
+        **template,
+        title="구간별 수익률 히트맵 (%)",
+        height=max(300, len(sector_names) * 40),
+    )
+
+    return fig
+
+
+def render_signal_table(
+    signals: list,
+    filter_action: str | None = None,
+    filter_regime_only: bool = False,
+    current_regime: str | None = None,
+) -> None:
+    """Render signal table with action and regime filters.
+
+    N/A rows are rendered with grey styling and 데이터 없음 hint.
+
+    Args:
+        signals: list[SectorSignal].
+        filter_action: If set, show only signals with this action value.
+        filter_regime_only: If True, show only sectors matching current_regime.
+        current_regime: Current macro regime name (for filter_regime_only).
+    """
+    if not signals:
+        st.info("신호 데이터 없음")
+        return
+
+    filtered = signals
+
+    if filter_regime_only and current_regime:
+        filtered = [s for s in filtered if s.macro_regime == current_regime]
+
+    if filter_action and filter_action != "전체":
+        filtered = [s for s in filtered if s.action == filter_action]
+
+    if not filtered:
+        st.info("필터 조건에 맞는 종목 없음")
+        return
+
+    rows = []
+    for s in filtered:
+        action_html = _action_badge(s.action)
+        alerts_str = ", ".join(s.alerts) if s.alerts else "-"
+        ret_1m = f"{s.returns.get('1M', float('nan')) * 100:.1f}%" if s.returns.get("1M") and not math.isnan(s.returns.get("1M", float("nan"))) else "N/A"
+        ret_3m = f"{s.returns.get('3M', float('nan')) * 100:.1f}%" if s.returns.get("3M") and not math.isnan(s.returns.get("3M", float("nan"))) else "N/A"
+        rsi_str = f"{s.rsi_d:.1f}" if not math.isnan(s.rsi_d) else "N/A"
+        vol_str = f"{s.volatility_20d * 100:.1f}%" if not math.isnan(s.volatility_20d) else "N/A"
+        mdd_str = f"{s.mdd_3m * 100:.1f}%" if not math.isnan(s.mdd_3m) else "N/A"
+        provisional_marker = " *" if s.is_provisional else ""
+
+        rows.append(
+            {
+                "섹터": s.sector_name + provisional_marker,
+                "매크로": s.macro_regime,
+                "적합": "✓" if s.macro_fit else "✗",
+                "액션": s.action,
+                "RSI(D)": rsi_str,
+                "1M": ret_1m,
+                "3M": ret_3m,
+                "변동성": vol_str,
+                "MDD(3M)": mdd_str,
+                "알림": alerts_str,
+                "데이터": "없음" if s.action == "N/A" else "정상",
+            }
+        )
+
+    df_display = pd.DataFrame(rows)
+
+    # Color rows by action
+    def _highlight(row: pd.Series) -> list[str]:
+        action = row["액션"]
+        if action == "Strong Buy":
+            return ["background-color: #1A3A2A"] * len(row)
+        if action == "Watch":
+            return ["background-color: #3A2E0A"] * len(row)
+        if action == "Hold":
+            return ["background-color: #0A1E3A"] * len(row)
+        if action == "Avoid":
+            return ["background-color: #3A0A0A"] * len(row)
+        if action == "N/A":
+            return ["background-color: #1A1A1A; color: #666"] * len(row)
+        return [""] * len(row)
+
+    styled = df_display.style.apply(_highlight, axis=1)
+    st.dataframe(styled, use_container_width=True, hide_index=True)
+
+    if any(s.is_provisional for s in filtered):
+        st.caption("* 잠정치 포함 (최근 3개월 KOSIS 데이터)")
+
+
+def _action_badge(action: str) -> str:
+    """Return HTML badge for action value."""
+    css_class = {
+        "Strong Buy": "action-strong-buy",
+        "Watch": "action-watch",
+        "Hold": "action-hold",
+        "Avoid": "action-avoid",
+        "N/A": "action-na",
+    }.get(action, "action-na")
+    return f'<span class="{css_class}">{action}</span>'

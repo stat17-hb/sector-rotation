@@ -1,0 +1,12 @@
+# Default algorithm parameters
+epsilon: 0
+rs_ma_period: 20
+ma_fast: 20
+ma_slow: 60
+rsi_period: 14
+rsi_overbought: 70
+rsi_oversold: 30
+fx_shock_pct: 3.0
+benchmark_code: "1001"
+price_years: 3
+cache_ttl: 21600  # 6 hours in seconds

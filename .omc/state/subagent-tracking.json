@@ -1,0 +1,17 @@
+{
+  "agents": [
+    {
+      "agent_id": "ab260f8",
+      "agent_type": "Explore",
+      "started_at": "2026-02-23T10:31:58.752Z",
+      "parent_mode": "none",
+      "status": "completed",
+      "completed_at": "2026-02-23T10:32:40.422Z",
+      "duration_ms": 41670
+    }
+  ],
+  "total_spawned": 1,
+  "total_completed": 1,
+  "total_failed": 0,
+  "last_updated": "2026-02-23T10:32:40.528Z"
+}
