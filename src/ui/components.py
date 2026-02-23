@@ -17,9 +17,6 @@ import streamlit as st
 
 from src.ui.styles import ACTION_COLORS, GREY, get_plotly_template
 
-# SectorSignal is imported inline to avoid circular imports at module level
-# from src.signals.matrix import SectorSignal
-
 
 def render_macro_tile(
     regime: str,
@@ -38,10 +35,10 @@ def render_macro_tile(
         is_provisional: Show provisional data warning badge.
     """
     regime_colors = {
-        "Recovery": "#2ECC71",
-        "Expansion": "#3498DB",
-        "Slowdown": "#F39C12",
-        "Contraction": "#E74C3C",
+        "Recovery": "#34d399",      # emerald-400
+        "Expansion": "#60a5fa",     # blue-400
+        "Slowdown": "#fbbf24",      # amber-400
+        "Contraction": "#fb7185",   # rose-400
         "Indeterminate": GREY,
     }
     color = regime_colors.get(regime, GREY)
@@ -56,11 +53,13 @@ def render_macro_tile(
     kr_label = regime_labels_kr.get(regime, regime)
 
     provisional_html = '<span class="provisional-badge">잠정치</span>' if is_provisional else ""
+    
     st.markdown(
-        f'<div style="background:linear-gradient(135deg,#1E1E2E 0%,#2A2A3E 100%);'
-        f'border-left:6px solid {color};border-radius:8px;padding:16px 20px;margin-bottom:16px;">'
-        f'<div style="font-size:24px;font-weight:700;color:{color};">{regime} ({kr_label})</div>'
-        f'{provisional_html}</div>',
+        f'<div style="background-color:#18181b;border:1px solid #27272a;border-left:4px solid {color};border-radius:12px;padding:20px;margin-bottom:20px;box-shadow:0 1px 3px 0 rgb(0 0 0 / 0.1);">'
+        f'<div style="display:flex;align-items:center;">'
+        f'<h2 style="margin:0;font-size:1.5rem;font-weight:700;color:{color};">{regime} <span style="font-size:1rem;font-weight:500;color:#a1a1aa;margin-left:8px;">({kr_label})</span></h2>'
+        f'{provisional_html}</div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
@@ -128,7 +127,7 @@ def render_rs_scatter(signals: list) -> go.Figure:
             mode="markers+text",
             text=texts,
             textposition="top center",
-            marker=dict(color=colors, size=12, line=dict(width=1, color="#FFFFFF")),
+            marker=dict(color=colors, size=12, line=dict(width=1, color="#18181b")),
             hovertext=hovers,
             hoverinfo="text",
         )
@@ -141,7 +140,7 @@ def render_rs_scatter(signals: list) -> go.Figure:
         fig.add_shape(
             type="line",
             x0=mn, y0=mn, x1=mx, y1=mx,
-            line=dict(color=GREY, dash="dash", width=1),
+            line=dict(color="#52525b", dash="dot", width=1.5),
         )
 
     fig.update_layout(
@@ -189,11 +188,13 @@ def render_returns_heatmap(signals: list) -> go.Figure:
             x=periods,
             y=sector_names,
             colorscale=[
-                [0.0, "#E74C3C"],
-                [0.5, "#2A2A3E"],
-                [1.0, "#2ECC71"],
+                [0.0, "#f43f5e"],   # rose-500
+                [0.5, "#3f3f46"],   # zinc-700
+                [1.0, "#10b981"],   # emerald-500
             ],
             zmid=0,
+            texttemplate="%{z:.1f}",
+            textfont={"size": 11},
             hovertemplate="%{y} %{x}: %{z:.1f}%<extra></extra>",
         )
     )
@@ -241,7 +242,6 @@ def render_signal_table(
 
     rows = []
     for s in filtered:
-        action_html = _action_badge(s.action)
         alerts_str = ", ".join(s.alerts) if s.alerts else "-"
         ret_1m = f"{s.returns.get('1M', float('nan')) * 100:.1f}%" if s.returns.get("1M") and not math.isnan(s.returns.get("1M", float("nan"))) else "N/A"
         ret_3m = f"{s.returns.get('3M', float('nan')) * 100:.1f}%" if s.returns.get("3M") and not math.isnan(s.returns.get("3M", float("nan"))) else "N/A"
@@ -272,15 +272,15 @@ def render_signal_table(
     def _highlight(row: pd.Series) -> list[str]:
         action = row["액션"]
         if action == "Strong Buy":
-            return ["background-color: #1A3A2A"] * len(row)
+            return ["background-color: rgba(16, 185, 129, 0.15)"] * len(row)
         if action == "Watch":
-            return ["background-color: #3A2E0A"] * len(row)
+            return ["background-color: rgba(245, 158, 11, 0.15)"] * len(row)
         if action == "Hold":
-            return ["background-color: #0A1E3A"] * len(row)
+            return ["background-color: rgba(59, 130, 246, 0.15)"] * len(row)
         if action == "Avoid":
-            return ["background-color: #3A0A0A"] * len(row)
+            return ["background-color: rgba(244, 63, 94, 0.15)"] * len(row)
         if action == "N/A":
-            return ["background-color: #1A1A1A; color: #666"] * len(row)
+            return ["color: #a1a1aa"] * len(row)
         return [""] * len(row)
 
     styled = df_display.style.apply(_highlight, axis=1)
@@ -300,3 +300,4 @@ def _action_badge(action: str) -> str:
         "N/A": "action-na",
     }.get(action, "action-na")
     return f'<span class="{css_class}">{action}</span>'
+

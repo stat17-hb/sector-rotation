@@ -441,112 +441,111 @@ if not macro_df.empty:
     if len(_fx_s) >= 2:
         fx_change = float((_fx_s.iloc[-1] / _fx_s.iloc[-2] - 1) * 100)
 
-# ── Section 1: Macro Summary ──────────────────────────────────────────────────
+# ── Tabs Interface ─────────────────────────────────────────────────────────────
 
-st.header("📊 매크로 현황")
+tab_dashboard, tab_momentum, tab_signals = st.tabs([
+    "📊 대시보드 (Dashboard)", 
+    "📈 모멘텀 (Momentum)", 
+    "🔍 통합 신호 (Signals)"
+])
 
-from src.ui.components import render_macro_tile
+with tab_dashboard:
+    from src.ui.components import render_macro_tile, render_returns_heatmap
 
-render_macro_tile(
-    regime=current_regime,
-    growth_val=growth_val,
-    inflation_val=inflation_val,
-    fx_change=fx_change,
-    is_provisional=is_provisional,
-)
+    st.markdown("<br>", unsafe_allow_html=True)
+    render_macro_tile(
+        regime=current_regime,
+        growth_val=growth_val,
+        inflation_val=inflation_val,
+        fx_change=fx_change,
+        is_provisional=is_provisional,
+    )
 
-# Regime history chart
-if not macro_result.empty:
-    regime_col1, regime_col2 = st.columns([3, 1])
-    with regime_col1:
-        import plotly.graph_objects as go
-        from src.ui.styles import get_plotly_template
+    # Regime history chart
+    if not macro_result.empty:
+        regime_col1, regime_col2 = st.columns([3, 1])
+        with regime_col1:
+            import plotly.graph_objects as go
+            from src.ui.styles import get_plotly_template
 
-        template = get_plotly_template()
-        regime_colors = {
-            "Recovery": "#2ECC71",
-            "Expansion": "#3498DB",
-            "Slowdown": "#F39C12",
-            "Contraction": "#E74C3C",
-            "Indeterminate": "#7F8C8D",
-        }
+            template = get_plotly_template()
+            regime_colors = {
+                "Recovery": "#4ade80",
+                "Expansion": "#60a5fa",
+                "Slowdown": "#fbbf24",
+                "Contraction": "#f87171",
+                "Indeterminate": "#52525b",
+            }
 
-        fig_regime = go.Figure()
-        for regime_name, color in regime_colors.items():
-            mask = macro_result["regime"] == regime_name
-            if mask.any():
-                regime_dates = macro_result.index[mask]
-                fig_regime.add_trace(
-                    go.Scatter(
-                        x=regime_dates.to_list(),
-                        y=[1] * mask.sum(),
-                        mode="markers",
-                        name=regime_name,
-                        marker=dict(color=color, size=10, symbol="square"),
+            fig_regime = go.Figure()
+            for regime_name, color in regime_colors.items():
+                mask = macro_result["regime"] == regime_name
+                if mask.any():
+                    regime_dates = macro_result.index[mask]
+                    fig_regime.add_trace(
+                        go.Scatter(
+                            x=regime_dates.to_list(),
+                            y=[1] * mask.sum(),
+                            mode="markers",
+                            name=regime_name,
+                            marker=dict(color=color, size=10, symbol="square"),
+                        )
                     )
-                )
-        fig_regime.update_layout(
-            **template,
-            title="경기 국면 히스토리",
-            height=200,
-            showlegend=True,
-        )
-        fig_regime.update_yaxes(visible=False)
-        st.plotly_chart(fig_regime, use_container_width=True)
+            fig_regime.update_layout(
+                **template,
+                title="경기 국면 히스토리",
+                height=200,
+                showlegend=True,
+            )
+            fig_regime.update_yaxes(visible=False)
+            st.plotly_chart(fig_regime, use_container_width=True)
 
-    with regime_col2:
-        st.metric("현재 국면", current_regime)
-        st.metric("데이터 상태 (가격)", price_status)
-        st.metric("데이터 상태 (매크로)", macro_status)
+        with regime_col2:
+            st.metric("현재 국면", current_regime)
+            st.metric("데이터 상태 (가격)", price_status)
+            st.metric("데이터 상태 (매크로)", macro_status)
 
-
-st.divider()
-
-# ── Section 2: Momentum Charts ────────────────────────────────────────────────
-
-st.header("📈 모멘텀 분석")
-
-from src.ui.components import render_rs_scatter, render_returns_heatmap
-
-if signals:
-    col_scatter, col_heatmap = st.columns(2)
-    with col_scatter:
-        fig_scatter = render_rs_scatter(signals)
-        st.plotly_chart(fig_scatter, use_container_width=True)
-    with col_heatmap:
+    st.divider()
+    
+    if signals:
         fig_heatmap = render_returns_heatmap(signals)
         st.plotly_chart(fig_heatmap, use_container_width=True)
-else:
-    st.info("신호 데이터를 계산 중이거나 데이터가 없습니다.")
+    else:
+        st.info("신호 데이터를 계산 중이거나 데이터가 없습니다.")
 
+with tab_momentum:
+    from src.ui.components import render_rs_scatter
 
-st.divider()
+    st.markdown("<br>", unsafe_allow_html=True)
+    if signals:
+        fig_scatter = render_rs_scatter(signals)
+        st.plotly_chart(fig_scatter, use_container_width=True)
+    else:
+        st.info("신호 데이터를 계산 중이거나 데이터가 없습니다.")
 
-# ── Section 3: Signal Table ───────────────────────────────────────────────────
+with tab_signals:
+    from src.ui.components import render_signal_table
 
-st.header("🔍 섹터 신호 테이블")
+    st.markdown("<br>", unsafe_allow_html=True)
+    filter_col1, filter_col2 = st.columns(2)
+    with filter_col1:
+        filter_action = st.selectbox(
+            "액션 필터",
+            options=["전체", "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
+            index=0,
+        )
+    with filter_col2:
+        filter_regime_only = st.checkbox(
+            f"현재 국면 섹터만 보기 ({current_regime})",
+            value=False,
+        )
 
-from src.ui.components import render_signal_table
-
-filter_col1, filter_col2 = st.columns(2)
-with filter_col1:
-    filter_action = st.selectbox(
-        "액션 필터",
-        options=["전체", "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
-        index=0,
+    render_signal_table(
+        signals,
+        filter_action=filter_action if filter_action != "전체" else None,
+        filter_regime_only=filter_regime_only,
+        current_regime=current_regime,
     )
-with filter_col2:
-    filter_regime_only = st.checkbox(
-        f"현재 국면 섹터만 보기 ({current_regime})",
-        value=False,
-    )
-
-render_signal_table(
-    signals,
-    filter_action=filter_action if filter_action != "전체" else None,
-    filter_regime_only=filter_regime_only,
-    current_regime=current_regime,
-)
 
 # ── Footer ─────────────────────────────────────────────────────────────────────
 
