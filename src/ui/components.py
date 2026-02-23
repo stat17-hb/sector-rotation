@@ -18,6 +18,69 @@ import streamlit as st
 from src.ui.styles import ACTION_COLORS, GREY, get_plotly_template
 
 
+def render_slider_with_input(
+    label: str,
+    min_value: int | float,
+    max_value: int | float,
+    value: int | float,
+    step: int | float,
+    key: str,
+    help: str | None = None,
+) -> int | float:
+    """Render a slider and a number input synchronized together.
+    
+    Args:
+        label: Label for the slider.
+        min_value: Minimum value.
+        max_value: Maximum value.
+        value: Initial value.
+        step: Step size.
+        key: Base key for session state.
+        help: Help text for the slider.
+
+    Returns:
+        The current synchronized value.
+    """
+    val_key = f"{key}_val"
+    slider_key = f"{key}_slider"
+    input_key = f"{key}_input"
+
+    if val_key not in st.session_state:
+        st.session_state[val_key] = value
+
+    def sync_from_slider():
+        st.session_state[val_key] = st.session_state[slider_key]
+
+    def sync_from_input():
+        st.session_state[val_key] = st.session_state[input_key]
+
+    st.slider(
+        label,
+        min_value=min_value,
+        max_value=max_value,
+        value=st.session_state[val_key],
+        step=step,
+        help=help,
+        key=slider_key,
+        on_change=sync_from_slider,
+    )
+    
+    st.number_input(
+        f"{label} 직접 입력",
+        min_value=min_value,
+        max_value=max_value,
+        value=st.session_state[val_key],
+        step=step,
+        key=input_key,
+        on_change=sync_from_input,
+        label_visibility="collapsed",
+    )
+    
+    st.markdown("<div style='margin-bottom: 0.5rem;'></div>", unsafe_allow_html=True)
+    
+    return st.session_state[val_key]
+
+
 def render_macro_tile(
     regime: str,
     growth_val: float | None = None,
@@ -82,7 +145,12 @@ def render_macro_tile(
             st.metric("USD/KRW 변동", "N/A")
 
 
-def render_rs_scatter(signals: list) -> go.Figure:
+def render_rs_scatter(
+    signals: list,
+    *,
+    height: int = 680,
+    margin: dict[str, int] | None = None,
+) -> go.Figure:
     """Render 4-quadrant Relative Strength vs Trend scatter plot.
 
     Quadrants:
@@ -93,6 +161,8 @@ def render_rs_scatter(signals: list) -> go.Figure:
 
     Args:
         signals: list[SectorSignal].
+        height: Chart height in pixels.
+        margin: Optional Plotly layout margin override.
 
     Returns:
         Plotly Figure.
@@ -103,6 +173,8 @@ def render_rs_scatter(signals: list) -> go.Figure:
 
     for s in signals:
         if s.action == "N/A":
+            continue
+        if math.isnan(s.rs) or math.isnan(s.rs_ma):
             continue
         x_vals.append(s.rs)
         y_vals.append(s.rs_ma)
@@ -120,27 +192,44 @@ def render_rs_scatter(signals: list) -> go.Figure:
         hovers.append(hover)
 
     fig = go.Figure()
-    fig.add_trace(
-        go.Scatter(
-            x=x_vals,
-            y=y_vals,
-            mode="markers+text",
-            text=texts,
-            textposition="top center",
-            marker=dict(color=colors, size=12, line=dict(width=1, color="#18181b")),
-            hovertext=hovers,
-            hoverinfo="text",
-        )
-    )
-
-    # Diagonal reference line (RS = RS_MA)
+    axis_range = None
     if x_vals:
-        mn = min(min(x_vals), min(y_vals)) * 0.99
-        mx = max(max(x_vals), max(y_vals)) * 1.01
+        fig.add_trace(
+            go.Scatter(
+                x=x_vals,
+                y=y_vals,
+                mode="markers+text",
+                text=texts,
+                textposition="top center",
+                marker=dict(color=colors, size=12, line=dict(width=1, color="#18181b")),
+                hovertext=hovers,
+                hoverinfo="text",
+            )
+        )
+
+        # Diagonal reference line (RS = RS_MA)
+        mn_raw = min(min(x_vals), min(y_vals))
+        mx_raw = max(max(x_vals), max(y_vals))
+        span = max(mx_raw - mn_raw, 1e-6)
+        pad = span * 0.06
+        mn = mn_raw - pad
+        mx = mx_raw + pad
+        axis_range = [mn, mx]
         fig.add_shape(
             type="line",
             x0=mn, y0=mn, x1=mx, y1=mx,
             line=dict(color="#52525b", dash="dot", width=1.5),
+            layer="below",  # draw behind sector dots
+        )
+    else:
+        fig.add_annotation(
+            text="표시 가능한 RS/RS MA 데이터가 없습니다. 벤치마크 누락 또는 데이터 부족을 확인하세요.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 13, "color": "#a1a1aa"},
         )
 
     fig.update_layout(
@@ -148,9 +237,85 @@ def render_rs_scatter(signals: list) -> go.Figure:
         title="Relative Strength vs RS 이동평균",
         xaxis_title="RS",
         yaxis_title="RS MA",
-        height=450,
+        height=height,
         showlegend=False,
     )
+    fig.update_layout(margin=margin or dict(l=72, r=32, t=64, b=64))
+    if axis_range:
+        fig.update_xaxes(range=axis_range, constrain="domain")
+        fig.update_yaxes(
+            range=axis_range,
+            scaleanchor="x",
+            scaleratio=1,
+            constrain="domain",
+        )
+
+    return fig
+
+
+def render_rs_momentum_bar(signals: list) -> go.Figure:
+    """Render horizontal bar chart of RS divergence from its moving average.
+
+    RS divergence = (RS - RS_MA) / RS_MA * 100 (%)
+    Positive = RS above MA (momentum accelerating), negative = below (decelerating).
+    Always computable from snapshot values — no historical series required.
+
+    Args:
+        signals: list[SectorSignal].
+
+    Returns:
+        Plotly Figure (empty figure if no valid data).
+    """
+    template = get_plotly_template()
+
+    filtered = [
+        s for s in signals
+        if s.action != "N/A"
+        and not math.isnan(s.rs)
+        and not math.isnan(s.rs_ma)
+        and s.rs_ma != 0
+    ]
+    if not filtered:
+        return go.Figure()
+
+    def rs_div(s) -> float:
+        return (s.rs - s.rs_ma) / s.rs_ma * 100
+
+    filtered_sorted = sorted(filtered, key=rs_div)
+    names = [s.sector_name.split(" ")[-1] for s in filtered_sorted]
+    values = [rs_div(s) for s in filtered_sorted]
+    colors = [ACTION_COLORS.get(s.action, GREY) for s in filtered_sorted]
+    hovers = [
+        f"<b>{s.sector_name}</b><br>"
+        f"RS 이탈도: {rs_div(s):+.2f}%<br>"
+        f"RS: {s.rs:.4f} / RS MA: {s.rs_ma:.4f}<br>"
+        f"Action: {s.action}"
+        for s in filtered_sorted
+    ]
+
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=values,
+        y=names,
+        orientation="h",
+        marker_color=colors,
+        hovertext=hovers,
+        hoverinfo="text",
+        text=[f"{v:+.2f}%" for v in values],
+        textposition="outside",
+    ))
+
+    fig.add_vline(x=0, line=dict(color="#52525b", width=1.5))
+
+    fig.update_layout(
+        **template,
+        title="RS 이탈도 — RS ÷ RS이동평균 − 1 (%)",
+        xaxis_title="RS 이탈도 (%)",
+        yaxis_title="",
+        height=max(300, len(filtered_sorted) * 36 + 80),
+        showlegend=False,
+    )
+    fig.update_xaxes(ticksuffix="%")
 
     return fig
 
@@ -274,9 +439,9 @@ def render_signal_table(
         if action == "Strong Buy":
             return ["background-color: rgba(16, 185, 129, 0.15)"] * len(row)
         if action == "Watch":
-            return ["background-color: rgba(245, 158, 11, 0.15)"] * len(row)
-        if action == "Hold":
             return ["background-color: rgba(59, 130, 246, 0.15)"] * len(row)
+        if action == "Hold":
+            return ["background-color: rgba(82, 82, 91, 0.20)"] * len(row)
         if action == "Avoid":
             return ["background-color: rgba(244, 63, 94, 0.15)"] * len(row)
         if action == "N/A":
@@ -284,7 +449,12 @@ def render_signal_table(
         return [""] * len(row)
 
     styled = df_display.style.apply(_highlight, axis=1)
-    st.dataframe(styled, use_container_width=True, hide_index=True)
+    
+    # Calculate exact height to prevent vertical scrolling
+    # Header is ~38px, each row is ~35px. Adding small padding.
+    table_height = 38 + (len(df_display) * 35) + 5
+    
+    st.dataframe(styled, use_container_width=True, hide_index=True, height=table_height)
 
     if any(s.is_provisional for s in filtered):
         st.caption("* 잠정치 포함 (최근 3개월 KOSIS 데이터)")
@@ -300,4 +470,3 @@ def _action_badge(action: str) -> str:
         "N/A": "action-na",
     }.get(action, "action-na")
     return f'<span class="{css_class}">{action}</span>'
-

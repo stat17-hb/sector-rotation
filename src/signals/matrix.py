@@ -36,12 +36,13 @@ class SectorSignal:
     rsi_d: float            # daily RSI
     rsi_w: float            # weekly RSI
     action: str             # ACTION_VALUES member
-    alerts: list[str] = field(default_factory=list)   # ["Overheat", "Oversold", "FX Shock"]
+    alerts: list[str] = field(default_factory=list)   # e.g. ["Overheat", "Oversold", "FX Shock", "Benchmark Missing", "RS Data Insufficient"]
     returns: dict[str, float] = field(default_factory=dict)  # {1W, 1M, 3M, 6M, 12M}
     volatility_20d: float = float("nan")
     mdd_3m: float = float("nan")
     asof_date: str = ""
     is_provisional: bool = False
+    rs_change_pct: float = float("nan")  # 20-day RS change %
 
     def __post_init__(self) -> None:
         if self.action not in ACTION_VALUES:
@@ -163,6 +164,56 @@ def build_signal_table(
 
     signals: list[SectorSignal] = []
 
+    def _build_na_signal(
+        *,
+        code: str,
+        name: str,
+        sector_regime: str,
+        macro_fit: bool,
+        alerts: list[str] | None = None,
+    ) -> SectorSignal:
+        return SectorSignal(
+            index_code=code,
+            sector_name=name,
+            macro_regime=sector_regime,
+            macro_fit=macro_fit,
+            rs=float("nan"),
+            rs_ma=float("nan"),
+            rs_strong=False,
+            trend_ok=False,
+            momentum_strong=False,
+            rsi_d=float("nan"),
+            rsi_w=float("nan"),
+            action="N/A",
+            alerts=list(alerts or []),
+            returns={},
+            asof_date=asof_str,
+        )
+
+    benchmark_series = benchmark_prices.sort_index().dropna()
+    if benchmark_series.empty:
+        logger.warning(
+            "Benchmark prices missing/empty; assigning N/A with 'Benchmark Missing' to all %d sectors",
+            len(unique_sectors),
+        )
+        for sector_info in unique_sectors:
+            code = sector_info["code"]
+            name = sector_info["name"]
+            sector_regime = sector_info["regime"]
+            macro_fit = code in regime_codes
+            signals.append(
+                _build_na_signal(
+                    code=code,
+                    name=name,
+                    sector_regime=sector_regime,
+                    macro_fit=macro_fit,
+                    alerts=["Benchmark Missing"],
+                )
+            )
+        return signals
+
+    rs_insufficient_count = 0
+
     for sector_info in unique_sectors:
         code = sector_info["code"]
         name = sector_info["name"]
@@ -171,7 +222,7 @@ def build_signal_table(
 
         try:
             # Extract this sector's close prices
-            mask = sector_prices["index_code"] == code
+            mask = sector_prices["index_code"].astype(str) == code
             sector_df = sector_prices[mask].copy()
             if sector_df.empty:
                 raise ValueError(f"No price data for sector {code}")
@@ -179,11 +230,35 @@ def build_signal_table(
             close = sector_df["close"].sort_index()
 
             # RS
-            rs_series = compute_rs(close, benchmark_prices)
+            rs_series = compute_rs(close, benchmark_series)
             rs_ma_series = compute_rs_ma(rs_series, period=rs_ma_period)
             rs_val = float(rs_series.iloc[-1]) if not rs_series.empty else float("nan")
             rs_ma_val = float(rs_ma_series.iloc[-1]) if not rs_ma_series.empty else float("nan")
+            if rs_series.empty or rs_ma_series.empty or pd.isna(rs_val) or pd.isna(rs_ma_val):
+                rs_insufficient_count += 1
+                logger.warning(
+                    "RS data insufficient for sector %s (%s); assigning N/A",
+                    code,
+                    name,
+                )
+                signals.append(
+                    _build_na_signal(
+                        code=code,
+                        name=name,
+                        sector_regime=sector_regime,
+                        macro_fit=macro_fit,
+                        alerts=["RS Data Insufficient"],
+                    )
+                )
+                continue
             rs_strong = bool(is_rs_strong(rs_val, rs_ma_val)) if not (pd.isna(rs_val) or pd.isna(rs_ma_val)) else False
+
+            # RS 20-day momentum (acceleration)
+            rs_change_pct = float("nan")
+            if len(rs_series) >= 21 and not pd.isna(rs_val):
+                rs_20d_ago = float(rs_series.iloc[-21])
+                if not pd.isna(rs_20d_ago) and rs_20d_ago != 0:
+                    rs_change_pct = (rs_val - rs_20d_ago) / abs(rs_20d_ago) * 100
 
             # Trend
             trend_ok = is_trend_positive(close, fast=ma_fast, slow=ma_slow)
@@ -224,6 +299,7 @@ def build_signal_table(
                 mdd_3m=mdd_3m,
                 asof_date=asof_str,
                 is_provisional=False,
+                rs_change_pct=rs_change_pct,
             )
 
             # Apply RSI alerts
@@ -251,23 +327,19 @@ def build_signal_table(
                 exc,
             )
             signals.append(
-                SectorSignal(
-                    index_code=code,
-                    sector_name=name,
-                    macro_regime=sector_regime,
+                _build_na_signal(
+                    code=code,
+                    name=name,
+                    sector_regime=sector_regime,
                     macro_fit=macro_fit,
-                    rs=float("nan"),
-                    rs_ma=float("nan"),
-                    rs_strong=False,
-                    trend_ok=False,
-                    momentum_strong=False,
-                    rsi_d=float("nan"),
-                    rsi_w=float("nan"),
-                    action="N/A",
-                    alerts=[],
-                    returns={},
-                    asof_date=asof_str,
                 )
             )
+
+    if rs_insufficient_count:
+        logger.warning(
+            "RS data insufficient for %d/%d sectors",
+            rs_insufficient_count,
+            len(unique_sectors),
+        )
 
     return signals

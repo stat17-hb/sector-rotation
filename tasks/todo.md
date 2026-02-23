@@ -457,3 +457,71 @@ Review (fill after implementation):
 - `scripts/run_streamlit.bat` probe opened `LISTENING` on port `8538` with env python path.
 - Residual risks / follow-ups:
 - `scripts/run_streamlit.bat` assumes `conda` is available in `cmd` session (Conda init/path configured). If needed, switch to explicit `conda.bat` path for stricter portability.
+
+## 15) Momentum Tab Chart Readability Tuning (2026-02-23)
+
+Pre-Implementation Check-in:
+- 2026-02-23: Plan reviewed. Scope is limited to momentum tab visualization polish:
+- 1) make `Relative Strength vs RS 이동평균` chart visually 1:1 with better on-screen size,
+- 2) rewrite `RS 이탈도` helper text for readability.
+
+Execution Checklist:
+- [x] Add this section to `tasks/todo.md` with checklist + review area.
+- [x] Update RS scatter layout to enforce 1:1 axis framing and square-style display.
+- [x] Tune RS scatter rendered size for better full-screen readability.
+- [x] Replace RS divergence one-line description with readable multi-line guidance.
+- [x] Run quick verification (`py_compile` + diff check).
+- [x] Record commands and outcomes in review.
+
+Verification Gates:
+- [x] `src/ui/components.py` contains 1:1 scatter axis/layout settings.
+- [x] `app.py` momentum tab renders updated RS divergence explanation block.
+- [x] `python -m py_compile app.py src/ui/components.py` succeeds.
+
+Review (fill after implementation):
+- Commands run:
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m py_compile app.py src/ui/components.py`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -c "from types import SimpleNamespace; from src.ui.components import render_rs_scatter; ..."`
+- `rg -n "RS 이탈도 \\(RS Divergence\\)|계산식|해석 포인트|scaleanchor|scaleratio|height=680" app.py src/ui/components.py`
+- Results:
+- `render_rs_scatter` now sets identical x/y ranges and `yaxis.scaleanchor='x'`, `scaleratio=1` to keep 1:1 framing.
+- Scatter chart height increased to `680` and rendered in centered column layout (`[1.0, 3.2, 1.0]`) for better full-screen readability.
+- Momentum tab RS divergence help text changed from one-line sentence to structured bullet guidance with formula/sign interpretation.
+- Residual risks / follow-ups:
+- Final visual acceptance (desktop/mobile) should be confirmed in live Streamlit UI, because this patch used runtime attribute smoke checks rather than screenshot-based visual diff.
+
+## 16) Momentum Chart Responsive Fine-Tuning (Desktop/Mobile) (2026-02-23)
+
+Pre-Implementation Check-in:
+- 2026-02-23: Plan reviewed. Scope is a second-pass responsive tuning for momentum scatter chart size ratio:
+- desktop: keep centered/square feel with balanced side margins,
+- mobile: remove center-column squeeze and use full-width chart with compact height.
+
+Execution Checklist:
+- [x] Add this section to `tasks/todo.md` with checklist + review area.
+- [x] Add UA-based mobile detection helper (safe fallback to desktop).
+- [x] Update RS scatter renderer to accept configurable `height`/`margin`.
+- [x] Apply desktop/mobile split layout in momentum tab rendering.
+- [x] Run quick verification (`py_compile` + focused pytest + runtime layout smoke).
+- [x] Record commands, outcomes, and residual risks.
+
+Verification Gates:
+- [x] `app.py` contains mobile/desktop branch logic for momentum scatter display.
+- [x] `src/ui/components.py` supports configurable scatter height/margin.
+- [x] `tests/test_ui_components.py` passes after signature update.
+- [x] `python -m py_compile app.py src/ui/components.py` succeeds.
+
+Review (fill after implementation):
+- Commands run:
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m py_compile app.py src/ui/components.py tests/test_ui_components.py`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m pytest -q tests/test_ui_components.py`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -c "from types import SimpleNamespace; from src.ui.components import render_rs_scatter; ..."`
+- Results:
+- Added `_is_mobile_client()` in `app.py` and split momentum scatter rendering:
+- mobile: full-width render (`st.plotly_chart(..., use_container_width=True)`) with `height=520`, compact margin.
+- desktop: centered render via `st.columns([0.7, 3.6, 0.7])` with `height=700`, roomy margin.
+- Updated `render_rs_scatter()` signature in `src/ui/components.py` to accept `height` and `margin` for caller-level responsive tuning.
+- Added test `test_render_rs_scatter_allows_custom_height_and_margin` in `tests/test_ui_components.py`; focused test suite passed (`6 passed`).
+- Runtime smoke confirmed desktop/mobile profile values and preserved 1:1 axis lock (`scaleanchor=x`, `scaleratio=1`).
+- Residual risks / follow-ups:
+- Mobile detection is best-effort via user-agent header tokens; edge-case tablet/desktop-class browsers on mobile OS may be classified differently.

@@ -1,6 +1,7 @@
 """Integration tests. All file I/O uses tmp_path + monkeypatch. (5 tests)"""
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from pathlib import Path
 
@@ -172,6 +173,44 @@ class TestIntegration:
         valid_signals = [s for s in signals if s.action != "N/A"]
         assert len(na_signals) == 1, "Sector with missing data should get N/A"
         assert len(valid_signals) == 1, "Sector with data should get valid action"
+
+    def test_missing_benchmark_returns_na_with_reason(self):
+        """Empty benchmark series returns N/A for all sectors with Benchmark Missing reason."""
+        sector_map = _minimal_sector_map()
+        settings = _default_settings()
+        macro_result = _make_macro_result()
+        sector_prices = _make_sector_prices_df(["5044", "1155"])
+
+        bench_prices = pd.Series(dtype=float)
+        signals = build_signal_table(
+            sector_prices, bench_prices, macro_result, sector_map, settings
+        )
+
+        assert len(signals) == 2
+        assert all(s.action == "N/A" for s in signals)
+        assert all("Benchmark Missing" in s.alerts for s in signals)
+
+    def test_valid_benchmark_produces_non_nan_rs(self):
+        """With benchmark data present, at least one sector has valid RS/RS_MA."""
+        sector_map = _minimal_sector_map()
+        settings = _default_settings()
+        macro_result = _make_macro_result()
+        sector_prices = _make_sector_prices_df(["5044", "1155"], n=80)
+
+        bench_prices = pd.Series(
+            data=1000.0 + (pd.Series(range(80)) * 2.0).values,
+            index=pd.date_range("2024-01-01", periods=80, freq="B"),
+            dtype=float,
+        )
+        signals = build_signal_table(
+            sector_prices, bench_prices, macro_result, sector_map, settings
+        )
+
+        valid_rs = [
+            s for s in signals
+            if s.action != "N/A" and not math.isnan(s.rs) and not math.isnan(s.rs_ma)
+        ]
+        assert valid_rs, "Expected at least one sector with valid RS and RS_MA"
 
     def test_cache_invalidation_clears_only_target(self, tmp_path):
         """Market cache invalidation removes sector_prices but not macro_monthly."""

@@ -21,6 +21,7 @@ RED = "#f43f5e"     # rose-500
 AMBER = "#f59e0b"   # amber-500
 BLUE = "#3b82f6"    # blue-500
 GREY = "#52525b"    # zinc-600
+DARK_GREY = "#3f3f46"  # zinc-700
 
 # Plotly colorway
 PLOTLY_COLORWAY = [
@@ -38,10 +39,10 @@ PLOTLY_COLORWAY = [
 
 ACTION_COLORS: dict[str, str] = {
     "Strong Buy": GREEN,
-    "Watch": AMBER,
-    "Hold": BLUE,
+    "Watch": BLUE,
+    "Hold": GREY,
     "Avoid": RED,
-    "N/A": GREY,
+    "N/A": DARK_GREY,
 }
 
 
@@ -102,9 +103,9 @@ def inject_css() -> None:
         min-width: 80px;
     }}
     .action-watch {{
-        background-color: rgba(245, 158, 11, 0.2);
-        color: #fbbf24;
-        border: 1px solid rgba(245, 158, 11, 0.3);
+        background-color: rgba(59, 130, 246, 0.2);
+        color: #60a5fa;
+        border: 1px solid rgba(59, 130, 246, 0.3);
         border-radius: 9999px;
         padding: 2px 10px;
         font-weight: 500;
@@ -114,9 +115,9 @@ def inject_css() -> None:
         min-width: 80px;
     }}
     .action-hold {{
-        background-color: rgba(59, 130, 246, 0.2);
-        color: #60a5fa;
-        border: 1px solid rgba(59, 130, 246, 0.3);
+        background-color: rgba(82, 82, 91, 0.25);
+        color: #d4d4d8;
+        border: 1px solid rgba(82, 82, 91, 0.45);
         border-radius: 9999px;
         padding: 2px 10px;
         font-weight: 500;
@@ -138,9 +139,9 @@ def inject_css() -> None:
         min-width: 80px;
     }}
     .action-na {{
-        background-color: rgba(82, 82, 91, 0.2);
-        color: #a1a1aa;
-        border: 1px solid rgba(82, 82, 91, 0.3);
+        background-color: rgba(63, 63, 70, 0.35);
+        color: #d4d4d8;
+        border: 1px solid rgba(63, 63, 70, 0.5);
         border-radius: 9999px;
         padding: 2px 10px;
         font-weight: 500;

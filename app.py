@@ -96,6 +96,24 @@ def _secrets_mtime_ns(path: str = ".streamlit/secrets.toml") -> int:
     return p.stat().st_mtime_ns
 
 
+def _is_mobile_client() -> bool:
+    """Best-effort mobile client detection from request user-agent."""
+    try:
+        user_agent = str(st.context.headers.get("user-agent", "")).lower()
+    except Exception:
+        user_agent = ""
+
+    mobile_tokens = (
+        "android",
+        "iphone",
+        "ipad",
+        "ipod",
+        "mobile",
+        "windows phone",
+    )
+    return any(token in user_agent for token in mobile_tokens)
+
+
 def _macro_cache_token() -> str:
     """Build cache token including config + API key fingerprints."""
     from src.data_sources.cache_keys import build_macro_cache_token
@@ -132,6 +150,8 @@ def _cached_sector_prices(asof_date_str: str, benchmark_code: str, price_years: 
             code = str(s["code"])
             if code not in all_codes:
                 all_codes.append(code)
+    if benchmark_code and str(benchmark_code) not in all_codes:
+        all_codes.append(str(benchmark_code))
 
     end_date = get_last_business_day()
     start_date = end_date - timedelta(days=365 * price_years)
@@ -199,7 +219,7 @@ def _cached_signals(prices_key: tuple, macro_key: tuple, params_hash: str, macro
     # Benchmark prices from sector_prices (benchmark_code row)
     bench_code = str(settings.get("benchmark_code", "1001"))
     if not sector_prices.empty and "index_code" in sector_prices.columns:
-        bench_mask = sector_prices["index_code"] == bench_code
+        bench_mask = sector_prices["index_code"].astype(str) == bench_code
         bench_series = sector_prices[bench_mask]["close"] if bench_mask.any() else pd.Series(dtype=float)
     else:
         bench_series = pd.Series(dtype=float)
@@ -277,22 +297,53 @@ with st.sidebar:
     )
     st.session_state["asof_date_str"] = asof_date.strftime("%Y%m%d")
 
+    from src.ui.components import render_slider_with_input
+
     # Epsilon slider for regime sensitivity
-    epsilon = st.slider(
-        "Epsilon (방향 민감도)",
+    epsilon = render_slider_with_input(
+        label="Epsilon (방향 민감도)",
         min_value=0.0,
         max_value=1.0,
         value=float(settings.get("epsilon", 0)),
         step=0.05,
+        key="epsilon_ctrl",
         help="3MA 방향 판별 최소 변화량. 0 = 모든 변화 반영",
     )
     st.session_state["epsilon"] = epsilon
 
     # Momentum windows
-    rs_ma_period = st.slider("RS MA 기간", 5, 60, int(settings.get("rs_ma_period", 20)))
-    ma_fast = st.slider("빠른 MA", 5, 60, int(settings.get("ma_fast", 20)))
-    ma_slow = st.slider("느린 MA", 20, 120, int(settings.get("ma_slow", 60)))
-    price_years = st.slider("데이터 기간 (년)", 1, 5, int(settings.get("price_years", 3)))
+    rs_ma_period = render_slider_with_input(
+        label="RS MA 기간",
+        min_value=5,
+        max_value=60,
+        value=int(settings.get("rs_ma_period", 20)),
+        step=1,
+        key="rs_ma_period_ctrl"
+    )
+    ma_fast = render_slider_with_input(
+        label="빠른 MA",
+        min_value=5,
+        max_value=60,
+        value=int(settings.get("ma_fast", 20)),
+        step=1,
+        key="ma_fast_ctrl"
+    )
+    ma_slow = render_slider_with_input(
+        label="느린 MA",
+        min_value=20,
+        max_value=120,
+        value=int(settings.get("ma_slow", 60)),
+        step=1,
+        key="ma_slow_ctrl"
+    )
+    price_years = render_slider_with_input(
+        label="데이터 기간 (년)",
+        min_value=1,
+        max_value=5,
+        value=int(settings.get("price_years", 3)),
+        step=1,
+        key="price_years_ctrl"
+    )
 
     st.divider()
 
@@ -514,12 +565,70 @@ with tab_dashboard:
         st.info("신호 데이터를 계산 중이거나 데이터가 없습니다.")
 
 with tab_momentum:
-    from src.ui.components import render_rs_scatter
+    from src.ui.components import render_rs_momentum_bar, render_rs_scatter
 
     st.markdown("<br>", unsafe_allow_html=True)
+
+    with st.expander("📌 차트 읽는 법", expanded=False):
+        st.markdown("""
+**X축 (RS)** — 섹터 종가 ÷ 벤치마크(KOSPI) 비율. 값이 클수록 벤치마크 대비 절대 강도가 높습니다.
+
+**Y축 (RS MA)** — RS의 이동평균(기본 20일). RS의 추세 수준을 나타냅니다.
+
+**점선 대각선** — RS = RS MA 기준선. 이 선을 기준으로 위·아래가 핵심 신호입니다.
+
+| 위치 | 의미 |
+|------|------|
+| ▼ 대각선 아래 (RS > RS MA) | RS가 평균을 초과 → 모멘텀 **가속 중** → 강세 신호 |
+| ▲ 대각선 위 (RS < RS MA) | RS가 평균 미달 → 모멘텀 **감속 중** → 약세 신호 |
+| → 오른쪽 | 벤치마크 대비 **강한** 섹터 |
+| ← 왼쪽 | 벤치마크 대비 **약한** 섹터 |
+
+**점 색상** — Strong Buy (초록) › Watch (파랑) › Hold (회색) › Avoid (빨강)
+""")
+
     if signals:
-        fig_scatter = render_rs_scatter(signals)
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        benchmark_missing = any(
+            "Benchmark Missing" in getattr(s, "alerts", []) for s in signals
+        )
+        if benchmark_missing:
+            st.warning("벤치마크(KOSPI, 1001) 데이터 누락으로 모멘텀 차트를 계산할 수 없습니다. 시장데이터 갱신 후 재시도하세요.")
+        else:
+            is_mobile_client = _is_mobile_client()
+            scatter_height = 520 if is_mobile_client else 700
+            scatter_margin = (
+                dict(l=44, r=18, t=56, b=50)
+                if is_mobile_client
+                else dict(l=72, r=32, t=64, b=64)
+            )
+            fig_scatter = render_rs_scatter(
+                signals,
+                height=scatter_height,
+                margin=scatter_margin,
+            )
+            if is_mobile_client:
+                st.plotly_chart(fig_scatter, use_container_width=True)
+            else:
+                _, scatter_col_c, _ = st.columns([0.7, 3.6, 0.7])
+                with scatter_col_c:
+                    st.plotly_chart(fig_scatter, use_container_width=True)
+
+            st.markdown("---")
+            st.markdown(
+                """
+**RS 이탈도 (RS Divergence)**
+
+- **계산식**: `(RS ÷ RS 이동평균 - 1) × 100`
+- **양수 (+)**: RS가 이동평균보다 위에 있어 모멘텀이 **가속** 중
+- **음수 (-)**: RS가 이동평균보다 아래에 있어 모멘텀이 **감속** 중
+- **해석 포인트**: 위 산점도의 대각선(RS = RS MA)에서 얼마나 이탈했는지 수치로 보여줍니다.
+"""
+            )
+            fig_bar = render_rs_momentum_bar(signals)
+            if fig_bar.data:
+                st.plotly_chart(fig_bar, use_container_width=True)
+            else:
+                st.info("RS/RS MA 데이터가 충분하지 않습니다.")
     else:
         st.info("신호 데이터를 계산 중이거나 데이터가 없습니다.")
 

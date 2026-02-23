@@ -6,7 +6,12 @@
       "Bash(python3:*)",
       "Bash(pip install:*)",
       "Bash(where:*)",
-      "Bash(C:/Users/k1190/miniconda3/python.exe:*)"
+      "Bash(C:/Users/k1190/miniconda3/python.exe:*)",
+      "Bash(python:*)",
+      "Bash(C:Usersk1190miniconda3python.exe -m py_compile:*)",
+      "Bash(\"/c/Users/k1190/miniconda3/python.exe\" -m py_compile \"/c/Users/k1190/OneDrive/01.investment/sector-rotation/src/signals/matrix.py\")",
+      "Bash(\"/c/Users/k1190/miniconda3/python.exe\" -m py_compile \"/c/Users/k1190/OneDrive/01.investment/sector-rotation/src/ui/components.py\")",
+      "Bash(\"/c/Users/k1190/miniconda3/python.exe\" -m py_compile \"/c/Users/k1190/OneDrive/01.investment/sector-rotation/app.py\")"
     ]
   }
 }
