@@ -20,3 +20,12 @@
 - Rule: For local launcher scripts, preserve `%*` argument forwarding and include explicit activation-failure messages so double-click runs do not fail silently.
 - Pattern: `conda activate` failed in CMD with `Run 'conda init' before 'conda activate'` even though conda was installed.
 - Rule: For CMD launchers, prefer resolving `conda.bat` (via `CONDA_EXE` or known `condabin` paths) and call it directly; do not assume `conda init cmd.exe` was run.
+
+## 2026-02-24
+- Pattern: Light theme looked low-contrast despite acceptable token-level WCAG checks.
+- Rule: For theme toggles, verify readability at component level (native Streamlit widgets, sidebar controls, markdown body text), not only token contrast pairs.
+- Rule: Avoid applying `text_muted` to global markdown paragraphs; reserve muted color for captions/labels and keep body copy at base text color.
+- Pattern: Light background + dark dataframe default skin created visual mismatch and poor readability.
+- Rule: For Streamlit tables, apply theme at component level (`pandas.Styler`) first and keep CSS selectors only as fallback; do not rely on root CSS tokens alone.
+- Pattern: Streamlit top chrome (`stHeader`/`stDecoration`) and Glide Data Grid can ignore app background tokens and remain dark.
+- Rule: In light mode, explicitly style `stHeader`, `stDecoration`, and Glide Data Grid CSS variables; token updates alone are insufficient.

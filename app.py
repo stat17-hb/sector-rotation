@@ -33,7 +33,7 @@ st.set_page_config(
 )
 
 # ── Local imports ────────────────────────────────────────────────────────────
-from src.ui.styles import inject_css
+from src.ui.styles import get_table_style_tokens, inject_css
 from src.ui.data_status import is_sample_mode, get_button_states
 from src.macro.series_utils import (
     build_enabled_ecos_config,
@@ -41,8 +41,6 @@ from src.macro.series_utils import (
     extract_macro_series,
     to_plotly_time_index,
 )
-
-inject_css()
 
 # ── Config loading ────────────────────────────────────────────────────────────
 
@@ -209,10 +207,11 @@ def _cached_signals(prices_key: tuple, macro_key: tuple, params_hash: str, macro
     from src.macro.regime import compute_regime_history
     from src.signals.matrix import build_signal_table
 
+    price_years = int(st.session_state.get("price_years", settings.get("price_years", 3)))
     price_status, sector_prices = _cached_sector_prices(
         st.session_state.get("asof_date_str", date.today().strftime("%Y%m%d")),
         str(settings.get("benchmark_code", "1001")),
-        int(settings.get("price_years", 3)),
+        price_years,
     )
     macro_status, macro_df = _cached_macro(macro_cache_token)
 
@@ -264,12 +263,23 @@ def _cached_signals(prices_key: tuple, macro_key: tuple, params_hash: str, macro
             index=pd.DatetimeIndex([date.today()]),
         )
 
+    runtime_settings = dict(settings)
+    runtime_settings.update(
+        {
+            "epsilon": float(st.session_state.get("epsilon", settings.get("epsilon", 0))),
+            "rs_ma_period": int(st.session_state.get("rs_ma_period", settings.get("rs_ma_period", 20))),
+            "ma_fast": int(st.session_state.get("ma_fast", settings.get("ma_fast", 20))),
+            "ma_slow": int(st.session_state.get("ma_slow", settings.get("ma_slow", 60))),
+            "price_years": price_years,
+        }
+    )
+
     signals = build_signal_table(
         sector_prices=sector_prices,
         benchmark_prices=bench_series,
         macro_result=macro_result,
         sector_map=sector_map,
-        settings=settings,
+        settings=runtime_settings,
     )
 
     return signals, macro_result, price_status, macro_status
@@ -277,112 +287,213 @@ def _cached_signals(prices_key: tuple, macro_key: tuple, params_hash: str, macro
 
 # ── Session state defaults ─────────────────────────────────────────────────────
 
+if "theme_mode" not in st.session_state:
+    st.session_state["theme_mode"] = "dark"
 if "asof_date_str" not in st.session_state:
     st.session_state["asof_date_str"] = date.today().strftime("%Y%m%d")
 if "epsilon" not in st.session_state:
     st.session_state["epsilon"] = float(settings.get("epsilon", 0))
+if "rs_ma_period" not in st.session_state:
+    st.session_state["rs_ma_period"] = int(settings.get("rs_ma_period", 20))
+if "ma_fast" not in st.session_state:
+    st.session_state["ma_fast"] = int(settings.get("ma_fast", 20))
+if "ma_slow" not in st.session_state:
+    st.session_state["ma_slow"] = int(settings.get("ma_slow", 60))
+if "price_years" not in st.session_state:
+    st.session_state["price_years"] = int(settings.get("price_years", 3))
 if "filter_action_global" not in st.session_state:
     st.session_state["filter_action_global"] = "전체"
 if "filter_regime_only_global" not in st.session_state:
     st.session_state["filter_regime_only_global"] = False
 
+theme_mode = str(st.session_state.get("theme_mode", "dark")).strip().lower()
+if theme_mode not in {"dark", "light"}:
+    theme_mode = "dark"
+    st.session_state["theme_mode"] = theme_mode
+
+inject_css(theme_mode)
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 
-with st.sidebar:
-    st.title("📊 설정")
-    st.divider()
+prices_parquet = "data/curated/sector_prices.parquet"
+macro_parquet = "data/curated/macro_monthly.parquet"
+macro_cache_token = _macro_cache_token()
 
-    # Date picker
+probe_price_status = "CACHED" if Path(prices_parquet).exists() else "SAMPLE"
+probe_macro_status = "CACHED" if Path(macro_parquet).exists() else "SAMPLE"
+probe_data_status = {"price": probe_price_status, "macro": probe_macro_status}
+btn_states = get_button_states(probe_data_status)
+
+try:
+    asof_default = date(
+        int(st.session_state["asof_date_str"][:4]),
+        int(st.session_state["asof_date_str"][4:6]),
+        int(st.session_state["asof_date_str"][6:8]),
+    )
+except Exception:
+    asof_default = date.today()
+
+with st.sidebar:
+    st.title("Korea Sector Rotation")
+    st.caption("UI / Theme Control Panel")
+
+    st.subheader("빠른 상태")
+    use_light_theme = st.toggle(
+        "라이트 테마",
+        value=theme_mode == "light",
+        help="해제 시 다크 테마가 적용됩니다.",
+    )
+    selected_theme_mode = "light" if use_light_theme else "dark"
+    if selected_theme_mode != theme_mode:
+        st.session_state["theme_mode"] = selected_theme_mode
+        st.rerun()
+
     asof_date = st.date_input(
         "기준일",
-        value=date.today(),
+        value=asof_default,
         max_value=date.today(),
     )
     st.session_state["asof_date_str"] = asof_date.strftime("%Y%m%d")
 
-    from src.ui.components import render_slider_with_input
+    quick_col1, quick_col2 = st.columns(2)
+    with quick_col1:
+        st.metric("가격 상태", probe_price_status)
+    with quick_col2:
+        st.metric("매크로 상태", probe_macro_status)
 
-    # Epsilon slider for regime sensitivity
-    epsilon = render_slider_with_input(
-        label="Epsilon (방향 민감도)",
-        min_value=0.0,
-        max_value=1.0,
-        value=float(settings.get("epsilon", 0)),
-        step=0.05,
-        key="epsilon_ctrl",
-        help="3MA 방향 판별 최소 변화량. 0 = 모든 변화 반영",
+    st.divider()
+    st.subheader("글로벌 필터")
+    st.selectbox(
+        "액션 필터",
+        options=["전체", "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
+        key="filter_action_global",
     )
-    st.session_state["epsilon"] = epsilon
-
-    # Momentum windows
-    rs_ma_period = render_slider_with_input(
-        label="RS MA 기간",
-        min_value=5,
-        max_value=60,
-        value=int(settings.get("rs_ma_period", 20)),
-        step=1,
-        key="rs_ma_period_ctrl"
-    )
-    ma_fast = render_slider_with_input(
-        label="빠른 MA",
-        min_value=5,
-        max_value=60,
-        value=int(settings.get("ma_fast", 20)),
-        step=1,
-        key="ma_fast_ctrl"
-    )
-    ma_slow = render_slider_with_input(
-        label="느린 MA",
-        min_value=20,
-        max_value=120,
-        value=int(settings.get("ma_slow", 60)),
-        step=1,
-        key="ma_slow_ctrl"
-    )
-    price_years = render_slider_with_input(
-        label="데이터 기간 (년)",
-        min_value=1,
-        max_value=5,
-        value=int(settings.get("price_years", 3)),
-        step=1,
-        key="price_years_ctrl"
+    st.checkbox(
+        "현재 국면 섹터만 보기",
+        key="filter_regime_only_global",
     )
 
     st.divider()
+    with st.expander("모델 파라미터", expanded=False):
+        with st.form("model_params_form"):
+            slider_epsilon = st.slider(
+                "Epsilon (방향 민감도)",
+                min_value=0.0,
+                max_value=1.0,
+                value=float(st.session_state["epsilon"]),
+                step=0.05,
+                help="3MA 방향 판별 최소 변화량. 0 = 모든 변화 반영",
+            )
+            slider_rs_ma = st.slider(
+                "RS MA 기간",
+                min_value=5,
+                max_value=60,
+                value=int(st.session_state["rs_ma_period"]),
+                step=1,
+            )
+            slider_ma_fast = st.slider(
+                "빠른 MA",
+                min_value=5,
+                max_value=60,
+                value=int(st.session_state["ma_fast"]),
+                step=1,
+            )
+            slider_ma_slow = st.slider(
+                "느린 MA",
+                min_value=20,
+                max_value=120,
+                value=int(st.session_state["ma_slow"]),
+                step=1,
+            )
+            slider_price_years = st.slider(
+                "데이터 기간 (년)",
+                min_value=1,
+                max_value=5,
+                value=int(st.session_state["price_years"]),
+                step=1,
+            )
 
-    # --- Load data to determine SAMPLE mode before rendering buttons ---
-    macro_cache_token = _macro_cache_token()
+            with st.expander("고급 직접 입력", expanded=False):
+                use_advanced_inputs = st.checkbox("고급 값으로 적용", value=False)
+                adv_epsilon = st.number_input(
+                    "Epsilon 직접 입력",
+                    min_value=0.0,
+                    max_value=1.0,
+                    value=float(st.session_state["epsilon"]),
+                    step=0.01,
+                    format="%.2f",
+                )
+                adv_rs_ma = st.number_input(
+                    "RS MA 직접 입력",
+                    min_value=5,
+                    max_value=60,
+                    value=int(st.session_state["rs_ma_period"]),
+                    step=1,
+                )
+                adv_ma_fast = st.number_input(
+                    "빠른 MA 직접 입력",
+                    min_value=5,
+                    max_value=60,
+                    value=int(st.session_state["ma_fast"]),
+                    step=1,
+                )
+                adv_ma_slow = st.number_input(
+                    "느린 MA 직접 입력",
+                    min_value=20,
+                    max_value=120,
+                    value=int(st.session_state["ma_slow"]),
+                    step=1,
+                )
+                adv_price_years = st.number_input(
+                    "데이터 기간 직접 입력",
+                    min_value=1,
+                    max_value=5,
+                    value=int(st.session_state["price_years"]),
+                    step=1,
+                )
 
-    prices_parquet = "data/curated/sector_prices.parquet"
-    macro_parquet = "data/curated/macro_monthly.parquet"
+            apply_params = st.form_submit_button("적용", use_container_width=True)
 
-    # Compute button states — need data_status
-    # We do a lightweight probe: if parquets exist → CACHED, else SAMPLE likely
-    probe_price_status = "CACHED" if Path(prices_parquet).exists() else "SAMPLE"
-    probe_macro_status = "CACHED" if Path(macro_parquet).exists() else "SAMPLE"
-    probe_data_status = {"price": probe_price_status, "macro": probe_macro_status}
-    btn_states = get_button_states(probe_data_status)
+        if apply_params:
+            if use_advanced_inputs:
+                st.session_state["epsilon"] = float(adv_epsilon)
+                st.session_state["rs_ma_period"] = int(adv_rs_ma)
+                st.session_state["ma_fast"] = int(adv_ma_fast)
+                st.session_state["ma_slow"] = int(adv_ma_slow)
+                st.session_state["price_years"] = int(adv_price_years)
+            else:
+                st.session_state["epsilon"] = float(slider_epsilon)
+                st.session_state["rs_ma_period"] = int(slider_rs_ma)
+                st.session_state["ma_fast"] = int(slider_ma_fast)
+                st.session_state["ma_slow"] = int(slider_ma_slow)
+                st.session_state["price_years"] = int(slider_price_years)
+            st.rerun()
 
+    st.divider()
+    st.subheader("데이터 작업")
     refresh_market = st.button(
-        "🔄 시장데이터 갱신",
+        "시장데이터 갱신",
         disabled=not btn_states["refresh_market"],
         use_container_width=True,
     )
     refresh_macro = st.button(
-        "📈 매크로데이터 갱신",
+        "매크로데이터 갱신",
         disabled=not btn_states["refresh_macro"],
         use_container_width=True,
     )
     recompute = st.button(
-        "⚙️ 전체 재계산",
+        "전체 재계산",
         disabled=not btn_states["recompute"],
         use_container_width=True,
         help="SAMPLE 데이터에서는 비활성화됩니다." if not btn_states["recompute"] else "",
     )
 
-    st.divider()
     st.caption("Korea Sector Rotation Dashboard")
+
+rs_ma_period = int(st.session_state.get("rs_ma_period", settings.get("rs_ma_period", 20)))
+ma_fast = int(st.session_state.get("ma_fast", settings.get("ma_fast", 20)))
+ma_slow = int(st.session_state.get("ma_slow", settings.get("ma_slow", 60)))
+price_years = int(st.session_state.get("price_years", settings.get("price_years", 3)))
 
 
 # ── Button handlers — each clears only its own cache (R8) ────────────────────
@@ -415,6 +526,7 @@ with st.spinner("데이터 로딩 중..."):
             "rs_ma_period": rs_ma_period,
             "ma_fast": ma_fast,
             "ma_slow": ma_slow,
+            "price_years": price_years,
         }
         params_hash = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()[:8]
 
@@ -498,19 +610,6 @@ if not macro_df.empty:
 
 # ── Global filters ─────────────────────────────────────────────────────────────
 
-with st.sidebar:
-    st.divider()
-    st.subheader("🔎 글로벌 필터")
-    st.selectbox(
-        "액션 필터",
-        options=["전체", "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
-        key="filter_action_global",
-    )
-    st.checkbox(
-        f"현재 국면 섹터만 보기 ({current_regime})",
-        key="filter_regime_only_global",
-    )
-
 filter_action_global = str(st.session_state.get("filter_action_global", "전체"))
 filter_regime_only_global = bool(st.session_state.get("filter_regime_only_global", False))
 
@@ -554,13 +653,14 @@ top_pick_signals = sorted(signals_filtered, key=_top_pick_sort_key)
 # ── Tabs Interface ─────────────────────────────────────────────────────────────
 
 tab_decision, tab_evidence, tab_all_signals = st.tabs([
-    "✅ 오늘의 결론 (Decision)",
-    "📈 근거 분석 (Evidence)",
-    "🔍 전체 신호 (Signals)",
+    "결론 (Decision)",
+    "근거 (Evidence)",
+    "신호 (Signals)",
 ])
 
 with tab_decision:
     from src.ui.components import (
+        format_action_label,
         render_action_summary,
         render_macro_tile,
         render_returns_heatmap,
@@ -573,6 +673,7 @@ with tab_decision:
         inflation_val=inflation_val,
         fx_change=fx_change,
         is_provisional=is_provisional,
+        theme_mode=theme_mode,
     )
 
     status_col1, status_col2, status_col3 = st.columns(3)
@@ -585,7 +686,7 @@ with tab_decision:
 
     st.divider()
     st.subheader("Action 분포")
-    render_action_summary(signals_filtered)
+    render_action_summary(signals_filtered, theme_mode=theme_mode)
 
     st.divider()
     st.subheader("Top Picks")
@@ -597,20 +698,62 @@ with tab_decision:
                 {
                     "순위": rank,
                     "섹터": signal.sector_name + (" *" if signal.is_provisional else ""),
-                    "액션": signal.action,
+                    "액션": format_action_label(signal.action),
                     "RS 이탈도": f"{rs_div:+.2f}%" if not pd.isna(rs_div) else "N/A",
                     "1M": _format_return_pct(signal.returns, "1M"),
                     "3M": _format_return_pct(signal.returns, "3M"),
                     "알림": ", ".join(signal.alerts) if signal.alerts else "-",
                 }
             )
-        st.dataframe(pd.DataFrame(top_rows), use_container_width=True, hide_index=True)
+        top_df = pd.DataFrame(top_rows)
+        table_tokens = get_table_style_tokens(theme_mode)
+        action_col = top_df.columns[2] if len(top_df.columns) > 2 else None
+
+        def _style_top_rows(row: pd.Series) -> list[str]:
+            row_idx = int(row.name) if isinstance(row.name, int) else 0
+            row_bg = (
+                table_tokens["row_bg_even"]
+                if row_idx % 2 == 0
+                else table_tokens["row_bg_odd"]
+            )
+            base = (
+                f"background-color: {row_bg}; "
+                f"color: {table_tokens['row_text']}; "
+                f"border-bottom: 1px solid {table_tokens['grid']};"
+            )
+            styles = [base for _ in range(len(row))]
+            if action_col and action_col in row.index:
+                styles[row.index.get_loc(action_col)] = (
+                    f"background-color: {row_bg}; "
+                    f"color: {table_tokens['row_text']}; "
+                    f"font-weight: 700; "
+                    f"border-bottom: 1px solid {table_tokens['grid']};"
+                )
+            return styles
+
+        top_styled = (
+            top_df.style.apply(_style_top_rows, axis=1).set_table_styles(
+                [
+                    {
+                        "selector": "th",
+                        "props": [
+                            ("background-color", table_tokens["header_bg"]),
+                            ("color", table_tokens["header_text"]),
+                            ("font-weight", "700"),
+                            ("border-bottom", f"1px solid {table_tokens['grid']}"),
+                        ],
+                    }
+                ],
+                overwrite=False,
+            )
+        )
+        st.dataframe(top_styled, use_container_width=True, hide_index=True)
     else:
         st.info("글로벌 필터 조건에 맞는 섹터가 없습니다.")
 
     st.divider()
     if signals_filtered:
-        fig_heatmap = render_returns_heatmap(signals_filtered)
+        fig_heatmap = render_returns_heatmap(signals_filtered, theme_mode=theme_mode)
         st.plotly_chart(fig_heatmap, use_container_width=True)
     else:
         st.info("수익률 히트맵을 표시할 신호가 없습니다.")
@@ -620,7 +763,18 @@ with tab_evidence:
 
     st.markdown("<br>", unsafe_allow_html=True)
 
-    with st.expander("📌 차트 읽는 법", expanded=False):
+    st.markdown(
+        """
+<div class="app-summary-card">
+<b>핵심 요약</b><br/>
+RS 산점도는 섹터의 상대강도(RS)와 RS 이동평균을 동시에 보여줍니다.<br/>
+오른쪽일수록 벤치마크 대비 강하고, 대각선 아래(RS > RS MA)일수록 모멘텀 가속 구간입니다.
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("차트 해석 상세", expanded=False):
         st.markdown("""
 **X축 (RS)** — 섹터 종가 ÷ 벤치마크(KOSPI) 비율. 값이 클수록 벤치마크 대비 절대 강도가 높습니다.
 
@@ -656,6 +810,7 @@ with tab_evidence:
                 signals_filtered,
                 height=scatter_height,
                 margin=scatter_margin,
+                theme_mode=theme_mode,
             )
             if is_mobile_client:
                 st.plotly_chart(fig_scatter, use_container_width=True)
@@ -675,7 +830,7 @@ with tab_evidence:
 - **해석 포인트**: 위 산점도의 대각선(RS = RS MA)에서 얼마나 이탈했는지 수치로 보여줍니다.
 """
             )
-            fig_bar = render_rs_momentum_bar(signals_filtered)
+            fig_bar = render_rs_momentum_bar(signals_filtered, theme_mode=theme_mode)
             if fig_bar.data:
                 st.plotly_chart(fig_bar, use_container_width=True)
             else:
@@ -691,7 +846,11 @@ with tab_all_signals:
         f"적용 필터: 액션={filter_action_global}, "
         f"현재 국면만 보기={'ON' if filter_regime_only_global else 'OFF'}"
     )
-    render_signal_table(signals_filtered, current_regime=current_regime)
+    render_signal_table(
+        signals_filtered,
+        current_regime=current_regime,
+        theme_mode=theme_mode,
+    )
 
 # ── Footer ─────────────────────────────────────────────────────────────────────
 

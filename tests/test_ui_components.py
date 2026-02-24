@@ -7,7 +7,7 @@ from src.ui.components import (
     render_rs_momentum_bar,
     render_rs_scatter,
 )
-from src.ui.styles import ACTION_COLORS, BLUE, DARK_GREY, GREY
+from src.ui.styles import ACTION_COLORS, BLUE, DARK_GREY, GREY, get_action_colors
 
 
 def _signal(code: str, action: str, rs: float, rs_ma: float) -> SectorSignal:
@@ -37,7 +37,7 @@ def test_render_rs_scatter_filters_nan_points():
         _signal("C", "N/A", 1.20, 1.10),
     ]
 
-    fig = render_rs_scatter(signals)
+    fig = render_rs_scatter(signals, theme_mode="dark")
     assert len(fig.data) == 1
     assert list(fig.data[0].x) == [1.10]
     assert list(fig.data[0].y) == [1.00]
@@ -50,7 +50,7 @@ def test_render_rs_scatter_empty_annotation_when_no_valid_points():
         _signal("B", "Watch", float("nan"), 1.00),
     ]
 
-    fig = render_rs_scatter(signals)
+    fig = render_rs_scatter(signals, theme_mode="dark")
     assert len(fig.data) == 0
     annotations = list(fig.layout.annotations or [])
     assert annotations
@@ -83,7 +83,7 @@ def test_render_rs_momentum_bar_returns_empty_when_no_valid_data():
         _signal("D", "Hold", 1.00, 0.00),
     ]
 
-    fig = render_rs_momentum_bar(signals)
+    fig = render_rs_momentum_bar(signals, theme_mode="dark")
     assert len(fig.data) == 0
 
 
@@ -93,7 +93,7 @@ def test_render_rs_momentum_bar_valid_data_has_percent_suffix():
         _signal("B", "Hold", 0.95, 1.00),
     ]
 
-    fig = render_rs_momentum_bar(signals)
+    fig = render_rs_momentum_bar(signals, theme_mode="dark")
     assert len(fig.data) == 1
     assert fig.layout.xaxis.ticksuffix == "%"
 
@@ -138,7 +138,7 @@ def test_render_action_summary_renders_metrics_and_bar(monkeypatch):
         lambda fig, use_container_width=False: chart_calls.append((fig, use_container_width)),
     )
 
-    render_action_summary(signals)
+    render_action_summary(signals, theme_mode="dark")
 
     assert ("Total", 6) in metric_calls
     assert ("Strong Buy", 1) in metric_calls
@@ -170,8 +170,16 @@ def test_render_action_summary_handles_empty_signal_list(monkeypatch):
         lambda fig, use_container_width=False: chart_calls.append(fig),
     )
 
-    render_action_summary([])
+    render_action_summary([], theme_mode="dark")
 
     assert info_calls
     assert info_calls[0] == "신호 데이터 없음"
     assert not chart_calls
+
+
+def test_render_rs_scatter_uses_light_theme_action_palette():
+    signals = [_signal("A", "Watch", 1.10, 1.00)]
+
+    fig = render_rs_scatter(signals, theme_mode="light")
+    assert len(fig.data) == 1
+    assert list(fig.data[0].marker.color) == [get_action_colors("light")["Watch"]]

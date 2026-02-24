@@ -816,3 +816,222 @@ Review (fill after implementation):
 - Residual risks / follow-ups:
 - Railway build/runtime behavior can differ if service-level start command is manually overridden in UI; keep `railway.toml` and UI command consistent.
 - Without valid `ECOS_API_KEY`/`KOSIS_API_KEY`, production deploy will run in fallback (`SAMPLE`) mode by design.
+
+## 24) Typography + Tab Contrast Polish (2026-02-24)
+
+Pre-Implementation Check-in:
+- 2026-02-24: User requested UI readability polish in two points:
+- 1) switch to a more professional finance-dashboard font stack,
+- 2) improve selected-tab text contrast so active tab labels do not blend into dark backgrounds.
+
+Execution Checklist:
+- [x] Add this section to `tasks/todo.md` with checklist + review area.
+- [x] Update global app typography in `src/ui/styles.py` to a finance-style professional font family.
+- [x] Add explicit Streamlit tab styles for default/hover/selected states with stronger text contrast.
+- [x] Keep visual changes minimal and scoped to typography + tabs only.
+- [x] Run focused verification (`py_compile` and UI-component tests) for touched modules.
+- [x] Record commands, outcomes, and residual risks in review.
+
+Verification Gates:
+- [x] `src/ui/styles.py` imports and applies the new primary font consistently.
+- [x] Active tab selector (`aria-selected="true"`) has high-contrast text color and clear background/border cue.
+- [x] `python -m py_compile src/ui/styles.py app.py` passes.
+- [x] `pytest -q tests/test_ui_components.py` passes.
+
+Review (fill after implementation):
+- Commands run:
+- `Get-Content src/ui/styles.py`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m py_compile src/ui/styles.py app.py`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m pytest -q tests/test_ui_components.py`
+- Results:
+- Replaced typography import from Pretendard CDN to Google Fonts (`IBM Plex Sans KR` + `IBM Plex Sans`) and wired new font stack to both global CSS and Plotly template font family.
+- Added explicit tab-state styling under Streamlit tab selectors: muted default text, brighter hover, and high-contrast selected-state text/background/highlight.
+- Change scope remained minimal (`src/ui/styles.py` + tracking update in `tasks/todo.md`).
+- Verification passed: compile check succeeded; targeted UI test suite succeeded (`8 passed in 0.94s`).
+- Residual risks / follow-ups:
+- Google Fonts dependency adds external font fetch at runtime; in restricted networks font fallback stack will be used automatically.
+
+## 16) Korea Sector Rotation UI 전면 리디자인 (2026-02-24)
+
+Pre-Implementation Check-in:
+- 2026-02-24: Scope locked to presentation layer only (UI/theme/layout). No changes to signal engine or macro/price business logic.
+- Fixed decisions: full redesign, dark/light toggle, local font hosting, unified sidebar IA, WCAG contrast tests.
+
+Execution Checklist:
+- [x] Add dark/light token dictionary in `src/ui/styles.py` with keys `bg/surface/border/text/text_muted/primary/success/warning/danger/info`.
+- [x] Change `inject_css()` -> `inject_css(theme_mode: str)` and make all CSS colors token-driven.
+- [x] Change `get_plotly_template()` -> `get_plotly_template(theme_mode: str)` and split theme-specific colorway (no teal/cyan).
+- [x] Add local font-face loading from `static/fonts/PretendardVariable.woff2` and `static/fonts/JetBrainsMono[wght].woff2` with fallback stack.
+- [x] Extend UI render signatures in `src/ui/components.py` to accept `theme_mode` and pass to Plotly template calls.
+- [x] Ensure status expression is not color-only by adding explicit text labels/chips in table-level action/status fields.
+- [x] Refactor `app.py` sidebar into a single block ordered as: Quick Status -> Global Filters -> Model Parameters (collapsed) -> Data Actions.
+- [x] Wrap model parameter controls in `st.form` + apply button to minimize reruns.
+- [x] Keep default control as slider; move direct numeric input to an advanced section.
+- [x] Add `st.session_state["theme_mode"]` default `"dark"` and implement dark/light toggle (session-scoped).
+- [x] Update tab naming/text density and restructure Evidence tab to summary card + expandable details.
+- [x] Update `.streamlit/config.toml` theme font to `"sans serif"`.
+- [x] Add new tests: `tests/test_ui_theme.py`, `tests/test_ui_contrast.py`.
+- [x] Update `tests/test_ui_components.py` for new theme-aware signatures.
+
+Verification Gates:
+- [x] `python -m py_compile app.py src/ui/styles.py src/ui/components.py`
+- [x] `pytest -q tests/test_ui_components.py tests/test_ui_theme.py tests/test_ui_contrast.py`
+- [x] Contrast assertions verify body/muted/tab/badge combinations are >= 4.5 for normal text.
+- [x] Theme toggle switches charts/tables/badges/sidebar styles consistently.
+- [x] Local font files are present and CSS fallback remains valid when files are missing.
+
+Review:
+- Commands run:
+- `python -m py_compile app.py src/ui/styles.py src/ui/components.py`
+- `pytest -q tests/test_ui_components.py tests/test_ui_theme.py tests/test_ui_contrast.py`
+- `Get-ChildItem static/fonts | Select-Object Name,Length,LastWriteTime`
+- Result summary:
+- Implemented full presentation-layer redesign with dark/light token system, session-scoped theme toggle (default dark), local `@font-face` loading, and theme-aware Plotly templates/components.
+- Unified sidebar IA into `빠른 상태 -> 글로벌 필터 -> 모델 파라미터(폼+적용) -> 데이터 작업` and moved direct numeric edits into a collapsed 고급 섹션.
+- Added explicit icon+text action labels (`▲/●/■/▼/○`) so state communication is not color-only; restructured Evidence tab into summary card + expandable detail.
+- Added regression tests `tests/test_ui_theme.py` and `tests/test_ui_contrast.py`, and updated `tests/test_ui_components.py` for theme-aware signatures.
+- Verification outcome: `18 passed in 0.98s`.
+- Risks/notes:
+- CSS uses `color-mix(...)`; modern Chromium/Firefox/Safari are supported, but very old browser engines may render fallback colors differently.
+- Sidebar quick-status cards show probe status (parquet presence) before full data load; authoritative LIVE/CACHED/SAMPLE status remains visible in the main Decision metrics.
+
+## 25) Light Theme Readability Upgrade (2026-02-24)
+
+Pre-Implementation Check-in:
+- 2026-02-24: User reported that light theme readability is significantly worse than dark theme.
+- Scope: improve visual hierarchy and contrast in light mode without changing business logic.
+
+Execution Checklist:
+- [x] Add this section to `tasks/todo.md` with checklist + review area.
+- [x] Adjust light-theme token values and light-only background treatment for clearer foreground separation.
+- [x] Refine global text color rules so normal body copy is not over-muted in light mode.
+- [x] Improve light-mode readability for tabs/sidebar/form controls with explicit contrast-oriented selectors.
+- [x] Run focused verification (`py_compile` + UI theme/contrast/component tests).
+- [x] Record commands, outcomes, and residual risks in review.
+
+Verification Gates:
+- [x] `src/ui/styles.py` reflects stronger light-mode readability defaults (tokens + CSS selectors).
+- [x] `python -m py_compile src/ui/styles.py app.py` passes.
+- [x] `pytest -q tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_ui_components.py` passes.
+
+Review (fill after implementation):
+- Commands run:
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m py_compile src/ui/styles.py app.py`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m pytest -q tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_ui_components.py`
+- Results:
+- Updated `src/ui/styles.py` light tokens (`bg/border/text/text_muted`) for stronger contrast hierarchy.
+- Added light-mode specific background/sidebar/control/card styles while preserving dark-mode behavior.
+- Stopped over-muted body copy by separating muted caption/metric-label selectors from markdown paragraph/list text selectors.
+- Added Streamlit theme variable aliases (`--background-color`, `--secondary-background-color`, `--text-color`, `--primary-color`) and `color-scheme` to better align native widget readability in light mode.
+- Verification passed: compile check succeeded; focused UI suite succeeded (`18 passed in 1.00s`).
+- Residual risks / follow-ups:
+- Native `st.dataframe` internals are partly Streamlit-controlled; if any isolated low-contrast cells remain, a targeted dataframe selector pass may still be needed.
+
+## 26) Light Theme Palette + Table Harmonization (2026-02-24)
+
+Pre-Implementation Check-in:
+- 2026-02-24: User reported three remaining issues: light-mode readability still weak, overall palette disharmony, and dark-looking tables on bright background.
+- Scope: unify light theme visual language and remove dark-table mismatch while preserving dashboard logic.
+
+Execution Checklist:
+- [x] Add this section to `tasks/todo.md` with checklist + review area.
+- [x] Re-tune light palette tokens/colorway to a more cohesive light-theme family.
+- [x] Add explicit light/dark table style tokens and apply them to dataframe rendering paths.
+- [x] Update `render_signal_table()` and Decision `Top Picks` table to use theme-aware table styling.
+- [x] Add CSS fallback selectors for Streamlit dataframe wrappers to reduce dark-theme leakage in light mode.
+- [x] Run focused verification (`py_compile` + UI tests).
+- [x] Record commands, outcomes, and residual risks in review.
+
+Verification Gates:
+- [x] Light theme table sections render with light headers/body rows and dark readable text.
+- [x] `python -m py_compile src/ui/styles.py src/ui/components.py app.py` passes.
+- [x] `pytest -q tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_ui_components.py` passes.
+
+Review (fill after implementation):
+- Commands run:
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m py_compile src/ui/styles.py src/ui/components.py app.py tests/test_ui_theme.py tests/test_ui_contrast.py`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m pytest -q tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_ui_components.py`
+- Results:
+- Added `TABLE_STYLE_TOKENS` and `get_table_style_tokens()` in `src/ui/styles.py`, then wired them into CSS dataframe fallback selectors and component-level styling.
+- Rebalanced light Plotly colorway to a tighter, finance-dashboard palette family (blue/indigo/green/amber/rose 중심).
+- Updated `render_signal_table()` to apply table-wide themed row/header styling before action/status emphasis, eliminating dark-base table bleed in light mode.
+- Updated Decision tab `Top Picks` to render as themed `Styler` dataframe with light header, zebra rows, and readable text.
+- Extended tests to cover new table theming hooks and contrast checks:
+- `tests/test_ui_theme.py`: CSS contains light table tokens.
+- `tests/test_ui_contrast.py`: header/body table text contrast checks.
+- Verification passed: focused UI suite `20 passed in 1.00s`.
+- Residual risks / follow-ups:
+- Streamlit dataframe internals can change across versions; if selector drift happens after upgrades, keep component-level `Styler` path as primary and adjust CSS fallback selectors.
+
+## 27) Light Theme Header + Text + Dataframe Final Polish (2026-02-24)
+
+Pre-Implementation Check-in:
+- 2026-02-24: User requested final visual mismatch fixes in light mode:
+- 1) text color still blending with background in places,
+- 2) top area remains dark-toned,
+- 3) table header/bottom strip still dark.
+
+Execution Checklist:
+- [x] Add this section to `tasks/todo.md` with checklist + review area.
+- [x] Increase light-mode muted-text readability and widget-label contrast.
+- [x] Force top header/decoration region to light-tone background in light mode.
+- [x] Strengthen dataframe theming via Glide Data Grid CSS variables and scrollbar track/thumb styling.
+- [x] Keep table header/rows aligned with light table tokens and remove dark strip artifacts.
+- [x] Run focused verification (`py_compile` + UI tests).
+- [x] Record commands, outcomes, and residual risks in review.
+
+Verification Gates:
+- [x] Light mode header/decoration area is no longer dark-only.
+- [x] Light mode widget/markdown text is clearly legible against background.
+- [x] Light mode dataframe header/body/scroll track use light tokens.
+- [x] `python -m py_compile src/ui/styles.py app.py src/ui/components.py tests/test_ui_theme.py tests/test_ui_contrast.py` passes.
+- [x] `pytest -q tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_ui_components.py` passes.
+
+Review (fill after implementation):
+- Commands run:
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m py_compile src/ui/styles.py app.py src/ui/components.py tests/test_ui_theme.py tests/test_ui_contrast.py`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m pytest -q tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_ui_components.py`
+- Results:
+- Updated light `text_muted` to a darker readable tone.
+- Added light-mode header/toolbar/decoration overrides (`stHeader`, `stDecoration`) to remove dark top strip mismatch.
+- Added stronger label/expander contrast selectors and inline-code background tuning for light mode readability.
+- Added Glide Data Grid token overrides (`--gdg-bg-header`, `--gdg-bg-cell`, `--gdg-border-color` etc.) and scrollbar track/thumb styling inside `stDataFrame`.
+- Extended theme test to assert header/decor/dataframe token hooks are present in injected CSS.
+- Verification passed: focused UI suite `20 passed in 1.04s`.
+- Residual risks / follow-ups:
+- Browser cache can keep stale CSS for Streamlit apps; use hard refresh when validating visual changes.
+
+## 28) Light Theme Axis/Label Readability Follow-up (2026-02-24)
+
+Pre-Implementation Check-in:
+- 2026-02-24: User reported remaining readability issues in light theme, especially chart/table axes and labels around the Theme Control panel workflow.
+- Scope: improve light-theme chart axis/title/legend legibility without touching signal logic.
+
+Execution Checklist:
+- [x] Add this section to `tasks/todo.md` with checklist + review area.
+- [x] Raise light-theme chart text hierarchy in `src/ui/styles.py` for axis ticks/titles and legend labels.
+- [x] Ensure shared Plotly template applies readable contrast for light mode axis lines and grid balance.
+- [x] Add or update tests in `tests/test_ui_theme.py` and `tests/test_ui_contrast.py` to guard axis/legend readability regressions.
+- [x] Run focused verification (`py_compile` + UI theme/contrast/component tests).
+- [x] Record commands, outcomes, and residual risks in review.
+
+Verification Gates:
+- [x] `get_plotly_template("light")` returns higher-contrast axis tick/title/legend text defaults than prior muted settings.
+- [x] `python -m py_compile src/ui/styles.py src/ui/components.py app.py tests/test_ui_theme.py tests/test_ui_contrast.py` passes.
+- [x] `pytest -q tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_ui_components.py` passes.
+
+Review (fill after implementation):
+- Commands run:
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m py_compile src/ui/styles.py src/ui/components.py app.py tests/test_ui_theme.py tests/test_ui_contrast.py`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m pytest -q tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_ui_components.py`
+- Results:
+- Updated `src/ui/styles.py:get_plotly_template()` so light theme uses stronger axis tick/title/legend text colors and clearer axis line/grid balance.
+- Added `automargin=True` on x/y axes to reduce label clipping risk and improve readability for longer tick labels.
+- Updated `src/ui/components.py` no-data RS scatter annotation color from muted to primary body text for better light-mode legibility.
+- Added test coverage:
+- `tests/test_ui_theme.py`: verifies light Plotly template no longer uses muted text for axis/legend and keeps axis automargins enabled.
+- `tests/test_ui_contrast.py`: verifies Plotly axis/legend text contrast ratio is >= 4.5 for both dark/light themes.
+- Verification passed: focused UI suite `22 passed in 1.30s`.
+- Residual risks / follow-ups:
+- Browser cache can delay CSS/template perception during manual checks; use hard refresh when validating visuals.
+- Chart-level per-trace text colors (if added in future figures) can bypass template defaults, so keep contrast checks near custom trace text when expanding charts.
