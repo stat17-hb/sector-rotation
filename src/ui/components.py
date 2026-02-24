@@ -422,16 +422,21 @@ def render_action_summary(signals: list, theme_mode: str = "dark") -> None:
         st.info("신호 데이터 없음")
         return
 
-    action_order = ["Strong Buy", "Watch", "Hold", "Avoid", "N/A"]
-    action_counts = {action: 0 for action in action_order}
+    full_order = ["Strong Buy", "Watch", "Hold", "Avoid", "N/A"]
+    action_counts = {action: 0 for action in full_order}
     for s in signals:
         action_counts[s.action] = action_counts.get(s.action, 0) + 1
 
+    if action_counts.get("N/A", 0) > 0:
+        display_order = full_order
+    else:
+        display_order = [action for action in full_order if action != "N/A"]
+
     total_count = sum(action_counts.values())
-    metric_cols = st.columns(len(action_order) + 1)
+    metric_cols = st.columns(len(display_order) + 1)
     with metric_cols[0]:
         st.metric("Total", total_count)
-    for idx, action in enumerate(action_order, start=1):
+    for idx, action in enumerate(display_order, start=1):
         with metric_cols[idx]:
             st.metric(action, action_counts[action])
 
@@ -439,10 +444,10 @@ def render_action_summary(signals: list, theme_mode: str = "dark") -> None:
     action_colors = get_action_colors(theme_mode)
     fig = go.Figure(
         data=go.Bar(
-            x=action_order,
-            y=[action_counts[action] for action in action_order],
-            marker_color=[action_colors[action] for action in action_order],
-            text=[str(action_counts[action]) for action in action_order],
+            x=display_order,
+            y=[action_counts[action] for action in display_order],
+            marker_color=[action_colors[action] for action in display_order],
+            text=[str(action_counts[action]) for action in display_order],
             textposition="outside",
         )
     )

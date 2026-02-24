@@ -160,6 +160,52 @@ def test_render_action_summary_renders_metrics_and_bar(monkeypatch):
     ]
 
 
+def test_render_action_summary_hides_na_when_zero(monkeypatch):
+    signals = [
+        _signal("A", "Strong Buy", 1.10, 1.00),
+        _signal("B", "Watch", 1.05, 1.00),
+        _signal("C", "Hold", 0.98, 1.00),
+        _signal("D", "Avoid", 0.94, 1.00),
+    ]
+
+    metric_calls: list[tuple[str, int]] = []
+    chart_calls: list[tuple[object, bool]] = []
+
+    monkeypatch.setattr(
+        "src.ui.components.st.columns",
+        lambda n: [_DummyColumn() for _ in range(n)],
+    )
+    monkeypatch.setattr(
+        "src.ui.components.st.metric",
+        lambda label, value, *_, **__: metric_calls.append((label, value)),
+    )
+    monkeypatch.setattr(
+        "src.ui.components.st.plotly_chart",
+        lambda fig, use_container_width=False: chart_calls.append((fig, use_container_width)),
+    )
+
+    render_action_summary(signals, theme_mode="dark")
+
+    assert ("Total", 4) in metric_calls
+    assert ("Strong Buy", 1) in metric_calls
+    assert ("Watch", 1) in metric_calls
+    assert ("Hold", 1) in metric_calls
+    assert ("Avoid", 1) in metric_calls
+    assert not any(label == "N/A" for label, _ in metric_calls)
+
+    assert len(chart_calls) == 1
+    fig, use_container_width = chart_calls[0]
+    assert use_container_width is True
+    assert list(fig.data[0].x) == ["Strong Buy", "Watch", "Hold", "Avoid"]
+    assert list(fig.data[0].y) == [1, 1, 1, 1]
+    assert list(fig.data[0].marker.color) == [
+        ACTION_COLORS["Strong Buy"],
+        ACTION_COLORS["Watch"],
+        ACTION_COLORS["Hold"],
+        ACTION_COLORS["Avoid"],
+    ]
+
+
 def test_render_action_summary_handles_empty_signal_list(monkeypatch):
     info_calls: list[str] = []
     chart_calls: list[object] = []
