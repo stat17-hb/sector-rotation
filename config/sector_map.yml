@@ -26,6 +26,8 @@ regimes:
         export_sector: false
   Slowdown:
     description: "성장 Down, 물가/금리 Up"
+    # 실증 검증 (2023-2026, 9개월): 철강 1위, 헬스케어 3위, 에너지화학 4위, 유틸리티 8위
+    # → 유틸리티 제거, 헬스케어 추가 (SSGA Z-score 10.8과도 일치)
     sectors:
       - code: "5048"
         name: "KRX 에너지화학"
@@ -33,14 +35,17 @@ regimes:
       - code: "5049"
         name: "KRX 철강"
         export_sector: true
-      - code: "1170"
-        name: "KOSPI200 유틸리티"
+      - code: "5045"
+        name: "KRX 헬스케어"
         export_sector: false
   Contraction:
     description: "성장 Down, 물가/금리 Down"
+    # 실증 검증 불가 (2023-2026 기간 내 Contraction 0개월)
+    # 유틸리티: 방어적 배당 특성으로 이론적 배정 유지
+    # 생활소비재: SSGA Contraction Z-score 9.4로 최우선 방어주
     sectors:
-      - code: "5045"
-        name: "KRX 헬스케어"
+      - code: "1170"
+        name: "KOSPI200 유틸리티"
         export_sector: false
       - code: "1157"
         name: "KOSPI200 생활소비재"
