@@ -80,6 +80,7 @@ def build_signal_table(
     macro_result: pd.DataFrame,
     sector_map: dict,
     settings: dict,
+    fx_change_pct: float | None = None,
 ) -> list[SectorSignal]:
     """Build complete signal table for all sectors.
 
@@ -95,6 +96,7 @@ def build_signal_table(
         sector_map: Parsed config/sector_map.yml.
         settings: Dict with keys: rs_ma_period, ma_fast, ma_slow, rsi_period,
                   rsi_overbought, rsi_oversold, fx_shock_pct.
+        fx_change_pct: Recent USD/KRW change (%). If None/NaN, FX shock is skipped.
 
     Returns:
         list[SectorSignal] — one entry per sector in sector_map.
@@ -154,8 +156,13 @@ def build_signal_table(
     rsi_period = int(settings.get("rsi_period", 14))
     fx_shock_pct = float(settings.get("fx_shock_pct", 3.0))
 
-    # FX change — look for USD/KRW in macro_result or use 0
-    fx_change_pct = 0.0
+    # Runtime FX change comes from app wiring (USD/KRW %).
+    fx_change_value = float("nan")
+    if fx_change_pct is not None:
+        try:
+            fx_change_value = float(fx_change_pct)
+        except (TypeError, ValueError):
+            fx_change_value = float("nan")
     asof_str = ""
     if not sector_prices.empty:
         asof_str = sector_prices.index[-1].strftime("%Y-%m-%d")
@@ -312,7 +319,7 @@ def build_signal_table(
             # Apply FX shock filter
             sig = apply_fx_shock_filter(
                 sig,
-                fx_change_pct=fx_change_pct,
+                fx_change_pct=fx_change_value,
                 export_sectors=export_sector_codes,
                 threshold_pct=fx_shock_pct,
             )

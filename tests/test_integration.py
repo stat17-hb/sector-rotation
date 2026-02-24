@@ -281,3 +281,52 @@ class TestIntegration:
 
         # Non-export sector unchanged
         assert updated[1].action == "Strong Buy"
+
+    def test_build_signal_table_applies_fx_shock_when_fx_change_provided(self):
+        """build_signal_table downgrades export-sector Strong Buy when fx_change_pct exceeds threshold."""
+        sector_map = {
+            "benchmark": {"code": "1001", "name": "KOSPI"},
+            "regimes": {
+                "Recovery": {
+                    "sectors": [
+                        {"code": "5044", "name": "KRX Semis", "export_sector": True},
+                    ]
+                }
+            },
+        }
+        settings = _default_settings()
+        macro_result = _make_macro_result()
+
+        n = 90
+        idx = pd.date_range("2024-01-01", periods=n, freq="B")
+        steps = pd.Series(range(n), dtype=float).to_numpy()
+        sector_prices = pd.DataFrame(
+            {
+                "index_code": "5044",
+                "index_name": "Sector 5044",
+                "close": 100.0 * (1.015 ** steps),
+            },
+            index=idx,
+        )
+        benchmark_prices = pd.Series(100.0 * (1.005 ** steps), index=idx, dtype=float)
+
+        baseline = build_signal_table(
+            sector_prices=sector_prices,
+            benchmark_prices=benchmark_prices,
+            macro_result=macro_result,
+            sector_map=sector_map,
+            settings=settings,
+            fx_change_pct=0.0,
+        )
+        assert baseline[0].action == "Strong Buy"
+
+        shocked = build_signal_table(
+            sector_prices=sector_prices,
+            benchmark_prices=benchmark_prices,
+            macro_result=macro_result,
+            sector_map=sector_map,
+            settings=settings,
+            fx_change_pct=4.0,
+        )
+        assert shocked[0].action == "Watch"
+        assert "FX Shock" in shocked[0].alerts

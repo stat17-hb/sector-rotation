@@ -273,6 +273,18 @@ def _cached_signals(prices_key: tuple, macro_key: tuple, params_hash: str, macro
             "price_years": price_years,
         }
     )
+    fx_change_pct = float("nan")
+    if not macro_df.empty:
+        fx_series = extract_macro_series(
+            macro_df=macro_df,
+            macro_series_cfg=macro_series_cfg,
+            alias="usdkrw",
+        )
+        if len(fx_series) >= 2:
+            prev_fx = float(fx_series.iloc[-2])
+            curr_fx = float(fx_series.iloc[-1])
+            if not (pd.isna(prev_fx) or pd.isna(curr_fx)) and prev_fx != 0:
+                fx_change_pct = float((curr_fx / prev_fx - 1) * 100)
 
     signals = build_signal_table(
         sector_prices=sector_prices,
@@ -280,6 +292,7 @@ def _cached_signals(prices_key: tuple, macro_key: tuple, params_hash: str, macro
         macro_result=macro_result,
         sector_map=sector_map,
         settings=runtime_settings,
+        fx_change_pct=fx_change_pct,
     )
 
     return signals, macro_result, price_status, macro_status
@@ -862,8 +875,8 @@ with tab_all_signals:
 """
         )
         st.caption(
-            "참고: 현재 구현에서는 신호 계산 시 FX 변화율 입력값이 0.0으로 전달되어 "
-            "`FX Shock` 알림이 기본적으로 발생하지 않습니다."
+            "참고: `FX Shock`는 신호 계산 시 전달된 최근 USD/KRW 변화율을 기준으로 판정됩니다. "
+            "USD/KRW 시계열이 2개 미만이면 해당 회차에서는 `FX Shock`가 계산되지 않습니다."
         )
 
     render_signal_table(

@@ -29,3 +29,6 @@
 - Rule: For Streamlit tables, apply theme at component level (`pandas.Styler`) first and keep CSS selectors only as fallback; do not rely on root CSS tokens alone.
 - Pattern: Streamlit top chrome (`stHeader`/`stDecoration`) and Glide Data Grid can ignore app background tokens and remain dark.
 - Rule: In light mode, explicitly style `stHeader`, `stDecoration`, and Glide Data Grid CSS variables; token updates alone are insufficient.
+- Pattern: FX shock behavior was documented but runtime signal path still passed `fx_change_pct=0.0`, disabling the alert in practice.
+- Rule: For risk/input wiring changes, validate end-to-end propagation in integration tests (`caller -> build_signal_table -> scoring`) instead of relying only on helper unit tests.
+- Rule: Do not hardcode neutral sentinel values (`0.0`) for optional market inputs; pass computed runtime values and use `NaN` when data is unavailable.

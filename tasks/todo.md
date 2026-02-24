@@ -1065,3 +1065,37 @@ Review (fill after implementation):
 - Added a caption note that the current implementation passes FX change as `0.0` during signal calculation, so `FX Shock` alert is typically not triggered.
 - Residual risks / follow-ups:
 - Content is explanatory only; if FX shock logic wiring is changed later, this text should be revalidated against implementation.
+
+## 30) FX 변화율 전달 경로 복구 (2026-02-24)
+
+Pre-Implementation Check-in:
+- 2026-02-24: User reported FX shock alert was effectively disabled because signal calculation path used `fx_change_pct=0.0`.
+- Scope: Wire real USD/KRW change into signal engine (`build_signal_table`) and align dashboard explanation text with runtime behavior.
+
+Execution Checklist:
+- [x] Add this section to `tasks/todo.md` with checklist + review area.
+- [x] Update `src/signals/matrix.py:build_signal_table()` to accept runtime FX change input.
+- [x] Compute USD/KRW change in `app.py` signal-cache path and pass it into `build_signal_table(...)`.
+- [x] Remove stale explanation caption claiming FX input is always `0.0`; replace with behavior-accurate wording.
+- [x] Add regression coverage proving `build_signal_table(...)` applies FX shock downgrade when `fx_change_pct` exceeds threshold.
+- [x] Run focused verification (`py_compile` + targeted `pytest`) for touched modules.
+- [x] Record commands, outcomes, and residual risks in review.
+
+Verification Gates:
+- [x] `build_signal_table(...)` receives non-zero FX change via call path when macro `usdkrw` series has at least 2 points.
+- [x] FX shock downgrade path (`Strong Buy -> Watch` + `FX Shock`) is test-covered through `build_signal_table(...)`, not only scoring helper.
+- [x] `python -m py_compile app.py src/signals/matrix.py tests/test_integration.py` passes.
+- [x] `pytest -q tests/test_integration.py tests/test_signals.py` passes.
+
+Review (fill after implementation):
+- Commands run:
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m py_compile app.py src/signals/matrix.py tests/test_integration.py`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m pytest -q tests/test_integration.py tests/test_signals.py`
+- Results:
+- `src/signals/matrix.py` now accepts `fx_change_pct` input and normalizes it to `fx_change_value` (`None`/invalid -> `NaN`) before applying FX shock filter.
+- `app.py` now computes USD/KRW latest change in `_cached_signals(...)` and passes it into `build_signal_table(...)`, so signal computation uses real FX move.
+- Signals-tab explanation caption was updated to reflect current behavior (real FX input, skipped when less than 2 FX points).
+- Added integration regression `test_build_signal_table_applies_fx_shock_when_fx_change_provided` to verify `build_signal_table(...)` path triggers `Strong Buy -> Watch` downgrade with `FX Shock`.
+- Verification result: `12 passed, 1 warning in 7.24s`.
+- Residual risks / follow-ups:
+- If `usdkrw` macro series is unavailable or has fewer than 2 points, FX shock remains intentionally skipped for that run.
