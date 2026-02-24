@@ -1035,3 +1035,33 @@ Review (fill after implementation):
 - Residual risks / follow-ups:
 - Browser cache can delay CSS/template perception during manual checks; use hard refresh when validating visuals.
 - Chart-level per-trace text colors (if added in future figures) can bypass template defaults, so keep contrast checks near custom trace text when expanding charts.
+
+## 29) Dashboard Alert Category Explanation (2026-02-24)
+
+Pre-Implementation Check-in:
+- 2026-02-24: User requested adding an in-dashboard explanation for `알림` categories and how each alert is computed.
+- Scope: Add UI-only explanatory content in Signals tab without changing signal-engine behavior.
+
+Execution Checklist:
+- [x] Add this section to `tasks/todo.md` with checklist + review area.
+- [x] Add a new explanation block in `app.py` Signals tab that lists alert categories.
+- [x] Describe calculation logic/trigger rules for each alert (`Overheat`, `Oversold`, `FX Shock`, `Benchmark Missing`, `RS Data Insufficient`).
+- [x] Include current default thresholds in explanation (`RSI 70/30`, `FX shock 3.0%`).
+- [x] Run lightweight verification (`py_compile`) for touched code.
+- [x] Record commands, outcomes, and residual risks in review.
+
+Verification Gates:
+- [x] Signals tab renders alert-explanation section without affecting existing signal table rendering.
+- [x] `python -m py_compile app.py` passes.
+
+Review (fill after implementation):
+- Commands run:
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m py_compile app.py`
+- `git diff -- app.py tasks/todo.md`
+- Results:
+- Added a new `st.expander("알림 카테고리 설명")` block in the Signals tab directly above `render_signal_table(...)`.
+- The section now documents all alert categories and trigger rules: `Overheat`, `Oversold`, `FX Shock`, `Benchmark Missing`, `RS Data Insufficient`.
+- Thresholds are shown from runtime settings (`rsi_overbought`, `rsi_oversold`, `fx_shock_pct`) with defaults 70/30/3.0%.
+- Added a caption note that the current implementation passes FX change as `0.0` during signal calculation, so `FX Shock` alert is typically not triggered.
+- Residual risks / follow-ups:
+- Content is explanatory only; if FX shock logic wiring is changed later, this text should be revalidated against implementation.

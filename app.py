@@ -846,6 +846,26 @@ with tab_all_signals:
         f"적용 필터: 액션={filter_action_global}, "
         f"현재 국면만 보기={'ON' if filter_regime_only_global else 'OFF'}"
     )
+    with st.expander("알림 카테고리 설명", expanded=False):
+        rsi_overbought = int(settings.get("rsi_overbought", 70))
+        rsi_oversold = int(settings.get("rsi_oversold", 30))
+        fx_shock_pct = float(settings.get("fx_shock_pct", 3.0))
+
+        st.markdown(
+            f"""
+- **표시 규칙**: 알림이 하나 이상이면 쉼표(,)로 함께 표시되고, 없으면 `-`로 표시됩니다.
+- **Overheat**: 일간 RSI(`rsi_d`)가 `{rsi_overbought}` 이상일 때 추가됩니다.
+- **Oversold**: 일간 RSI(`rsi_d`)가 `{rsi_oversold}` 이하일 때 추가됩니다.
+- **FX Shock**: `|USD/KRW 변화율| > {fx_shock_pct:.1f}%` 이고 수출 섹터이며 현재 액션이 `Strong Buy`일 때 추가되며, 액션은 `Watch`로 강등됩니다.
+- **Benchmark Missing**: 벤치마크 가격 데이터가 비어 있을 때 모든 섹터에 추가됩니다(액션 `N/A`).
+- **RS Data Insufficient**: 특정 섹터의 RS/RS MA 계산이 불가능할 때 해당 섹터에 추가됩니다(액션 `N/A`).
+"""
+        )
+        st.caption(
+            "참고: 현재 구현에서는 신호 계산 시 FX 변화율 입력값이 0.0으로 전달되어 "
+            "`FX Shock` 알림이 기본적으로 발생하지 않습니다."
+        )
+
     render_signal_table(
         signals_filtered,
         current_regime=current_regime,
