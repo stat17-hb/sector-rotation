@@ -459,7 +459,8 @@ def render_action_summary(signals: list, theme_mode: str = "dark") -> None:
         height=280,
         showlegend=False,
     )
-    fig.update_yaxes(dtick=1, rangemode="tozero")
+    max_count = max(action_counts.values()) if action_counts else 1
+    fig.update_yaxes(dtick=1, range=[0, max_count * 1.25])
     st.plotly_chart(fig, use_container_width=True)
 
 
