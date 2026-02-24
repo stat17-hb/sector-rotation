@@ -859,6 +859,17 @@ with tab_all_signals:
         f"적용 필터: 액션={filter_action_global}, "
         f"현재 국면만 보기={'ON' if filter_regime_only_global else 'OFF'}"
     )
+    with st.expander("적합/비적합 판정 기준", expanded=False):
+        st.markdown(
+            """
+- `적합`은 **현재 시점의 국면(최신 매크로 판정)** 에 매핑된 섹터인지(`macro_fit`)로 판정합니다.
+- 현재 시점 국면은 매크로 결과의 최신 행(`macro_result["regime"].iloc[-1]`)을 사용합니다.
+- 매핑 기준은 `config/sector_map.yml`의 `regimes -> {국면} -> sectors`입니다.
+- 현재 국면에 포함되지 않은 섹터는 `비적합`으로 표시됩니다.
+- 참고: 최종 `액션`(Strong Buy/Watch/Hold/Avoid)은 `적합/비적합`에 모멘텀 조건(RS, 추세)을 결합해 계산됩니다.
+- `Indeterminate` 국면이면 해당 시점에는 매핑 섹터가 없어 전체가 `비적합`으로 표시될 수 있습니다.
+"""
+        )
     with st.expander("알림 카테고리 설명", expanded=False):
         rsi_overbought = int(settings.get("rsi_overbought", 70))
         rsi_oversold = int(settings.get("rsi_oversold", 30))

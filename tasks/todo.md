@@ -1099,3 +1099,33 @@ Review (fill after implementation):
 - Verification result: `12 passed, 1 warning in 7.24s`.
 - Residual risks / follow-ups:
 - If `usdkrw` macro series is unavailable or has fewer than 2 points, FX shock remains intentionally skipped for that run.
+
+## 31) Signals 탭 적합/비적합 판정 기준 설명 추가 (2026-02-24)
+
+Pre-Implementation Check-in:
+- 2026-02-24: User requested adding an explicit in-dashboard explanation for how `적합/비적합` is determined.
+- Scope: UI-only documentation update in Signals tab; no signal-engine logic changes.
+
+Execution Checklist:
+- [x] Add this section to `tasks/todo.md` with checklist + review area.
+- [x] Insert `적합/비적합 판정 기준` expander in `app.py` within `tab_all_signals`.
+- [x] Place the new expander between the filter caption and existing `알림 카테고리 설명` expander.
+- [x] Use the approved explanatory copy including `macro_fit`, `macro_result["regime"].iloc[-1]`, and `config/sector_map.yml` mapping basis.
+- [x] Run verification commands from plan (`py_compile`, targeted pytest).
+- [x] Record command outputs and residual risks.
+
+Verification Gates:
+- [x] Signals tab shows the new `적합/비적합 판정 기준` expander above alert-category explanation.
+- [x] `python -m py_compile app.py` passes.
+- [x] `pytest -q tests/test_ui_components.py` passes.
+
+Review (fill after implementation):
+- Commands run:
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m py_compile app.py`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m pytest -q tests/test_ui_components.py`
+- Results:
+- Added a new Signals-tab expander: `적합/비적합 판정 기준`.
+- Description clarifies that fit/non-fit is based on latest macro regime and sector mapping (`macro_fit`) and that action is computed by combining macro fit with momentum.
+- Expander order is now: `적용 필터` caption -> `적합/비적합 판정 기준` -> `알림 카테고리 설명` -> signal table.
+- Residual risks / follow-ups:
+- No behavioral changes expected; this is explanatory UI content only.
