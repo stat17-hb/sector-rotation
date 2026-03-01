@@ -20,6 +20,20 @@ def to_monthly_last(df_daily: pd.DataFrame) -> pd.DataFrame:
     return df_daily.resample("ME").last().dropna(how="all")
 
 
+def compute_adaptive_epsilon(series: pd.Series, factor: float = 0.5) -> float:
+    """Compute epsilon as factor × std of 1-period differences.
+
+    Args:
+        series: Numeric time series.
+        factor: Multiplier applied to std (default 0.5).
+
+    Returns:
+        Adaptive epsilon value. Returns 0.0 if std is NaN or zero.
+    """
+    std = series.diff().std()
+    return float(std * factor) if pd.notna(std) and std > 0 else 0.0
+
+
 def compute_3ma_direction(
     series: pd.Series, epsilon: float = 0.0
 ) -> pd.Series:
@@ -41,3 +55,32 @@ def compute_3ma_direction(
     direction[delta > epsilon] = "Up"
     direction[delta < -epsilon] = "Down"
     return direction
+
+
+def apply_confirmation_filter(regime_series: pd.Series, n: int = 2) -> pd.Series:
+    """Confirm a regime only after n consecutive identical periods.
+
+    Args:
+        regime_series: Series of regime strings (e.g. "Recovery", "Expansion").
+        n: Number of consecutive identical values required for confirmation.
+
+    Returns:
+        pd.Series with confirmed regime values. Returns "Indeterminate" until
+        any regime has persisted for n periods.
+    """
+    confirmed = pd.Series("Indeterminate", index=regime_series.index, dtype=object)
+    run_val: str | None = None
+    run_count = 0
+    last_confirmed: str | None = None
+
+    for idx, val in regime_series.items():
+        if val == run_val:
+            run_count += 1
+        else:
+            run_val = val
+            run_count = 1
+        if run_count >= n:
+            last_confirmed = run_val
+        confirmed[idx] = last_confirmed if last_confirmed is not None else "Indeterminate"
+
+    return confirmed

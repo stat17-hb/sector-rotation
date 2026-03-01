@@ -15,6 +15,12 @@ from typing import Literal
 
 import pandas as pd
 
+from src.data_sources.krx_openapi import (
+    KRXProvider,
+    fetch_index_ohlcv_openapi,
+    get_krx_openapi_key,
+    get_krx_provider,
+)
 from src.data_sources.pykrx_compat import (
     ensure_pykrx_transport_compat,
     resolve_ohlcv_close_column,
@@ -41,6 +47,14 @@ STALE_INDEX_CODE_REPLACEMENTS: dict[str, str] = {
     "1166": "1157",
 }
 INDEX_TICKER_MARKETS: tuple[str, ...] = ("KRX", "KOSPI", "KOSDAQ", "테마")
+
+
+def _resolve_provider_mode() -> KRXProvider:
+    """Resolve effective provider mode for current process."""
+    configured = get_krx_provider()
+    if configured == "AUTO":
+        return "OPENAPI" if get_krx_openapi_key() else "PYKRX"
+    return configured
 
 
 def _is_deterministic_pykrx_failure(exc: Exception) -> bool:
@@ -83,16 +97,30 @@ def _normalize_requested_codes(
 
 @lru_cache(maxsize=1)
 def _get_index_universe() -> frozenset[str]:
-    """Fetch and cache pykrx index ticker universe across markets."""
+    """Fetch and cache pykrx index ticker universe across markets.
+
+    Raises ValueError if the universe is empty or pykrx fails, so that
+    lru_cache does NOT persist the failure (lru_cache only caches return
+    values, not exceptions).
+    """
     ensure_pykrx_transport_compat()
     from pykrx import stock  # type: ignore[import]
 
     universe: set[str] = set()
-    for market in INDEX_TICKER_MARKETS:
-        tickers = stock.get_index_ticker_list(market=market)
-        universe.update(str(code) for code in tickers)
+    try:
+        for market in INDEX_TICKER_MARKETS:
+            tickers = stock.get_index_ticker_list(market=market)
+            universe.update(str(code) for code in tickers)
+    except Exception as exc:
+        # IndexTicker singleton may have an empty df due to KRX server changes.
+        # Reset it now so the next process restart can re-initialise cleanly.
+        from src.data_sources.pykrx_compat import _reset_index_ticker_singleton
+        _reset_index_ticker_singleton()
+        raise ValueError(f"pykrx index ticker list failed: {exc}") from exc
 
     if not universe:
+        from src.data_sources.pykrx_compat import _reset_index_ticker_singleton
+        _reset_index_ticker_singleton()
         raise ValueError("pykrx returned empty index ticker universe")
 
     return frozenset(universe)
@@ -121,6 +149,11 @@ def _filter_supported_codes(index_codes: list[str]) -> tuple[list[str], list[str
     return (supported, skipped)
 
 
+def _filter_supported_codes_openapi(index_codes: list[str]) -> tuple[list[str], list[str]]:
+    """OpenAPI path currently does not expose a cached universe lookup."""
+    return (list(index_codes), [])
+
+
 def _fetch_chunk(index_code: str, start: str, end: str) -> pd.DataFrame:
     """Fetch a single chunk from pykrx with retry/backoff."""
     ensure_pykrx_transport_compat()
@@ -129,7 +162,7 @@ def _fetch_chunk(index_code: str, start: str, end: str) -> pd.DataFrame:
     last_exc: Exception | None = None
     for attempt in range(MAX_RETRIES):
         try:
-            df = stock.get_index_ohlcv(start, end, index_code)
+            df = stock.get_index_ohlcv(start, end, index_code, name_display=False)
             if df is None:
                 raise ValueError(f"pykrx returned None for {index_code}")
             return df
@@ -166,7 +199,7 @@ def fetch_index_ohlcv(
     end: str,
     chunk_years: int = 2,
 ) -> pd.DataFrame:
-    """Fetch index OHLCV from pykrx in ??-year chunks (pykrx issue #167).
+    """Fetch index OHLCV from pykrx in 2-year chunks.
 
     Args:
         index_code: KRX index code (e.g. "1001" for KOSPI).
@@ -214,6 +247,7 @@ def fetch_index_ohlcv(
     return combined
 
 
+
 def _make_sample_df(index_codes: list[str]) -> pd.DataFrame:
     """Generate synthetic sector price data for SAMPLE mode."""
     import numpy as np
@@ -249,6 +283,35 @@ def _make_sample_df(index_codes: list[str]) -> pd.DataFrame:
     )
 
 
+def _load_from_raw_cache(code: str, start: str, end: str) -> pd.DataFrame:
+    """Load the most recent raw parquet for *code* and filter to [start, end].
+
+    Returns an empty DataFrame if no raw cache exists or loading fails.
+    """
+    raw_code_dir = RAW_DIR / code
+    if not raw_code_dir.exists():
+        return pd.DataFrame()
+    parquet_files = sorted(raw_code_dir.glob("*.parquet"))
+    if not parquet_files:
+        return pd.DataFrame()
+    try:
+        df = pd.read_parquet(parquet_files[-1])
+        df.index = pd.DatetimeIndex(df.index)
+        df = df.loc[(df.index >= pd.Timestamp(start)) & (df.index <= pd.Timestamp(end))]
+        return df
+    except Exception as exc:
+        logger.warning("Raw cache load failed for %s: %s", code, exc)
+        return pd.DataFrame()
+
+
+def _save_raw_cache(code: str, frame: pd.DataFrame, end: str) -> None:
+    """Persist raw frame to per-code parquet cache."""
+    raw_path = RAW_DIR / code
+    raw_path.mkdir(parents=True, exist_ok=True)
+    raw_file = raw_path / f"{end}.parquet"
+    frame.to_parquet(raw_file)
+
+
 def load_sector_prices(
     index_codes: list[str],
     start: str,
@@ -266,12 +329,17 @@ def load_sector_prices(
         DataFrame schema: DatetimeIndex, columns [index_code, index_name, close].
     """
     curated_path = CURATED_DIR / "sector_prices.parquet"
+    provider_mode = _resolve_provider_mode()
     normalized_codes, replacements = _normalize_requested_codes(index_codes)
     if replacements:
         replacement_summary = ", ".join(f"{src}->{dst}" for src, dst in replacements)
         logger.warning("Applied KRX index code replacements: %s", replacement_summary)
 
-    live_codes, skipped_codes = _filter_supported_codes(normalized_codes)
+    if provider_mode == "PYKRX":
+        live_codes, skipped_codes = _filter_supported_codes(normalized_codes)
+    else:
+        live_codes, skipped_codes = _filter_supported_codes_openapi(normalized_codes)
+
     if skipped_codes:
         skipped_summary = ", ".join(skipped_codes)
         logger.warning(
@@ -282,24 +350,41 @@ def load_sector_prices(
     # Try LIVE fetch (partial-success tolerant)
     frames: list[pd.DataFrame] = []
     failures: list[tuple[str, str]] = []
-    for code in live_codes:
-        try:
-            df = fetch_index_ohlcv(code, start, end)
-            if df.empty:
-                failures.append((code, "empty response"))
-                logger.warning("Empty response for index %s", code)
+    if provider_mode == "OPENAPI" and not get_krx_openapi_key():
+        logger.warning(
+            "KRX provider is OPENAPI but KRX_OPENAPI_KEY is missing; falling back to cache."
+        )
+        failures = [(code, "KRX_OPENAPI_KEY not configured") for code in live_codes]
+    else:
+        for code in live_codes:
+            try:
+                if provider_mode == "OPENAPI":
+                    df = fetch_index_ohlcv_openapi(code, start, end)
+                else:
+                    df = fetch_index_ohlcv(code, start, end)
+
+                if df.empty:
+                    failures.append((code, "empty response"))
+                    logger.warning("Empty response for index %s", code)
+                    continue
+
+                if provider_mode == "OPENAPI":
+                    try:
+                        _save_raw_cache(code, df, end)
+                    except Exception as cache_exc:
+                        logger.warning("OpenAPI raw cache save failed for %s: %s", code, cache_exc)
+
+                close_col = resolve_ohlcv_close_column(df)
+                tmp = df[[close_col]].copy()
+                tmp.columns = pd.Index(["close"])
+                tmp["index_code"] = code
+                tmp["index_name"] = code
+                tmp["close"] = tmp["close"].astype(float)
+                frames.append(tmp[["index_code", "index_name", "close"]])
+            except Exception as exc:
+                failures.append((code, str(exc)))
+                logger.warning("Live fetch failed for index %s (%s): %s", code, provider_mode, exc)
                 continue
-            close_col = resolve_ohlcv_close_column(df)
-            tmp = df[[close_col]].copy()
-            tmp.columns = pd.Index(["close"])
-            tmp["index_code"] = code
-            tmp["index_name"] = code
-            tmp["close"] = tmp["close"].astype(float)
-            frames.append(tmp[["index_code", "index_name", "close"]])
-        except Exception as exc:
-            failures.append((code, str(exc)))
-            logger.warning("Live fetch failed for index %s: %s", code, exc)
-            continue
 
     try:
         if frames:
@@ -322,10 +407,56 @@ def load_sector_prices(
             return ("LIVE", result)
 
     except Exception as exc:
-        logger.error("Live fetch aggregation failed: %s", exc)
+        logger.warning("Live fetch aggregation failed: %s", exc)
 
     if not frames and failures:
-        logger.error("Live fetch failed for all requested codes: %s", failures)
+        if provider_mode == "OPENAPI":
+            logger.warning(
+                "OPENAPI live fetch failed for all requested codes: %s"
+                " (falling back to cache)",
+                failures,
+            )
+        else:
+            logger.warning(
+                "PYKRX live fetch failed for all requested codes: %s"
+                " (KRX may require authentication — consider OPENAPI provider; falling back to cache)",
+                failures,
+            )
+
+    # ── RAW CACHE pass (if live produced nothing) ─────────────────────────────
+    if not frames and failures:
+        raw_frames: list[pd.DataFrame] = []
+        for code, _reason in failures:
+            raw_df = _load_from_raw_cache(code, start, end)
+            if raw_df.empty:
+                continue
+            try:
+                close_col = resolve_ohlcv_close_column(raw_df)
+                tmp = raw_df[[close_col]].copy()
+                tmp.columns = pd.Index(["close"])
+                tmp["index_code"] = code
+                tmp["index_name"] = code
+                tmp["close"] = tmp["close"].astype(float)
+                raw_frames.append(tmp[["index_code", "index_name", "close"]])
+            except Exception as exc:
+                logger.warning("Raw cache column resolution failed for %s: %s", code, exc)
+
+        if raw_frames:
+            try:
+                result = pd.concat(raw_frames)
+                result.index = pd.DatetimeIndex(result.index)
+                CURATED_DIR.mkdir(parents=True, exist_ok=True)
+                from src.contracts.validators import normalize_then_validate
+                result = normalize_then_validate(result, "sector_prices")
+                result.to_parquet(curated_path)
+                logger.info(
+                    "Loaded %d codes from raw cache (%s unavailable)",
+                    len(raw_frames),
+                    provider_mode,
+                )
+                return ("CACHED", result)
+            except Exception as exc:
+                logger.error("Raw cache aggregation failed: %s", exc)
 
     # Try CACHED
     if curated_path.exists():
@@ -341,4 +472,3 @@ def load_sector_prices(
     logger.warning("Using SAMPLE data for sector prices")
     sample = _make_sample_df(normalized_codes)
     return ("SAMPLE", sample)
-

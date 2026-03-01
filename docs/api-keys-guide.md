@@ -163,3 +163,27 @@ If `itmId` is set directly to a member code (for example `T10`) and `objL1` is l
 - Disabled series are skipped during live fetch.
 - This allows non-critical series (for example `export_growth`) to be optional.
 - Regime computation continues as long as required series (`cpi_yoy`, `leading_index`) are available.
+
+---
+
+## 13. KRX OpenAPI Key and Provider
+
+KRX price loading now supports provider switching.
+
+Add to `.streamlit/secrets.toml` (or environment variables):
+
+```toml
+KRX_OPENAPI_KEY = "your_krx_openapi_key_here"
+KRX_PROVIDER = "AUTO" # AUTO | OPENAPI | PYKRX
+```
+
+Runtime behavior:
+
+- `AUTO` with key -> `OPENAPI` path first
+- `AUTO` without key -> `PYKRX` path
+- `OPENAPI` without key -> explicit warning (`KRX_OPENAPI_KEY not configured`) and cache fallback
+
+When key/provider changes, market-price cache is invalidated by key fingerprint token.
+
+OpenAPI reference:
+- https://openapi.krx.co.kr/contents/OPN/01/0104/01040100/OPN01040100.jsp

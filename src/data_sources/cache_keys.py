@@ -33,3 +33,19 @@ def build_macro_cache_token(
     }
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
+
+
+def build_price_cache_token(
+    *,
+    krx_provider: str,
+    krx_openapi_key: str,
+    secrets_mtime_ns: int,
+) -> str:
+    """Build deterministic cache token for KRX price loader invalidation."""
+    payload = {
+        "krx_provider": str(krx_provider or "").strip().upper() or "AUTO",
+        "krx_openapi_fp": _fingerprint(krx_openapi_key),
+        "secrets_mtime_ns": int(secrets_mtime_ns),
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]

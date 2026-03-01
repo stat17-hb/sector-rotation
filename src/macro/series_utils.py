@@ -55,7 +55,9 @@ def build_enabled_kosis_config(raw_cfg: Mapping | None) -> dict[str, dict]:
 def _extract_kosis_series(macro_df: pd.DataFrame, cfg: Mapping | None) -> pd.Series:
     if not _is_enabled(cfg):
         return pd.Series(dtype=float)
-    expected = f"{cfg['org_id']}/{cfg['tbl_id']}/{cfg['item_id']}"
+    _obj = cfg.get("obj_params") or {}
+    _l1 = _obj.get("objL1") if isinstance(_obj, dict) else None
+    expected = f"{cfg['org_id']}/{cfg['tbl_id']}/{cfg['item_id']}" + (f"/{_l1}" if _l1 else "")
     mask = macro_df["series_id"].astype(str) == expected
     if not mask.any():
         return pd.Series(dtype=float)

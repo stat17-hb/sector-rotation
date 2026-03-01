@@ -36,8 +36,17 @@ kosis:
     tbl_id: "DT_1J22003"
     item_id: "T"
     obj_params:
-      objL1: "T10"
+      objL1: "ALL"
     label: "CPI YoY"
+    unit: "%"
+  cpi_mom:
+    enabled: true
+    org_id: "101"
+    tbl_id: "DT_1J22003"
+    item_id: "T"
+    obj_params:
+      objL1: "ALL"
+    label: "CPI MoM"
     unit: "%"
   export_growth:
     enabled: false

@@ -238,10 +238,12 @@ def fetch_kosis_series(
                 continue
 
             period = pd.Period(time_str[:6], freq="M")
+            _l1 = (obj_params or {}).get("objL1") if isinstance(obj_params, dict) else None
+            _sid = f"{org_id}/{tbl_id}/{item_id}" + (f"/{_l1}" if _l1 else "")
             rows.append(
                 {
                     "period": period,
-                    "series_id": f"{org_id}/{tbl_id}/{item_id}",
+                    "series_id": _sid,
                     "value": value,
                     "source": "KOSIS",
                     "fetched_at": now,

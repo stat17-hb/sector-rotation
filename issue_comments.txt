@@ -1,0 +1,189 @@
+--- steel-lee ---
+17시 정도부터 안되네요. 
+
+--- seohyunjun ---
+```
+
+FAILED tests/integration/test_etf_api.py::TestEtfTickerList::test_ticker_list - KeyError: '시장'
+FAILED tests/integration/test_etf_api.py::TestEtfTickerList::test_ticker_list_with_a_businessday - KeyError: '시장'
+FAILED tests/integration/test_etf_api.py::TestEtfTickerList::test_ticker_list_with_a_holiday - KeyError: '시장'
+FAILED tests/integration/test_etf_api.py::TestEtnTickerList::test_ticker_list - KeyError: '시장'
+FAILED tests/integration/test_etf_api.py::TestEtnTickerList::test_ticker_list_with_a_businessday - KeyError: '시장'
+FAILED tests/integration/test_etf_api.py::TestEtnTickerList::test_ticker_list_with_a_holiday - KeyError: '시장'
+FAILED tests/integration/test_etf_api.py::TestElwTickerList::test_ticker_list - KeyError: '시장'
+FAILED tests/integration/test_etf_api.py::TestElwTickerList::test_ticker_list_with_a_businessday - KeyError: '시장'
+FAILED tests/integration/test_etf_api.py::TestElwTickerList::test_ticker_list_with_a_holiday - KeyError: '시장'
+FAILED tests/integration/test_etf_api.py::TestEtfOhlcvByDate::test_with_business_day - IndexError: single positional indexer is out-of-bounds
+FAILED tests/integration/test_etf_api.py::TestEtfOhlcvByDate::test_with_holiday_0 - IndexError: single positional indexer is out-of-bounds
+FAILED tests/integration/test_etf_api.py::TestEtfOhlcvByDate::test_with_holiday_1 - IndexError: single positional indexer is out-of-bounds
+FAILED tests/integration/test_etf_api.py::TestEtfOhlcvByDate::test_with_freq - IndexError: single positional indexer is out-of-bounds
+FAILED tests/integration/test_etf_api.py::TestEtfPdf::test_with_business_day - IndexError: single positional indexer is out-of-bounds
+FAILED tests/integration/test_etf_api.py::TestEtfPdf::test_with_negative_value - IndexError: index 1 is out of bounds for axis 0 with size 0
+FAILED tests/integration/test_etf_api.py::TestEtfTradingvolumeValue::test_indivisual_investor_in_businessday - KeyError: 'isin'
+FAILED tests/integration/test_etf_api.py::TestEtfTradingvolumeValue::test_indivisual_volume_with_businessday - IndexError: single positional indexer is out-of-bounds
+============================= 17 failed, 109 passed, 3 warnings in 39.53s ==============================
+```
+
+pytest 결과 확인해보니 일부 서비스에서 반환 받는 컬럼이 누락되거나 문제가 있는거같습니다. 확인 후 수정하겠습니다. 
+
+제보 감사합니다.
+
+--- stat17-hb ---
+저도 유사한 문제가 생겨서 확인하다보니, 로그인 안하면 API 접근을 차단하도록 KRX 에서 정책을 변경한게 아닌지 싶은데..
+
+--- seohyunjun ---
+## 인증 / 비인증 테스트
+
+### ✅ 기준
+- ✅ PASSED : 테스트 성공
+- ❌ FAILED : 테스트 실패
+- 🔴 : 쿠키 인증 필요 (결과 차이 발생)
+
+---
+
+### 1️⃣ Bond API
+
+| 테스트 함수 | 쿠키 있음 | 쿠키 없음 | 비고 |
+|---|---|---|---|
+| TestBondOtcTreasuryYiledByTicker::test_holiday | ✅ | ✅ | 동일 |
+| TestBondOtcTreasuryYiledByTicker::test_business_day | ✅ | ✅ | 동일 |
+| TestBondOtcTreasuryYiledByDate::test_business_day | ✅ | ✅ | 동일 |
+
+---
+
+### 2️⃣ ETF / ETN / ELW (쿠키 영향 있음)
+
+| 테스트 함수 | 쿠키 있음 | 쿠키 없음 | 비고 |
+|---|---|---|---|
+| TestEtfTickerList::test_ticker_list | ✅ | ❌ | 🔴 쿠키 필요 |
+| TestEtfTickerList::test_ticker_list_with_a_businessday | ✅ | ❌ | 🔴 쿠키 필요 |
+| TestEtfTickerList::test_ticker_list_with_a_holiday | ✅ | ❌ | 🔴 쿠키 필요 |
+| TestEtnTickerList::test_ticker_list | ✅ | ❌ | 🔴 쿠키 필요 |
+| TestEtnTickerList::test_ticker_list_with_a_businessday | ✅ | ❌ | 🔴 쿠키 필요 |
+| TestEtnTickerList::test_ticker_list_with_a_holiday | ✅ | ❌ | 🔴 쿠키 필요 |
+| TestElwTickerList::test_ticker_list | ✅ | ❌ | 🔴 쿠키 필요 |
+| TestElwTickerList::test_ticker_list_with_a_businessday | ✅ | ❌ | 🔴 쿠키 필요 |
+| TestElwTickerList::test_ticker_list_with_a_holiday | ✅ | ❌ | 🔴 쿠키 필요 |
+
+---
+
+### 3️⃣ ETF OHLCV
+
+| 테스트 함수 | 쿠키 있음 | 쿠키 없음 | 비고 |
+|---|---|---|---|
+| TestEtfOhlcvByDate::test_with_business_day | ✅ | ❌ | 🔴 쿠키 필요 |
+| TestEtfOhlcvByDate::test_with_holiday_0 | ✅ | ❌ | 🔴 쿠키 필요 |
+| TestEtfOhlcvByDate::test_with_holiday_1 | ✅ | ❌ | 🔴 쿠키 필요 |
+| TestEtfOhlcvByDate::test_with_freq | ✅ | ❌ | 🔴 쿠키 필요 |
+| TestEtfOhlcvByTicker::test_with_business_day | ✅ | ✅ | 동일 |
+| TestEtfOhlcvByTicker::test_with_holiday | ✅ | ✅ | 동일 |
+
+---
+
+### 4️⃣ ETF 기타 API
+
+| 테스트 함수 | 쿠키 있음 | 쿠키 없음 | 비고 |
+|---|---|---|---|
+| TestEtfPriceChange::* | ✅ | ✅ | 동일 |
+| TestEtfPdf::test_with_business_day | ✅ | ❌ | 🔴 쿠키 필요 |
+| TestEtfPdf::test_with_negative_value | ✅ | ❌ | 🔴 쿠키 필요 |
+| TestEtfTradingvolumeValue::test_investor_in_businessday | ✅ | ✅ | 동일 |
+| TestEtfTradingvolumeValue::test_volume_with_businessday | ✅ | ✅ | 동일 |
+| TestEtfTradingvolumeValue::test_indivisual_investor_in_businessday | ✅ | ❌ | 🔴 쿠키 필요 |
+| TestEtfTradingvolumeValue::test_indivisual_volume_with_businessday | ✅ | ❌ | 🔴 쿠키 필요 |
+
+---
+
+### 5️⃣ Index API (쿠키 영향 없음)
+
+| 테스트 그룹 | 쿠키 있음 | 쿠키 없음 |
+|---|---|---|
+| TestIndexTickerList::* | ✅ | ✅ |
+| TestIndexPortfolioDepositFile::* | ✅ | ✅ |
+| TestIndexOhlcvByDate::* | ✅ | ✅ |
+| TestIndexListingDate::* | ✅ | ✅ |
+| TestIndexPriceChangeByTicker::* | ✅ | ✅ |
+
+---
+
+### 6️⃣ Stock Market API (쿠키 영향 없음)
+
+| 테스트 그룹 | 쿠키 있음 | 쿠키 없음 |
+|---|---|---|
+| TestStockBusinessDaysTest::* | ✅ | ✅ |
+| TestStockOhlcvByDateTest::* | ✅ | ✅ |
+| TestStockOhlcvByTickerTest::* | ✅ | ✅ |
+| TestStockPriceChangeByTicker::* | ✅ | ✅ |
+| TestStockFundamentalByDate::* | ✅ | ✅ |
+| TestStockFundamentalByTicker::* | ✅ | ✅ |
+| TestStockMarketCapByTicker::* | ✅ | ✅ |
+| TestStockNetPurchasesOfEquitiesByTickerTest::* | ✅ | ✅ |
+| TestStockTradingVolumeByInvestorTest::* | ✅ | ✅ |
+| TestStockTradingValueByInvestorTest::* | ✅ | ✅ |
+| TestStockTradingValueByDateTest::* | ✅ | ✅ |
+| TestStockTradingVolumeByDateTest::* | ✅ | ✅ |
+| TestStockExhaustionRatesOfForeignInvestment* | ✅ | ✅ |
+| TestMarketOhlcvByMarket::* | ✅ | ✅ |
+
+---
+
+### 7️⃣ Short Selling API (쿠키 영향 없음)
+
+| 테스트 그룹 | 쿠키 있음 | 쿠키 없음 |
+|---|---|---|
+| TestShortStatusByDate::* | ✅ | ✅ |
+| TestShortVolumeByTicker::* | ✅ | ✅ |
+| TestShortValueByTicker::* | ✅ | ✅ |
+| TestShortVolumeByDate::* | ✅ | ✅ |
+| TestShortValueByDate::* | ✅ | ✅ |
+| TestShortInvestorVolumeByDate::* | ✅ | ✅ |
+| TestShortInvestorValueByDate::* | ✅ | ✅ |
+| TestShortVolumeTop50::* | ✅ | ✅ |
+| TestShortBalanceTop50::* | ✅ | ✅ |
+| TestShortBalanceByTicker::* | ✅ | ✅ |
+| TestShortBalanceByDate::* | ✅ | ✅ |
+
+---
+
+## 📈 최종 요약
+
+| 구분 | 결과 |
+|---|---|
+| 전체 테스트 | 126 |
+| 쿠키 필요 영역 | ETF / ETN / ELW 계열 |
+| 쿠키 불필요 영역 | Bond / Index / Stock / Short |
+| 실패 원인 | 세션 기반 KRX endpoint 접근 제한 |
+---
+
+몇 몇 API에서 인증이 필수로 바뀌었습니다. 
+
+--- 0x68756d8616e6f69664 ---
+혹시 해결방법이 있을까요?
+
+--- riemannulus ---
+https://data.krx.co.kr/contents/MDC/COMS/client/MDCCOMS001D1.cmd endpoint 이용해서 KRX 로그인하고 KRX 가 사용하는 requests session 설정에 쿠키 집어넣어서 일단 해결했습니다. pykrx 자체에서도 로그인 기능을 지원해주면 좋겠네요. 
+
+--- 0x68756d8616e6f69664 ---
+webio.py를 수정해야 하는건가요? 말씀하신 것은 코드 수정이 필요해 보이는데 어디를 수정해야하는지 잘 모르겠어서요.
+
+--- riemannulus ---
+```
+  import requests
+  from pykrx import stock
+  from pykrx.website.comm import webio
+
+  # 1. 공유 세션 생성 및 pykrx에 주입
+  _session = requests.Session()
+
+  def _session_post_read(self, **params):
+      return _session.post(self.url, headers=self.headers, data=params)
+
+  def _session_get_read(self, **params):
+      return _session.get(self.url, headers=self.headers, params=params)
+
+  webio.Post.read = _session_post_read
+  webio.Get.read = _session_get_read
+```
+
+이런 식으로 webio.Post, webio.Get 에서 사용하는 static session 을 requests 로 교체하면 됩니다. 
+

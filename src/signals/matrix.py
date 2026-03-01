@@ -119,10 +119,13 @@ def build_signal_table(
     from src.contracts.validators import validate_only
     validate_only(sector_prices, "sector_prices")
 
-    # Current regime (last row of macro_result)
+    # Current regime: use confirmed_regime if available, else raw regime
     current_regime = "Indeterminate"
-    if not macro_result.empty and "regime" in macro_result.columns:
-        current_regime = str(macro_result["regime"].iloc[-1])
+    if not macro_result.empty:
+        if "confirmed_regime" in macro_result.columns:
+            current_regime = str(macro_result["confirmed_regime"].iloc[-1])
+        elif "regime" in macro_result.columns:
+            current_regime = str(macro_result["regime"].iloc[-1])
 
     # Regime sectors (the ones that macro_fit=True)
     regime_sector_entries = get_regime_sectors(current_regime, sector_map)

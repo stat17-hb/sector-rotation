@@ -29,6 +29,8 @@ In Railway service variables, add:
 
 - `ECOS_API_KEY` = your ECOS key
 - `KOSIS_API_KEY` = your KOSIS key
+- `KRX_OPENAPI_KEY` = your KRX OpenAPI key (optional but recommended)
+- `KRX_PROVIDER` = `AUTO` (default), `OPENAPI`, or `PYKRX`
 
 Notes:
 - Do not set `PORT` manually. Railway injects it automatically.
@@ -49,5 +51,8 @@ Notes:
 - If macro data stays fallback:
   - Recheck `ECOS_API_KEY`, `KOSIS_API_KEY`.
   - Confirm keys are valid and not rate-limited/revoked.
+- If market prices stay cached/sample under KRX auth enforcement:
+  - Recheck `KRX_OPENAPI_KEY` and `KRX_PROVIDER`.
+  - Confirm your KRX account has approval for the index API service.
 - If build fails due Python version mismatch:
   - Update `runtime.txt` to the exact version you want and redeploy.

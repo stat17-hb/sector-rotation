@@ -1129,3 +1129,89 @@ Review (fill after implementation):
 - Expander order is now: `적용 필터` caption -> `적합/비적합 판정 기준` -> `알림 카테고리 설명` -> signal table.
 - Residual risks / follow-ups:
 - No behavioral changes expected; this is explanatory UI content only.
+
+## 32) 경기국면 판정 타당성 평가 실행 (2026-02-25)
+
+Pre-Implementation Check-in:
+- 2026-02-25: User requested direct implementation of the approved execution spec for regime-validity evaluation.
+- Scope: evaluation-only deliverable (`판정+섹터매핑`, Point-in-time 우선), no production signal-engine logic change.
+
+Execution Checklist:
+- [x] Add this section to `tasks/todo.md` with checklist + review area.
+- [x] Add reproducible evaluator script `scripts/evaluate_regime_validity.py` for lag/epsilon/provisional checks and D1~D4 scoring.
+- [x] Lock data inputs to curated files and evaluation policy (`is_provisional` exclusion, lag 0/1/2 scenarios).
+- [x] Generate final report `docs/regime-validity-2026-02-25.md` including:
+- [x] 결론 3줄
+- [x] 시나리오별 핵심 지표표 (lag 0/1/2)
+- [x] epsilon 민감도 표
+- [x] D1~D4 판정 근거와 단일 최종 판정
+- [x] 리스크 및 개선안(단기/중기)
+- [x] 시나리오별 레짐 순위표
+- [x] Export ranking raw table to `docs/regime-validity-2026-02-25-rankings.csv`.
+- [x] Record verification commands and staff-engineer acceptance checklist.
+
+Verification Gates:
+- [x] `python -m py_compile scripts/evaluate_regime_validity.py` passes.
+- [x] `PYTHONIOENCODING=utf-8 python scripts/evaluate_regime_validity.py --asof 2026-02-25` succeeds.
+- [x] Final decision is emitted and consistent with report body (`부분 타당`, 2/4).
+- [x] Report contains required sections and reproducibility command.
+
+Review (fill after implementation):
+- Commands run:
+- `python -m py_compile scripts/evaluate_regime_validity.py`
+- `PYTHONIOENCODING=utf-8 python scripts/evaluate_regime_validity.py --asof 2026-02-25`
+- Artifacts generated:
+- `docs/regime-validity-2026-02-25.md`
+- `docs/regime-validity-2026-02-25-rankings.csv`
+- `scripts/evaluate_regime_validity.py`
+- Key results:
+- Scenario fit rates: lag0 `5/8 (62.5%)`, lag1 `2/8 (25.0%)`, lag2 `5/8 (62.5%)`.
+- Epsilon sensitivity: latest regime stable as `Expansion` for `epsilon 0.0~0.1`, but Indeterminate share rises to `53.4%` at `epsilon=0.1`.
+- Decision axes: `D1=0`, `D2=0`, `D3=1`, `D4=1` → total `2/4`.
+- Final single verdict: **부분 타당**.
+- Residual risks / follow-ups:
+- Contraction regime remains unobservable in current sample (`0개월`), so D1 fails structurally.
+- PIT lag1 performance gap vs nowcast is large; use lagged view as default in operations and treat nowcast as reference-only.
+
+Staff Engineer Approval Checklist:
+- [x] Reproducibility: single command regenerates report and ranking CSV.
+- [x] Leakage control: Point-in-time lag scenarios are explicitly separated from nowcast comparison.
+- [x] Robustness: lag sensitivity + epsilon sensitivity + provisional policy checks included.
+- [x] Limitations: sample deficiency (Contraction 0개월) and sensitivity risks are explicitly documented.
+
+## 33) KRX OpenAPI Provider Migration (2026-03-01)
+
+Pre-Implementation Check-in:
+- 2026-03-01: implement KRX auth/provider migration plan (`OPENAPI` + `AUTO/PYKRX` fallback) with local+Railway docs and regression tests.
+
+Execution Checklist:
+- [x] Extend secrets/template and deployment docs with `KRX_OPENAPI_KEY`, `KRX_PROVIDER`.
+- [x] Add OpenAPI datasource module with auth-aware error handling and response normalization.
+- [x] Add provider resolution in market loader (`AUTO`/`OPENAPI`/`PYKRX`) while keeping `load_sector_prices(index_codes, start, end)` signature unchanged.
+- [x] Keep fallback order `LIVE -> RAW CACHE -> CURATED CACHE -> SAMPLE` under OpenAPI failures.
+- [x] Add provider-aware runtime warnings in `app.py` including explicit missing-key warning for forced `OPENAPI`.
+- [x] Add KRX price cache token keyed by provider + key fingerprint for cache invalidation on key rotation.
+- [x] Add/extend tests for key precedence, provider parsing, OpenAPI parsing/auth errors, provider selection, and fallback behavior.
+
+Verification Gates:
+- [x] `python -m py_compile src/data_sources/krx_openapi.py src/data_sources/krx_indices.py src/data_sources/cache_keys.py app.py tests/test_krx_openapi.py tests/test_krx_pykrx_compat_paths.py tests/test_integration.py tests/test_cache_keys.py`
+- [x] `python -m pytest -q tests/test_krx_openapi.py tests/test_krx_pykrx_compat_paths.py tests/test_integration.py tests/test_cache_keys.py`
+- [ ] `python -m pytest -q tests` (currently 2 known pre-existing failures in `tests/test_ui_components.py`)
+
+Review (fill after implementation):
+- Commands run:
+- `python -m py_compile src/data_sources/krx_openapi.py src/data_sources/krx_indices.py src/data_sources/cache_keys.py app.py tests/test_krx_openapi.py tests/test_krx_pykrx_compat_paths.py tests/test_integration.py tests/test_cache_keys.py`
+- `python -m pytest -q tests/test_krx_openapi.py tests/test_krx_pykrx_compat_paths.py tests/test_integration.py tests/test_cache_keys.py`
+- `python -m pytest -q tests`
+- `python -m pytest -q` (repo-root broad run)
+- Results:
+- New module `src/data_sources/krx_openapi.py` added with provider parsing, secrets/env key loading, retry policy, auth/permission exceptions, and response normalization.
+- `src/data_sources/krx_indices.py` now resolves provider mode (`AUTO` -> key-aware), supports OpenAPI live path, preserves pykrx path, and keeps fallback chain.
+- `app.py` now computes KRX price cache token (`provider + key fingerprint`) and surfaces provider-aware cache warnings.
+- Docs updated: `.streamlit/secrets.toml.example`, `README.md`, `docs/api-keys-guide.md`, `docs/railway-deploy.md`.
+- Focused test suite passed: `30 passed in 3.19s`.
+- `pytest -q tests` result: `94 passed, 2 failed` (existing known UI mock mismatch in `tests/test_ui_components.py` using `st.plotly_chart(..., width='stretch')` keyword).
+- `pytest -q` (full repo) result: collection error in root exploratory script `test_krx_raw.py` (non-suite script expecting live JSON response).
+- Residual risks / follow-ups:
+- OpenAPI endpoint/field schema can vary by approved service; if account-specific API returns different keys, adjust parser candidates in `krx_openapi.py`.
+- `tests/` suite still has two pre-existing UI mocking failures unrelated to this migration.

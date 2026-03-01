@@ -78,6 +78,51 @@ def _default_settings() -> dict:
 
 
 class TestIntegration:
+    def test_openapi_provider_live_success(self, tmp_path, monkeypatch):
+        """OPENAPI provider returns LIVE and writes curated parquet on success."""
+        import src.data_sources.krx_indices as krx_mod
+
+        curated = tmp_path / "curated"
+        curated.mkdir()
+        monkeypatch.setattr(krx_mod, "CURATED_DIR", curated)
+        monkeypatch.setattr(krx_mod, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(krx_mod, "get_krx_provider", lambda: "OPENAPI")
+        monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "OPENAPI_KEY")
+
+        idx = pd.date_range("2024-01-01", periods=4, freq="B")
+        live_df = pd.DataFrame({"close": [100.0, 101.0, 102.0, 103.0]}, index=idx)
+        monkeypatch.setattr(krx_mod, "fetch_index_ohlcv_openapi", lambda *a, **kw: live_df)
+
+        status, result = krx_mod.load_sector_prices(["1001"], "20240101", "20240131")
+        assert status == "LIVE"
+        assert not result.empty
+        assert (curated / "sector_prices.parquet").exists()
+
+    def test_openapi_auth_failure_falls_back_to_cache(self, tmp_path, monkeypatch):
+        """OPENAPI auth failure returns CACHED when curated cache exists."""
+        import src.data_sources.krx_indices as krx_mod
+        from src.data_sources.krx_openapi import KRXOpenAPIAuthError
+
+        curated = tmp_path / "curated"
+        curated.mkdir()
+        monkeypatch.setattr(krx_mod, "CURATED_DIR", curated)
+        monkeypatch.setattr(krx_mod, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(krx_mod, "get_krx_provider", lambda: "OPENAPI")
+        monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "OPENAPI_KEY")
+
+        cached = _make_sector_prices_df(["1001"], n=5)
+        cached.to_parquet(curated / "sector_prices.parquet")
+
+        def _raise_auth(*args, **kwargs):
+            _ = (args, kwargs)
+            raise KRXOpenAPIAuthError("Unauthorized Key")
+
+        monkeypatch.setattr(krx_mod, "fetch_index_ohlcv_openapi", _raise_auth)
+
+        status, result = krx_mod.load_sector_prices(["1001"], "20240101", "20240131")
+        assert status == "CACHED"
+        assert not result.empty
+
     def test_api_failure_falls_back_to_cache(self, tmp_path, monkeypatch):
         """When pykrx raises, load_sector_prices returns CACHED from disk."""
         import src.data_sources.krx_indices as krx_mod
@@ -85,6 +130,8 @@ class TestIntegration:
         curated = tmp_path / "curated"
         curated.mkdir()
         monkeypatch.setattr(krx_mod, "CURATED_DIR", curated)
+        monkeypatch.setattr(krx_mod, "get_krx_provider", lambda: "PYKRX")
+        monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "")
 
         # Pre-seed a valid parquet in the tmp curated dir
         df = _make_sector_prices_df(["5044"])
@@ -109,6 +156,8 @@ class TestIntegration:
         curated.mkdir()
         monkeypatch.setattr(krx_mod, "CURATED_DIR", curated)
         monkeypatch.setattr(krx_mod, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(krx_mod, "get_krx_provider", lambda: "PYKRX")
+        monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "")
 
         # Mock pykrx to raise
         monkeypatch.setattr(
@@ -129,6 +178,8 @@ class TestIntegration:
         curated.mkdir()
         monkeypatch.setattr(krx_mod, "CURATED_DIR", curated)
         monkeypatch.setattr(krx_mod, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(krx_mod, "get_krx_provider", lambda: "PYKRX")
+        monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "")
         monkeypatch.setattr(krx_mod, "_get_index_universe", lambda: frozenset({"5044", "5357"}))
 
         idx = pd.date_range("2024-01-01", periods=3, freq="B")

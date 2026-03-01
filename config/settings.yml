@@ -10,3 +10,8 @@ fx_shock_pct: 3.0
 benchmark_code: "1001"
 price_years: 3
 cache_ttl: 21600  # 6 hours in seconds
+# Regime detection improvements
+use_adaptive_epsilon: true   # epsilon=0일 때 지표별 std 기반 자동 계산
+epsilon_factor: 0.5          # adaptive epsilon = factor × std(diff)
+confirmation_periods: 2      # N개월 연속 동일 국면이어야 확정
+yield_curve_spread_threshold: 0.0  # 국고채3년 - 기준금리 스프레드 < 이 값이면 Inverted

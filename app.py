@@ -1,10 +1,10 @@
 """
 Korea Sector Rotation Dashboard
-Streamlit SPA — app.py
+Streamlit SPA ??app.py
 
 Architecture:
 - Three named @st.cache_data functions for sector prices, macro, and signals (R8).
-- Each button clears only its own cache (R8 — no cross-cache pollution).
+- Each button clears only its own cache (R8 ??no cross-cache pollution).
 - SAMPLE mode shows full-width st.error banner + disables recompute (R9).
 """
 from __future__ import annotations
@@ -24,15 +24,15 @@ import yaml
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
-# ── Page config (must be first Streamlit call) ──────────────────────────────
+# ?? Page config (must be first Streamlit call) ??????????????????????????????
 st.set_page_config(
     page_title="Korea Sector Rotation",
-    page_icon="📊",
+    page_icon="?뱤",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-# ── Local imports ────────────────────────────────────────────────────────────
+# ?? Local imports ????????????????????????????????????????????????????????????
 from src.ui.styles import get_table_style_tokens, inject_css
 from src.ui.data_status import is_sample_mode, get_button_states
 from src.macro.series_utils import (
@@ -42,7 +42,7 @@ from src.macro.series_utils import (
     to_plotly_time_index,
 )
 
-# ── Config loading ────────────────────────────────────────────────────────────
+# ?? Config loading ????????????????????????????????????????????????????????????
 
 
 @st.cache_data(ttl=3600)
@@ -60,7 +60,7 @@ def _load_config() -> tuple[dict, dict, dict]:
 settings, sector_map, macro_series_cfg = _load_config()
 CACHE_TTL = int(settings.get("cache_ttl", 21600))
 
-# ── Cache key helper (R8) ─────────────────────────────────────────────────────
+# ?? Cache key helper (R8) ?????????????????????????????????????????????????????
 
 
 def _parquet_key(path: str) -> tuple:
@@ -124,6 +124,32 @@ def _macro_cache_token() -> str:
     )
 
 
+def _krx_provider_configured() -> str:
+    """Return configured KRX provider value (AUTO/OPENAPI/PYKRX)."""
+    from src.data_sources.krx_openapi import get_krx_provider
+
+    return get_krx_provider(_load_api_key("KRX_PROVIDER"))
+
+
+def _krx_provider_effective() -> str:
+    """Return runtime-effective provider after AUTO resolution."""
+    configured = _krx_provider_configured()
+    if configured == "AUTO":
+        return "OPENAPI" if _load_api_key("KRX_OPENAPI_KEY") else "PYKRX"
+    return configured
+
+
+def _price_cache_token() -> str:
+    """Build cache token for market price loader (KRX provider + key fingerprint)."""
+    from src.data_sources.cache_keys import build_price_cache_token
+
+    return build_price_cache_token(
+        krx_provider=_krx_provider_configured(),
+        krx_openapi_key=_load_api_key("KRX_OPENAPI_KEY"),
+        secrets_mtime_ns=_secrets_mtime_ns(),
+    )
+
+
 @st.cache_data(ttl=600)
 def _cached_api_preflight(timeout_sec: int = 3) -> dict:
     """Cached API endpoint reachability check (10 min TTL)."""
@@ -132,12 +158,18 @@ def _cached_api_preflight(timeout_sec: int = 3) -> dict:
     return run_api_preflight(timeout_sec=timeout_sec)
 
 
-# ── Named cache functions (R8) ────────────────────────────────────────────────
+# ?? Named cache functions (R8) ????????????????????????????????????????????????
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _cached_sector_prices(asof_date_str: str, benchmark_code: str, price_years: int):
-    """Fetch or load sector prices. Keyed by asof_date + benchmark + price_years."""
+def _cached_sector_prices(
+    asof_date_str: str,
+    benchmark_code: str,
+    price_years: int,
+    price_cache_token: str,
+):
+    """Fetch or load sector prices. Includes KRX provider/key cache token."""
+    _ = price_cache_token  # explicit cache key input for provider/key invalidation
     from src.data_sources.krx_indices import load_sector_prices
     from src.transforms.calendar import get_last_business_day
 
@@ -202,7 +234,13 @@ def _cached_macro(macro_cache_token: str):
 
 
 @st.cache_data(ttl=CACHE_TTL)
-def _cached_signals(prices_key: tuple, macro_key: tuple, params_hash: str, macro_cache_token: str):
+def _cached_signals(
+    prices_key: tuple,
+    macro_key: tuple,
+    params_hash: str,
+    macro_cache_token: str,
+    price_cache_token: str,
+):
     """Compute signals. Keyed by parquet file metadata + params hash."""
     from src.macro.regime import compute_regime_history
     from src.signals.matrix import build_signal_table
@@ -212,6 +250,7 @@ def _cached_signals(prices_key: tuple, macro_key: tuple, params_hash: str, macro
         st.session_state.get("asof_date_str", date.today().strftime("%Y%m%d")),
         str(settings.get("benchmark_code", "1001")),
         price_years,
+        price_cache_token,
     )
     macro_status, macro_df = _cached_macro(macro_cache_token)
 
@@ -231,11 +270,31 @@ def _cached_signals(prices_key: tuple, macro_key: tuple, params_hash: str, macro
             macro_series_cfg=macro_series_cfg,
             alias="leading_index",
         )
+        # CPI MoM (?꾩썡鍮? as primary inflation signal; fall back to YoY
         inflation_series = extract_macro_series(
             macro_df=macro_df,
             macro_series_cfg=macro_series_cfg,
-            alias="cpi_yoy",
+            alias="cpi_mom",
         )
+        if inflation_series.empty:
+            inflation_series = extract_macro_series(
+                macro_df=macro_df,
+                macro_series_cfg=macro_series_cfg,
+                alias="cpi_yoy",
+            )
+
+        # Yield curve spread: KTB 3Y ??base rate (monthly)
+        _bond_s = extract_macro_series(macro_df, macro_series_cfg, "bond_3y")
+        _base_s = extract_macro_series(macro_df, macro_series_cfg, "base_rate")
+        yield_curve_spread = None
+        if not _bond_s.empty and not _base_s.empty:
+            try:
+                _bond_monthly = _bond_s.resample("M").last()
+                _spread = (_bond_monthly - _base_s).dropna()
+                if not _spread.empty:
+                    yield_curve_spread = _spread
+            except Exception as _yc_exc:
+                logger.debug("Yield curve spread computation skipped: %s", _yc_exc)
 
         epsilon = float(st.session_state.get("epsilon", settings.get("epsilon", 0)))
 
@@ -251,6 +310,11 @@ def _cached_signals(prices_key: tuple, macro_key: tuple, params_hash: str, macro
                         aligned["growth"],
                         aligned["inflation"],
                         epsilon=epsilon,
+                        use_adaptive_epsilon=bool(settings.get("use_adaptive_epsilon", True)),
+                        epsilon_factor=float(settings.get("epsilon_factor", 0.5)),
+                        confirmation_periods=int(settings.get("confirmation_periods", 2)),
+                        yield_curve_spread=yield_curve_spread,
+                        yield_curve_threshold=float(settings.get("yield_curve_spread_threshold", 0.0)),
                     )
                     macro_result = to_plotly_time_index(macro_result)
                 except Exception as exc:
@@ -259,7 +323,12 @@ def _cached_signals(prices_key: tuple, macro_key: tuple, params_hash: str, macro
     if macro_result.empty:
         # Fallback: create minimal mock result for display
         macro_result = pd.DataFrame(
-            {"growth_dir": ["Flat"], "inflation_dir": ["Flat"], "regime": ["Indeterminate"]},
+            {
+                "growth_dir": ["Flat"],
+                "inflation_dir": ["Flat"],
+                "regime": ["Indeterminate"],
+                "confirmed_regime": ["Indeterminate"],
+            },
             index=pd.DatetimeIndex([date.today()]),
         )
 
@@ -298,7 +367,7 @@ def _cached_signals(prices_key: tuple, macro_key: tuple, params_hash: str, macro
     return signals, macro_result, price_status, macro_status
 
 
-# ── Session state defaults ─────────────────────────────────────────────────────
+# ?? Session state defaults ?????????????????????????????????????????????????????
 
 if "theme_mode" not in st.session_state:
     st.session_state["theme_mode"] = "dark"
@@ -315,7 +384,7 @@ if "ma_slow" not in st.session_state:
 if "price_years" not in st.session_state:
     st.session_state["price_years"] = int(settings.get("price_years", 3))
 if "filter_action_global" not in st.session_state:
-    st.session_state["filter_action_global"] = "전체"
+    st.session_state["filter_action_global"] = "?꾩껜"
 if "filter_regime_only_global" not in st.session_state:
     st.session_state["filter_regime_only_global"] = False
 
@@ -326,11 +395,15 @@ if theme_mode not in {"dark", "light"}:
 
 inject_css(theme_mode)
 
-# ── Sidebar ───────────────────────────────────────────────────────────────────
+# ?? Sidebar ???????????????????????????????????????????????????????????????????
 
 prices_parquet = "data/curated/sector_prices.parquet"
 macro_parquet = "data/curated/macro_monthly.parquet"
 macro_cache_token = _macro_cache_token()
+price_cache_token = _price_cache_token()
+krx_provider_configured = _krx_provider_configured()
+krx_provider_effective = _krx_provider_effective()
+krx_openapi_key_present = bool(_load_api_key("KRX_OPENAPI_KEY"))
 
 probe_price_status = "CACHED" if Path(prices_parquet).exists() else "SAMPLE"
 probe_macro_status = "CACHED" if Path(macro_parquet).exists() else "SAMPLE"
@@ -350,11 +423,11 @@ with st.sidebar:
     st.title("Korea Sector Rotation")
     st.caption("UI / Theme Control Panel")
 
-    st.subheader("빠른 상태")
+    st.subheader("鍮좊Ⅸ ?곹깭")
     use_light_theme = st.toggle(
-        "라이트 테마",
+        "?쇱씠???뚮쭏",
         value=theme_mode == "light",
-        help="해제 시 다크 테마가 적용됩니다.",
+        help="?댁젣 ???ㅽ겕 ?뚮쭏媛 ?곸슜?⑸땲??",
     )
     selected_theme_mode = "light" if use_light_theme else "dark"
     if selected_theme_mode != theme_mode:
@@ -370,66 +443,66 @@ with st.sidebar:
 
     quick_col1, quick_col2 = st.columns(2)
     with quick_col1:
-        st.metric("가격 상태", probe_price_status)
+        st.metric("媛寃??곹깭", probe_price_status)
     with quick_col2:
-        st.metric("매크로 상태", probe_macro_status)
+        st.metric("留ㅽ겕濡??곹깭", probe_macro_status)
 
     st.divider()
-    st.subheader("글로벌 필터")
+    st.subheader("湲濡쒕쾶 ?꾪꽣")
     st.selectbox(
-        "액션 필터",
-        options=["전체", "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
+        "?≪뀡 ?꾪꽣",
+        options=["?꾩껜", "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
         key="filter_action_global",
     )
     st.checkbox(
-        "현재 국면 섹터만 보기",
+        "?꾩옱 援?㈃ ?뱁꽣留?蹂닿린",
         key="filter_regime_only_global",
     )
 
     st.divider()
-    with st.expander("모델 파라미터", expanded=False):
+    with st.expander("紐⑤뜽 ?뚮씪誘명꽣", expanded=False):
         with st.form("model_params_form"):
             slider_epsilon = st.slider(
-                "Epsilon (방향 민감도)",
+                "Epsilon (諛⑺뼢 誘쇨컧??",
                 min_value=0.0,
                 max_value=1.0,
                 value=float(st.session_state["epsilon"]),
                 step=0.05,
-                help="3MA 방향 판별 최소 변화량. 0 = 모든 변화 반영",
+                help="3MA 諛⑺뼢 ?먮퀎 理쒖냼 蹂?붾웾. 0 = 紐⑤뱺 蹂??諛섏쁺",
             )
             slider_rs_ma = st.slider(
-                "RS MA 기간",
+                "RS MA 湲곌컙",
                 min_value=5,
                 max_value=60,
                 value=int(st.session_state["rs_ma_period"]),
                 step=1,
             )
             slider_ma_fast = st.slider(
-                "빠른 MA",
+                "鍮좊Ⅸ MA",
                 min_value=5,
                 max_value=60,
                 value=int(st.session_state["ma_fast"]),
                 step=1,
             )
             slider_ma_slow = st.slider(
-                "느린 MA",
+                "?먮┛ MA",
                 min_value=20,
                 max_value=120,
                 value=int(st.session_state["ma_slow"]),
                 step=1,
             )
             slider_price_years = st.slider(
-                "데이터 기간 (년)",
+                "?곗씠??湲곌컙 (??",
                 min_value=1,
                 max_value=5,
                 value=int(st.session_state["price_years"]),
                 step=1,
             )
 
-            with st.expander("고급 직접 입력", expanded=False):
-                use_advanced_inputs = st.checkbox("고급 값으로 적용", value=False)
+            with st.expander("怨좉툒 吏곸젒 ?낅젰", expanded=False):
+                use_advanced_inputs = st.checkbox("怨좉툒 媛믪쑝濡??곸슜", value=False)
                 adv_epsilon = st.number_input(
-                    "Epsilon 직접 입력",
+                    "Epsilon 吏곸젒 ?낅젰",
                     min_value=0.0,
                     max_value=1.0,
                     value=float(st.session_state["epsilon"]),
@@ -437,35 +510,35 @@ with st.sidebar:
                     format="%.2f",
                 )
                 adv_rs_ma = st.number_input(
-                    "RS MA 직접 입력",
+                    "RS MA 吏곸젒 ?낅젰",
                     min_value=5,
                     max_value=60,
                     value=int(st.session_state["rs_ma_period"]),
                     step=1,
                 )
                 adv_ma_fast = st.number_input(
-                    "빠른 MA 직접 입력",
+                    "鍮좊Ⅸ MA 吏곸젒 ?낅젰",
                     min_value=5,
                     max_value=60,
                     value=int(st.session_state["ma_fast"]),
                     step=1,
                 )
                 adv_ma_slow = st.number_input(
-                    "느린 MA 직접 입력",
+                    "?먮┛ MA 吏곸젒 ?낅젰",
                     min_value=20,
                     max_value=120,
                     value=int(st.session_state["ma_slow"]),
                     step=1,
                 )
                 adv_price_years = st.number_input(
-                    "데이터 기간 직접 입력",
+                    "?곗씠??湲곌컙 吏곸젒 ?낅젰",
                     min_value=1,
                     max_value=5,
                     value=int(st.session_state["price_years"]),
                     step=1,
                 )
 
-            apply_params = st.form_submit_button("적용", use_container_width=True)
+            apply_params = st.form_submit_button("?곸슜", width='stretch')
 
         if apply_params:
             if use_advanced_inputs:
@@ -483,22 +556,22 @@ with st.sidebar:
             st.rerun()
 
     st.divider()
-    st.subheader("데이터 작업")
+    st.subheader("?곗씠???묒뾽")
     refresh_market = st.button(
-        "시장데이터 갱신",
+        "?쒖옣?곗씠??媛깆떊",
         disabled=not btn_states["refresh_market"],
-        use_container_width=True,
+        width='stretch',
     )
     refresh_macro = st.button(
-        "매크로데이터 갱신",
+        "留ㅽ겕濡쒕뜲?댄꽣 媛깆떊",
         disabled=not btn_states["refresh_macro"],
-        use_container_width=True,
+        width='stretch',
     )
     recompute = st.button(
         "전체 재계산",
         disabled=not btn_states["recompute"],
-        use_container_width=True,
-        help="SAMPLE 데이터에서는 비활성화됩니다." if not btn_states["recompute"] else "",
+        width='stretch',
+        help="SAMPLE ?곗씠?곗뿉?쒕뒗 鍮꾪솢?깊솕?⑸땲??" if not btn_states["recompute"] else "",
     )
 
     st.caption("Korea Sector Rotation Dashboard")
@@ -509,7 +582,7 @@ ma_slow = int(st.session_state.get("ma_slow", settings.get("ma_slow", 60)))
 price_years = int(st.session_state.get("price_years", settings.get("price_years", 3)))
 
 
-# ── Button handlers — each clears only its own cache (R8) ────────────────────
+# ?? Button handlers ??each clears only its own cache (R8) ????????????????????
 
 if refresh_market:
     Path(prices_parquet).unlink(missing_ok=True)
@@ -528,9 +601,9 @@ if recompute:
     st.rerun()
 
 
-# ── Load data via cache functions ─────────────────────────────────────────────
+# ?? Load data via cache functions ?????????????????????????????????????????????
 
-with st.spinner("데이터 로딩 중..."):
+with st.spinner("?곗씠??濡쒕뵫 以?.."):
     try:
         prices_key = _parquet_key(prices_parquet)
         macro_key = _parquet_key(macro_parquet)
@@ -544,7 +617,11 @@ with st.spinner("데이터 로딩 중..."):
         params_hash = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()[:8]
 
         signals, macro_result, price_status, macro_status = _cached_signals(
-            prices_key, macro_key, params_hash, macro_cache_token
+            prices_key,
+            macro_key,
+            params_hash,
+            macro_cache_token,
+            price_cache_token,
         )
 
         data_status = {"price": price_status, "macro": macro_status}
@@ -552,7 +629,12 @@ with st.spinner("데이터 로딩 중..."):
         logger.error("Data load failed: %s", exc)
         signals = []
         macro_result = pd.DataFrame(
-            {"growth_dir": ["Flat"], "inflation_dir": ["Flat"], "regime": ["Indeterminate"]},
+            {
+                "growth_dir": ["Flat"],
+                "inflation_dir": ["Flat"],
+                "regime": ["Indeterminate"],
+                "confirmed_regime": ["Indeterminate"],
+            },
             index=pd.DatetimeIndex([date.today()]),
         )
         price_status = "SAMPLE"
@@ -560,7 +642,7 @@ with st.spinner("데이터 로딩 중..."):
         data_status = {"price": price_status, "macro": macro_status}
 
 
-# ── SAMPLE mode warning (R9) ──────────────────────────────────────────────────
+# ?? SAMPLE mode warning (R9) ??????????????????????????????????????????????????
 
 try:
     preflight_status = _cached_api_preflight(timeout_sec=3)
@@ -586,27 +668,72 @@ if preflight_issues:
 else:
     st.caption("API preflight: ECOS/KOSIS/KRX endpoints reachable.")
 
+if krx_provider_configured == "OPENAPI" and not krx_openapi_key_present:
+    st.warning(
+        "KRX_PROVIDER is set to OPENAPI but KRX_OPENAPI_KEY is not configured. "
+        "Market data will fall back to cache/SAMPLE until the key is provided.",
+        icon="⚠️",
+    )
+
 if is_sample_mode(data_status):
     st.error(
-        "⚠️ **SAMPLE 데이터 모드**: 실제 시장 데이터를 불러올 수 없어 합성 데이터를 표시합니다. "
-        "API 키 설정 또는 네트워크를 확인하세요. "
-        "'시장데이터 갱신' 또는 '매크로데이터 갱신' 버튼으로 다시 시도하세요.",
+        "⚠️ **SAMPLE 데이터 모드**: 실제 시장 데이터를 불러오지 못해 합성 데이터를 표시합니다. "
+        "API 설정 또는 네트워크 상태를 확인한 뒤 새로고침을 시도하세요.",
+        icon="⚠️",
+    )
+elif price_status == "CACHED" or macro_status == "CACHED":
+    _cache_parts = []
+    if price_status == "CACHED":
+        _p = Path(prices_parquet)
+        if _p.exists():
+            import datetime as _dt
+
+            _mtime = _dt.datetime.fromtimestamp(_p.stat().st_mtime).strftime("%Y-%m-%d")
+            _cache_parts.append(f"시장데이터({_mtime})")
+        else:
+            _cache_parts.append("시장데이터")
+    if macro_status == "CACHED":
+        _cache_parts.append("매크로데이터")
+
+    provider_note = ""
+    if price_status == "CACHED":
+        if krx_provider_effective == "OPENAPI":
+            provider_note = (
+                "KRX OpenAPI live fetch failed (or key permission is incomplete). "
+                "Check KRX_OPENAPI_KEY and service approval on openapi.krx.co.kr."
+            )
+        else:
+            provider_note = (
+                "pykrx path may require authenticated KRX sessions (pykrx#276). "
+                "Set KRX_PROVIDER=OPENAPI with KRX_OPENAPI_KEY for a more stable live path."
+            )
+
+    st.warning(
+        f"캐시 데이터를 사용 중: {', '.join(_cache_parts)}. {provider_note} "
+        "Use refresh buttons to retry or continue with cache.",
         icon="⚠️",
     )
 
 
-# ── Current regime ─────────────────────────────────────────────────────────────
-
 current_regime = "Indeterminate"
-if not macro_result.empty and "regime" in macro_result.columns:
-    current_regime = str(macro_result["regime"].iloc[-1])
+regime_is_confirmed = False
+yield_curve_status: str | None = None
+if not macro_result.empty:
+    if "confirmed_regime" in macro_result.columns:
+        current_regime = str(macro_result["confirmed_regime"].iloc[-1])
+        raw_regime = str(macro_result["regime"].iloc[-1]) if "regime" in macro_result.columns else current_regime
+        regime_is_confirmed = current_regime == raw_regime and current_regime != "Indeterminate"
+    elif "regime" in macro_result.columns:
+        current_regime = str(macro_result["regime"].iloc[-1])
+    if "yield_curve" in macro_result.columns:
+        yield_curve_status = str(macro_result["yield_curve"].iloc[-1])
 
 is_provisional = any(
     getattr(s, "is_provisional", False) for s in signals
 )
 
 # Extract latest values for macro tile display
-_, macro_df = _cached_macro(macro_cache_token)  # cached — no extra API call
+_, macro_df = _cached_macro(macro_cache_token)  # cached ??no extra API call
 growth_val: float | None = None
 inflation_val: float | None = None
 fx_change: float | None = None
@@ -621,15 +748,15 @@ if not macro_df.empty:
     if len(_fx_s) >= 2:
         fx_change = float((_fx_s.iloc[-1] / _fx_s.iloc[-2] - 1) * 100)
 
-# ── Global filters ─────────────────────────────────────────────────────────────
+# ?? Global filters ?????????????????????????????????????????????????????????????
 
-filter_action_global = str(st.session_state.get("filter_action_global", "전체"))
+filter_action_global = str(st.session_state.get("filter_action_global", "?꾩껜"))
 filter_regime_only_global = bool(st.session_state.get("filter_regime_only_global", False))
 
 signals_filtered = list(signals)
 if filter_regime_only_global:
     signals_filtered = [s for s in signals_filtered if s.macro_regime == current_regime]
-if filter_action_global != "전체":
+if filter_action_global != "?꾩껜":
     signals_filtered = [s for s in signals_filtered if s.action == filter_action_global]
 
 
@@ -663,12 +790,12 @@ def _top_pick_sort_key(signal) -> tuple[int, float]:
 
 top_pick_signals = sorted(signals_filtered, key=_top_pick_sort_key)
 
-# ── Tabs Interface ─────────────────────────────────────────────────────────────
+# ?? Tabs Interface ?????????????????????????????????????????????????????????????
 
 tab_decision, tab_evidence, tab_all_signals = st.tabs([
-    "결론 (Decision)",
-    "근거 (Evidence)",
-    "신호 (Signals)",
+    "寃곕줎 (Decision)",
+    "洹쇨굅 (Evidence)",
+    "?좏샇 (Signals)",
 ])
 
 with tab_decision:
@@ -691,14 +818,17 @@ with tab_decision:
 
     status_col1, status_col2, status_col3 = st.columns(3)
     with status_col1:
-        st.metric("현재 국면", current_regime)
+        _regime_label = "?꾩옱 援?㈃ (?뺤젙)" if regime_is_confirmed else "?꾩옱 援?㈃ (?좎젙)"
+        st.metric(_regime_label, current_regime)
+        if yield_curve_status == "Inverted":
+            st.warning("?섏씡瑜?怨≪꽑 ??쟾 (援?퀬梨?Y < 湲곗?湲덈━)", icon="?좑툘")
     with status_col2:
-        st.metric("데이터 상태 (가격)", price_status)
+        st.metric("?곗씠???곹깭 (媛寃?", price_status)
     with status_col3:
-        st.metric("데이터 상태 (매크로)", macro_status)
+        st.metric("?곗씠???곹깭 (留ㅽ겕濡?", macro_status)
 
     st.divider()
-    st.subheader("Action 분포")
+    st.subheader("Action 遺꾪룷")
     render_action_summary(signals_filtered, theme_mode=theme_mode)
 
     st.divider()
@@ -709,13 +839,13 @@ with tab_decision:
             rs_div = _rs_divergence_pct(signal)
             top_rows.append(
                 {
-                    "순위": rank,
-                    "섹터": signal.sector_name + (" *" if signal.is_provisional else ""),
-                    "액션": format_action_label(signal.action),
-                    "RS 이탈도": f"{rs_div:+.2f}%" if not pd.isna(rs_div) else "N/A",
+                    "?쒖쐞": rank,
+                    "?뱁꽣": signal.sector_name + (" *" if signal.is_provisional else ""),
+                    "?≪뀡": format_action_label(signal.action),
+                    "RS 이탈률": f"{rs_div:+.2f}%" if not pd.isna(rs_div) else "N/A",
                     "1M": _format_return_pct(signal.returns, "1M"),
                     "3M": _format_return_pct(signal.returns, "3M"),
-                    "알림": ", ".join(signal.alerts) if signal.alerts else "-",
+                    "?뚮┝": ", ".join(signal.alerts) if signal.alerts else "-",
                 }
             )
         top_df = pd.DataFrame(top_rows)
@@ -760,16 +890,16 @@ with tab_decision:
                 overwrite=False,
             )
         )
-        st.dataframe(top_styled, use_container_width=True, hide_index=True)
+        st.dataframe(top_styled, width='stretch', hide_index=True)
     else:
-        st.info("글로벌 필터 조건에 맞는 섹터가 없습니다.")
+        st.info("湲濡쒕쾶 ?꾪꽣 議곌굔??留욌뒗 ?뱁꽣媛 ?놁뒿?덈떎.")
 
     st.divider()
     if signals_filtered:
         fig_heatmap = render_returns_heatmap(signals_filtered, theme_mode=theme_mode)
-        st.plotly_chart(fig_heatmap, use_container_width=True)
+        st.plotly_chart(fig_heatmap, width='stretch')
     else:
-        st.info("수익률 히트맵을 표시할 신호가 없습니다.")
+        st.info("?섏씡瑜??덊듃留듭쓣 ?쒖떆???좏샇媛 ?놁뒿?덈떎.")
 
 with tab_evidence:
     from src.ui.components import render_rs_momentum_bar, render_rs_scatter
@@ -779,30 +909,30 @@ with tab_evidence:
     st.markdown(
         """
 <div class="app-summary-card">
-<b>핵심 요약</b><br/>
-RS 산점도는 섹터의 상대강도(RS)와 RS 이동평균을 동시에 보여줍니다.<br/>
-오른쪽일수록 벤치마크 대비 강하고, 대각선 아래(RS > RS MA)일수록 모멘텀 가속 구간입니다.
+<b>?듭떖 ?붿빟</b><br/>
+RS ?곗젏?꾨뒗 ?뱁꽣???곷?媛뺣룄(RS)? RS ?대룞?됯퇏???숈떆??蹂댁뿬以띾땲??<br/>
+?ㅻⅨ履쎌씪?섎줉 踰ㅼ튂留덊겕 ?鍮?媛뺥븯怨? ?媛곸꽑 ?꾨옒(RS > RS MA)?쇱닔濡?紐⑤찘? 媛??援ш컙?낅땲??
 </div>
 """,
         unsafe_allow_html=True,
     )
 
-    with st.expander("차트 해석 상세", expanded=False):
+    with st.expander("李⑦듃 ?댁꽍 ?곸꽭", expanded=False):
         st.markdown("""
-**X축 (RS)** — 섹터 종가 ÷ 벤치마크(KOSPI) 비율. 값이 클수록 벤치마크 대비 절대 강도가 높습니다.
+**X異?(RS)** ???뱁꽣 醫낃? 첨 踰ㅼ튂留덊겕(KOSPI) 鍮꾩쑉. 媛믪씠 ?댁닔濡?踰ㅼ튂留덊겕 ?鍮??덈? 媛뺣룄媛 ?믪뒿?덈떎.
 
-**Y축 (RS MA)** — RS의 이동평균(기본 20일). RS의 추세 수준을 나타냅니다.
+**Y異?(RS MA)** ??RS???대룞?됯퇏(湲곕낯 20??. RS??異붿꽭 ?섏????섑??낅땲??
 
-**점선 대각선** — RS = RS MA 기준선. 이 선을 기준으로 위·아래가 핵심 신호입니다.
+**?먯꽑 ?媛곸꽑** ??RS = RS MA 湲곗??? ???좎쓣 湲곗??쇰줈 ?꽷룹븘?섍? ?듭떖 ?좏샇?낅땲??
 
-| 위치 | 의미 |
+| ?꾩튂 | ?섎? |
 |------|------|
-| ▼ 대각선 아래 (RS > RS MA) | RS가 평균을 초과 → 모멘텀 **가속 중** → 강세 신호 |
-| ▲ 대각선 위 (RS < RS MA) | RS가 평균 미달 → 모멘텀 **감속 중** → 약세 신호 |
-| → 오른쪽 | 벤치마크 대비 **강한** 섹터 |
-| ← 왼쪽 | 벤치마크 대비 **약한** 섹터 |
+| ???媛곸꽑 ?꾨옒 (RS > RS MA) | RS媛 ?됯퇏??珥덇낵 ??紐⑤찘? **媛??以?* ??媛뺤꽭 ?좏샇 |
+| ???媛곸꽑 ??(RS < RS MA) | RS媛 ?됯퇏 誘몃떖 ??紐⑤찘? **媛먯냽 以?* ???쎌꽭 ?좏샇 |
+| ???ㅻⅨ履?| 踰ㅼ튂留덊겕 ?鍮?**媛뺥븳** ?뱁꽣 |
+| ???쇱そ | 踰ㅼ튂留덊겕 ?鍮?**?쏀븳** ?뱁꽣 |
 
-**점 색상** — Strong Buy (초록) › Watch (파랑) › Hold (회색) › Avoid (빨강)
+**???됱긽** ??Strong Buy (珥덈줉) ??Watch (?뚮옉) ??Hold (?뚯깋) ??Avoid (鍮④컯)
 """)
 
     if signals_filtered:
@@ -810,7 +940,7 @@ RS 산점도는 섹터의 상대강도(RS)와 RS 이동평균을 동시에 보�
             "Benchmark Missing" in getattr(s, "alerts", []) for s in signals_filtered
         )
         if benchmark_missing:
-            st.warning("벤치마크(KOSPI, 1001) 데이터 누락으로 모멘텀 차트를 계산할 수 없습니다. 시장데이터 갱신 후 재시도하세요.")
+            st.warning("踰ㅼ튂留덊겕(KOSPI, 1001) ?곗씠???꾨씫?쇰줈 紐⑤찘? 李⑦듃瑜?怨꾩궛?????놁뒿?덈떎. ?쒖옣?곗씠??媛깆떊 ???ъ떆?꾪븯?몄슂.")
         else:
             is_mobile_client = _is_mobile_client()
             scatter_height = 520 if is_mobile_client else 700
@@ -826,68 +956,66 @@ RS 산점도는 섹터의 상대강도(RS)와 RS 이동평균을 동시에 보�
                 theme_mode=theme_mode,
             )
             if is_mobile_client:
-                st.plotly_chart(fig_scatter, use_container_width=True)
+                st.plotly_chart(fig_scatter, width='stretch')
             else:
                 _, scatter_col_c, _ = st.columns([0.7, 3.6, 0.7])
                 with scatter_col_c:
-                    st.plotly_chart(fig_scatter, use_container_width=True)
+                    st.plotly_chart(fig_scatter, width='stretch')
 
             st.markdown("---")
             st.markdown(
                 """
-**RS 이탈도 (RS Divergence)**
+**RS ?댄깉??(RS Divergence)**
 
-- **계산식**: `(RS ÷ RS 이동평균 - 1) × 100`
-- **양수 (+)**: RS가 이동평균보다 위에 있어 모멘텀이 **가속** 중
-- **음수 (-)**: RS가 이동평균보다 아래에 있어 모멘텀이 **감속** 중
-- **해석 포인트**: 위 산점도의 대각선(RS = RS MA)에서 얼마나 이탈했는지 수치로 보여줍니다.
+- **怨꾩궛??*: `(RS 첨 RS ?대룞?됯퇏 - 1) 횞 100`
+- **?묒닔 (+)**: RS媛 ?대룞?됯퇏蹂대떎 ?꾩뿉 ?덉뼱 紐⑤찘???**媛??* 以?- **?뚯닔 (-)**: RS媛 ?대룞?됯퇏蹂대떎 ?꾨옒???덉뼱 紐⑤찘???**媛먯냽** 以?- **?댁꽍 ?ъ씤??*: ???곗젏?꾩쓽 ?媛곸꽑(RS = RS MA)?먯꽌 ?쇰쭏???댄깉?덈뒗吏 ?섏튂濡?蹂댁뿬以띾땲??
 """
             )
             fig_bar = render_rs_momentum_bar(signals_filtered, theme_mode=theme_mode)
             if fig_bar.data:
-                st.plotly_chart(fig_bar, use_container_width=True)
+                st.plotly_chart(fig_bar, width='stretch')
             else:
-                st.info("RS/RS MA 데이터가 충분하지 않습니다.")
+                st.info("RS/RS MA ?곗씠?곌? 異⑸텇?섏? ?딆뒿?덈떎.")
     else:
-        st.info("글로벌 필터 조건에 맞는 신호가 없습니다.")
+        st.info("湲濡쒕쾶 ?꾪꽣 議곌굔??留욌뒗 ?좏샇媛 ?놁뒿?덈떎.")
 
 with tab_all_signals:
     from src.ui.components import render_signal_table
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.caption(
-        f"적용 필터: 액션={filter_action_global}, "
-        f"현재 국면만 보기={'ON' if filter_regime_only_global else 'OFF'}"
+        f"?곸슜 ?꾪꽣: ?≪뀡={filter_action_global}, "
+        f"?꾩옱 援?㈃留?蹂닿린={'ON' if filter_regime_only_global else 'OFF'}"
     )
-    with st.expander("적합/비적합 판정 기준", expanded=False):
+    with st.expander("?곹빀/鍮꾩쟻???먯젙 湲곗?", expanded=False):
         st.markdown(
             """
-- `적합`은 **현재 시점의 국면(최신 매크로 판정)** 에 매핑된 섹터인지(`macro_fit`)로 판정합니다.
-- 현재 시점 국면은 매크로 결과의 최신 행(`macro_result["regime"].iloc[-1]`)을 사용합니다.
-- 매핑 기준은 `config/sector_map.yml`의 `regimes -> {국면} -> sectors`입니다.
-- 현재 국면에 포함되지 않은 섹터는 `비적합`으로 표시됩니다.
-- 참고: 최종 `액션`(Strong Buy/Watch/Hold/Avoid)은 `적합/비적합`에 모멘텀 조건(RS, 추세)을 결합해 계산됩니다.
-- `Indeterminate` 국면이면 해당 시점에는 매핑 섹터가 없어 전체가 `비적합`으로 표시될 수 있습니다.
+- `?곹빀`? **?꾩옱 ?쒖젏???뺤젙 援?㈃** ??留ㅽ븨???뱁꽣?몄?(`macro_fit`)濡??먯젙?⑸땲??
+- ?꾩옱 ?쒖젏 援?㈃? `confirmed_regime` (N媛쒖썡 ?곗냽 ?숈씪 援?㈃ ?뺤젙) 湲곗??낅땲?? 援?㈃???꾩쭅 ?뺤젙?섏? ?딆? 寃쎌슦 `(?좎젙)` ?쒖떆媛 ?섑??⑸땲??
+- 留ㅽ븨 湲곗?? `config/sector_map.yml`??`regimes -> {援?㈃} -> sectors`?낅땲??
+- ?꾩옱 援?㈃???ы븿?섏? ?딆? ?뱁꽣??`鍮꾩쟻???쇰줈 ?쒖떆?⑸땲??
+- 李멸퀬: 理쒖쥌 `?≪뀡`(Strong Buy/Watch/Hold/Avoid)? `?곹빀/鍮꾩쟻????紐⑤찘? 議곌굔(RS, 異붿꽭)??寃고빀??怨꾩궛?⑸땲??
+- `Indeterminate` 援?㈃?대㈃ ?대떦 ?쒖젏?먮뒗 留ㅽ븨 ?뱁꽣媛 ?놁뼱 ?꾩껜媛 `鍮꾩쟻???쇰줈 ?쒖떆?????덉뒿?덈떎.
 """
         )
-    with st.expander("알림 카테고리 설명", expanded=False):
+    with st.expander("?뚮┝ 移댄뀒怨좊━ ?ㅻ챸", expanded=False):
         rsi_overbought = int(settings.get("rsi_overbought", 70))
         rsi_oversold = int(settings.get("rsi_oversold", 30))
         fx_shock_pct = float(settings.get("fx_shock_pct", 3.0))
 
         st.markdown(
             f"""
-- **표시 규칙**: 알림이 하나 이상이면 쉼표(,)로 함께 표시되고, 없으면 `-`로 표시됩니다.
-- **Overheat**: 일간 RSI(`rsi_d`)가 `{rsi_overbought}` 이상일 때 추가됩니다.
-- **Oversold**: 일간 RSI(`rsi_d`)가 `{rsi_oversold}` 이하일 때 추가됩니다.
-- **FX Shock**: `|USD/KRW 변화율| > {fx_shock_pct:.1f}%` 이고 수출 섹터이며 현재 액션이 `Strong Buy`일 때 추가되며, 액션은 `Watch`로 강등됩니다.
-- **Benchmark Missing**: 벤치마크 가격 데이터가 비어 있을 때 모든 섹터에 추가됩니다(액션 `N/A`).
-- **RS Data Insufficient**: 특정 섹터의 RS/RS MA 계산이 불가능할 때 해당 섹터에 추가됩니다(액션 `N/A`).
+- **?쒖떆 洹쒖튃**: ?뚮┝???섎굹 ?댁긽?대㈃ ?쇳몴(,)濡??④퍡 ?쒖떆?섍퀬, ?놁쑝硫?`-`濡??쒖떆?⑸땲??
+- **Overheat**: ?쇨컙 RSI(`rsi_d`)媛 `{rsi_overbought}` ?댁긽????異붽??⑸땲??
+- **Oversold**: ?쇨컙 RSI(`rsi_d`)媛 `{rsi_oversold}` ?댄븯????異붽??⑸땲??
+- **FX Shock**: `|USD/KRW 蹂?붿쑉| > {fx_shock_pct:.1f}%` ?닿퀬 ?섏텧 ?뱁꽣?대ŉ ?꾩옱 ?≪뀡??`Strong Buy`????異붽??섎ŉ, ?≪뀡? `Watch`濡?媛뺣벑?⑸땲??
+- **Benchmark Missing**: 踰ㅼ튂留덊겕 媛寃??곗씠?곌? 鍮꾩뼱 ?덉쓣 ??紐⑤뱺 ?뱁꽣??異붽??⑸땲???≪뀡 `N/A`).
+- **RS Data Insufficient**: ?뱀젙 ?뱁꽣??RS/RS MA 怨꾩궛??遺덇??ν븷 ???대떦 ?뱁꽣??異붽??⑸땲???≪뀡 `N/A`).
 """
         )
         st.caption(
-            "참고: `FX Shock`는 신호 계산 시 전달된 최근 USD/KRW 변화율을 기준으로 판정됩니다. "
-            "USD/KRW 시계열이 2개 미만이면 해당 회차에서는 `FX Shock`가 계산되지 않습니다."
+            "李멸퀬: `FX Shock`???좏샇 怨꾩궛 ???꾨떖??理쒓렐 USD/KRW 蹂?붿쑉??湲곗??쇰줈 ?먯젙?⑸땲?? "
+            "USD/KRW ?쒓퀎?댁씠 2媛?誘몃쭔?대㈃ ?대떦 ?뚯감?먯꽌??`FX Shock`媛 怨꾩궛?섏? ?딆뒿?덈떎."
         )
 
     render_signal_table(
@@ -896,10 +1024,13 @@ with tab_all_signals:
         theme_mode=theme_mode,
     )
 
-# ── Footer ─────────────────────────────────────────────────────────────────────
+# ?? Footer ?????????????????????????????????????????????????????????????????????
 
 st.divider()
 st.caption(
-    f"기준일: {asof_date} | 데이터: pykrx (KRX), ECOS (한국은행), KOSIS (통계청) | "
-    f"국면: {current_regime}"
+    f"湲곗??? {asof_date} | ?곗씠?? "
+    f"{'KRX OpenAPI' if krx_provider_effective == 'OPENAPI' else 'pykrx'} (KRX), "
+    "ECOS (?쒓뎅???, KOSIS (?듦퀎泥? | "
+    f"援?㈃: {current_regime}"
 )
+

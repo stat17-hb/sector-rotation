@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from src.data_sources.cache_keys import build_macro_cache_token
+from src.data_sources.cache_keys import build_macro_cache_token, build_price_cache_token
 
 
 def test_cache_token_changes_when_key_changes():
@@ -30,3 +30,40 @@ def test_cache_token_does_not_expose_raw_keys():
 
     assert raw_ecos not in token
     assert raw_kosis not in token
+
+
+def test_price_cache_token_changes_when_provider_or_key_changes():
+    token_auto = build_price_cache_token(
+        krx_provider="AUTO",
+        krx_openapi_key="KEY_A",
+        secrets_mtime_ns=10,
+    )
+    token_openapi = build_price_cache_token(
+        krx_provider="OPENAPI",
+        krx_openapi_key="KEY_A",
+        secrets_mtime_ns=10,
+    )
+    token_key_changed = build_price_cache_token(
+        krx_provider="OPENAPI",
+        krx_openapi_key="KEY_B",
+        secrets_mtime_ns=10,
+    )
+
+    assert token_auto != token_openapi
+    assert token_openapi != token_key_changed
+
+
+def test_price_cache_token_is_stable_and_not_leaking_key():
+    token_a = build_price_cache_token(
+        krx_provider="OPENAPI",
+        krx_openapi_key="VERY_SECRET_KRX_KEY",
+        secrets_mtime_ns=99,
+    )
+    token_b = build_price_cache_token(
+        krx_provider="OPENAPI",
+        krx_openapi_key="VERY_SECRET_KRX_KEY",
+        secrets_mtime_ns=99,
+    )
+
+    assert token_a == token_b
+    assert "VERY_SECRET_KRX_KEY" not in token_a

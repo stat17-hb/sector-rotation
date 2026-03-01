@@ -461,7 +461,7 @@ def render_action_summary(signals: list, theme_mode: str = "dark") -> None:
     )
     max_count = max(action_counts.values()) if action_counts else 1
     fig.update_yaxes(dtick=1, range=[0, max_count * 1.25])
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
 
 
 def render_signal_table(
@@ -612,7 +612,7 @@ def render_signal_table(
     )
 
     table_height = 38 + (len(df_display) * 35) + 5
-    st.dataframe(styled, use_container_width=True, hide_index=True, height=table_height)
+    st.dataframe(styled, width='stretch', hide_index=True, height=table_height)
 
     if any(s.is_provisional for s in filtered):
         st.caption("* 잠정치 포함 (최근 3개월 KOSIS 데이터)")

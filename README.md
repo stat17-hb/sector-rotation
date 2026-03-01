@@ -166,3 +166,30 @@ pytest tests/ -v
 | `requests` | ECOS/KOSIS API 호출 |
 | `pyyaml` | 설정 파일 파싱 |
 | `pyarrow` | parquet 파일 처리 |
+
+---
+
+## KRX OpenAPI Provider (2026-03)
+
+KRX market-price loader now supports provider switching:
+
+- `KRX_PROVIDER`: `AUTO` (default), `OPENAPI`, `PYKRX`
+- `KRX_OPENAPI_KEY`: KRX OpenAPI auth key from `openapi.krx.co.kr`
+
+Resolution rule:
+
+- `AUTO` + key present -> `OPENAPI`
+- `AUTO` + key missing -> `PYKRX`
+- explicit `OPENAPI` without key -> cache/SAMPLE fallback with warning
+
+Local secrets example:
+
+```toml
+KRX_OPENAPI_KEY = "your_krx_openapi_key_here"
+KRX_PROVIDER = "AUTO"
+```
+
+Railway environment variables:
+
+- `KRX_OPENAPI_KEY`
+- `KRX_PROVIDER` (optional; default `AUTO`)

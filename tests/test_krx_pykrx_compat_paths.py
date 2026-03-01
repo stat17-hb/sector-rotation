@@ -23,7 +23,7 @@ def test_fetch_chunk_calls_transport_compat_before_pykrx(monkeypatch):
 
     class _Stock:
         @staticmethod
-        def get_index_ohlcv(start, end, index_code):
+        def get_index_ohlcv(start, end, index_code, **kwargs):
             assert state["compat_called"] is True
             idx = pd.date_range("2024-01-01", periods=2, freq="B")
             return pd.DataFrame({"\uc885\uac00": [1000.0, 1001.0]}, index=idx)
@@ -41,6 +41,8 @@ def test_load_sector_prices_uses_positional_close_fallback(tmp_path, monkeypatch
 
     monkeypatch.setattr(krx_mod, "CURATED_DIR", tmp_path / "curated")
     monkeypatch.setattr(krx_mod, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(krx_mod, "get_krx_provider", lambda: "PYKRX")
+    monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "")
 
     idx = pd.date_range("2024-01-01", periods=3, freq="B")
     ohlcv = pd.DataFrame(
@@ -66,6 +68,8 @@ def test_load_sector_prices_replaces_stale_codes_before_fetch(tmp_path, monkeypa
 
     monkeypatch.setattr(krx_mod, "CURATED_DIR", tmp_path / "curated")
     monkeypatch.setattr(krx_mod, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(krx_mod, "get_krx_provider", lambda: "PYKRX")
+    monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "")
     monkeypatch.setattr(
         krx_mod,
         "_get_index_universe",
@@ -93,6 +97,8 @@ def test_load_sector_prices_skips_unsupported_codes_before_fetch(tmp_path, monke
 
     monkeypatch.setattr(krx_mod, "CURATED_DIR", tmp_path / "curated")
     monkeypatch.setattr(krx_mod, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(krx_mod, "get_krx_provider", lambda: "PYKRX")
+    monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "")
     monkeypatch.setattr(
         krx_mod,
         "_get_index_universe",
@@ -125,7 +131,7 @@ def test_fetch_chunk_stops_retry_for_missing_code_keyerror(monkeypatch):
 
     class _Stock:
         @staticmethod
-        def get_index_ohlcv(start, end, index_code):
+        def get_index_ohlcv(start, end, index_code, **kwargs):
             state["calls"] += 1
             raise KeyError(index_code)
 
@@ -138,8 +144,66 @@ def test_fetch_chunk_stops_retry_for_missing_code_keyerror(monkeypatch):
     assert state["calls"] == 1
 
 
+def test_load_sector_prices_auto_prefers_openapi_when_key_present(tmp_path, monkeypatch):
+    import src.data_sources.krx_indices as krx_mod
+
+    monkeypatch.setattr(krx_mod, "CURATED_DIR", tmp_path / "curated")
+    monkeypatch.setattr(krx_mod, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(krx_mod, "get_krx_provider", lambda: "AUTO")
+    monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "OPENAPI_KEY")
+
+    idx = pd.date_range("2024-01-01", periods=3, freq="B")
+    openapi_df = pd.DataFrame({"close": [3000.0, 3001.0, 3002.0]}, index=idx)
+
+    calls = {"openapi": 0, "pykrx": 0}
+
+    def _fake_openapi(index_code, start, end):
+        _ = (index_code, start, end)
+        calls["openapi"] += 1
+        return openapi_df
+
+    def _fake_pykrx(*args, **kwargs):
+        _ = (args, kwargs)
+        calls["pykrx"] += 1
+        raise AssertionError("pykrx path should not be called when OPENAPI key exists")
+
+    monkeypatch.setattr(krx_mod, "fetch_index_ohlcv_openapi", _fake_openapi)
+    monkeypatch.setattr(krx_mod, "fetch_index_ohlcv", _fake_pykrx)
+
+    status, result = krx_mod.load_sector_prices(["1001"], "20240101", "20240131")
+
+    assert status == "LIVE"
+    assert not result.empty
+    assert calls["openapi"] == 1
+    assert calls["pykrx"] == 0
+
+
+def test_load_sector_prices_openapi_missing_key_uses_cache(tmp_path, monkeypatch):
+    import src.data_sources.krx_indices as krx_mod
+
+    curated = tmp_path / "curated"
+    curated.mkdir()
+    monkeypatch.setattr(krx_mod, "CURATED_DIR", curated)
+    monkeypatch.setattr(krx_mod, "RAW_DIR", tmp_path / "raw")
+    monkeypatch.setattr(krx_mod, "get_krx_provider", lambda: "OPENAPI")
+    monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "")
+
+    idx = pd.date_range("2024-01-01", periods=3, freq="B")
+    cached_df = pd.DataFrame(
+        {"index_code": ["1001"] * 3, "index_name": ["1001"] * 3, "close": [1.0, 2.0, 3.0]},
+        index=idx,
+    )
+    cached_df.to_parquet(curated / "sector_prices.parquet")
+
+    status, result = krx_mod.load_sector_prices(["1001"], "20240101", "20240131")
+
+    assert status == "CACHED"
+    assert not result.empty
+
+
 def test_calendar_lookup_applies_transport_compat(monkeypatch):
     import src.transforms.calendar as calendar_mod
+    import pandas as pd
 
     state = {"compat_called": False}
 
