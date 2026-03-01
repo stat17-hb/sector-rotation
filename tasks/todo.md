@@ -1215,3 +1215,31 @@ Review (fill after implementation):
 - Residual risks / follow-ups:
 - OpenAPI endpoint/field schema can vary by approved service; if account-specific API returns different keys, adjust parser candidates in `krx_openapi.py`.
 - `tests/` suite still has two pre-existing UI mocking failures unrelated to this migration.
+
+## 34) Test Suite Stabilization Follow-up (2026-03-01)
+
+Pre-Implementation Check-in:
+- Continue from KRX provider migration to resolve remaining known test instability: UI mock signature mismatch and root exploratory script collection in default pytest.
+
+Execution Checklist:
+- [x] Align `tests/test_ui_components.py` plotly mock signatures with current Streamlit call style (`width='stretch'`).
+- [x] Keep assertions behavior-focused (chart rendered + width option captured).
+- [x] Add `pytest.ini` with `testpaths = tests` so exploratory root scripts are excluded from default suite collection.
+- [x] Re-run full suite using both `pytest -q tests` and `pytest -q`.
+
+Verification Gates:
+- [x] `python -m py_compile tests/test_ui_components.py`
+- [x] `python -m pytest -q tests`
+- [x] `python -m pytest -q`
+
+Review:
+- Commands run:
+- `python -m py_compile tests/test_ui_components.py`
+- `python -m pytest -q tests`
+- `python -m pytest -q`
+- Results:
+- Updated UI component tests now accept keyword-based `st.plotly_chart` arguments and assert `width='stretch'`.
+- Added new root config `pytest.ini` to scope default collection to `tests/`.
+- Verification passed: `96 passed` for both `pytest -q tests` and `pytest -q`.
+- Residual risks:
+- None in current automated suite; exploratory scripts remain in repo but are intentionally excluded from default pytest collection.

@@ -123,7 +123,7 @@ def test_render_action_summary_renders_metrics_and_bar(monkeypatch):
     ]
 
     metric_calls: list[tuple[str, int]] = []
-    chart_calls: list[tuple[object, bool]] = []
+    chart_calls: list[tuple[object, dict]] = []
 
     monkeypatch.setattr(
         "src.ui.components.st.columns",
@@ -135,7 +135,7 @@ def test_render_action_summary_renders_metrics_and_bar(monkeypatch):
     )
     monkeypatch.setattr(
         "src.ui.components.st.plotly_chart",
-        lambda fig, use_container_width=False: chart_calls.append((fig, use_container_width)),
+        lambda fig, **kwargs: chart_calls.append((fig, kwargs)),
     )
 
     render_action_summary(signals, theme_mode="dark")
@@ -147,8 +147,8 @@ def test_render_action_summary_renders_metrics_and_bar(monkeypatch):
     assert ("Avoid", 1) in metric_calls
     assert ("N/A", 1) in metric_calls
     assert len(chart_calls) == 1
-    fig, use_container_width = chart_calls[0]
-    assert use_container_width is True
+    fig, kwargs = chart_calls[0]
+    assert kwargs.get("width") == "stretch"
     assert list(fig.data[0].x) == ["Strong Buy", "Watch", "Hold", "Avoid", "N/A"]
     assert list(fig.data[0].y) == [1, 2, 1, 1, 1]
     assert list(fig.data[0].marker.color) == [
@@ -169,7 +169,7 @@ def test_render_action_summary_hides_na_when_zero(monkeypatch):
     ]
 
     metric_calls: list[tuple[str, int]] = []
-    chart_calls: list[tuple[object, bool]] = []
+    chart_calls: list[tuple[object, dict]] = []
 
     monkeypatch.setattr(
         "src.ui.components.st.columns",
@@ -181,7 +181,7 @@ def test_render_action_summary_hides_na_when_zero(monkeypatch):
     )
     monkeypatch.setattr(
         "src.ui.components.st.plotly_chart",
-        lambda fig, use_container_width=False: chart_calls.append((fig, use_container_width)),
+        lambda fig, **kwargs: chart_calls.append((fig, kwargs)),
     )
 
     render_action_summary(signals, theme_mode="dark")
@@ -194,8 +194,8 @@ def test_render_action_summary_hides_na_when_zero(monkeypatch):
     assert not any(label == "N/A" for label, _ in metric_calls)
 
     assert len(chart_calls) == 1
-    fig, use_container_width = chart_calls[0]
-    assert use_container_width is True
+    fig, kwargs = chart_calls[0]
+    assert kwargs.get("width") == "stretch"
     assert list(fig.data[0].x) == ["Strong Buy", "Watch", "Hold", "Avoid"]
     assert list(fig.data[0].y) == [1, 1, 1, 1]
     assert list(fig.data[0].marker.color) == [
