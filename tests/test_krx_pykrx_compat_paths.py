@@ -9,6 +9,14 @@ import pandas as pd
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _blank_streamlit(monkeypatch):
+    fake_streamlit = types.ModuleType("streamlit")
+    fake_streamlit.secrets = {}
+    monkeypatch.setitem(sys.modules, "streamlit", fake_streamlit)
+    monkeypatch.delenv("KRX_OPENAPI_URL", raising=False)
+
+
 def test_fetch_chunk_calls_transport_compat_before_pykrx(monkeypatch):
     import src.data_sources.krx_indices as krx_mod
 
@@ -157,17 +165,18 @@ def test_load_sector_prices_auto_prefers_openapi_when_key_present(tmp_path, monk
 
     calls = {"openapi": 0, "pykrx": 0}
 
-    def _fake_openapi(index_code, start, end):
-        _ = (index_code, start, end)
+    def _fake_openapi(index_codes, start, end):
+        _ = (start, end)
         calls["openapi"] += 1
-        return openapi_df
+        assert index_codes == ["1001"]
+        return ({"1001": openapi_df}, {})
 
     def _fake_pykrx(*args, **kwargs):
         _ = (args, kwargs)
         calls["pykrx"] += 1
         raise AssertionError("pykrx path should not be called when OPENAPI key exists")
 
-    monkeypatch.setattr(krx_mod, "fetch_index_ohlcv_openapi", _fake_openapi)
+    monkeypatch.setattr(krx_mod, "fetch_index_ohlcv_openapi_batch", _fake_openapi)
     monkeypatch.setattr(krx_mod, "fetch_index_ohlcv", _fake_pykrx)
 
     status, result = krx_mod.load_sector_prices(["1001"], "20240101", "20240131")

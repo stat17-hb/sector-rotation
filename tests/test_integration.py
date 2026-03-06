@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import math
+import sys
+import types
 from datetime import datetime
 from pathlib import Path
 
@@ -13,6 +15,14 @@ from src.signals.scoring import apply_fx_shock_filter
 
 
 # --- Fixtures ---
+
+
+@pytest.fixture(autouse=True)
+def _blank_streamlit(monkeypatch):
+    fake_streamlit = types.ModuleType("streamlit")
+    fake_streamlit.secrets = {}
+    monkeypatch.setitem(sys.modules, "streamlit", fake_streamlit)
+    monkeypatch.delenv("KRX_OPENAPI_URL", raising=False)
 
 
 def _make_sector_prices_df(codes: list[str], n: int = 60) -> pd.DataFrame:
@@ -91,7 +101,11 @@ class TestIntegration:
 
         idx = pd.date_range("2024-01-01", periods=4, freq="B")
         live_df = pd.DataFrame({"close": [100.0, 101.0, 102.0, 103.0]}, index=idx)
-        monkeypatch.setattr(krx_mod, "fetch_index_ohlcv_openapi", lambda *a, **kw: live_df)
+        monkeypatch.setattr(
+            krx_mod,
+            "fetch_index_ohlcv_openapi_batch",
+            lambda *a, **kw: ({"1001": live_df}, {}),
+        )
 
         status, result = krx_mod.load_sector_prices(["1001"], "20240101", "20240131")
         assert status == "LIVE"
@@ -101,7 +115,6 @@ class TestIntegration:
     def test_openapi_auth_failure_falls_back_to_cache(self, tmp_path, monkeypatch):
         """OPENAPI auth failure returns CACHED when curated cache exists."""
         import src.data_sources.krx_indices as krx_mod
-        from src.data_sources.krx_openapi import KRXOpenAPIAuthError
 
         curated = tmp_path / "curated"
         curated.mkdir()
@@ -113,11 +126,11 @@ class TestIntegration:
         cached = _make_sector_prices_df(["1001"], n=5)
         cached.to_parquet(curated / "sector_prices.parquet")
 
-        def _raise_auth(*args, **kwargs):
-            _ = (args, kwargs)
-            raise KRXOpenAPIAuthError("Unauthorized Key")
-
-        monkeypatch.setattr(krx_mod, "fetch_index_ohlcv_openapi", _raise_auth)
+        monkeypatch.setattr(
+            krx_mod,
+            "fetch_index_ohlcv_openapi_batch",
+            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("Unauthorized Key")),
+        )
 
         status, result = krx_mod.load_sector_prices(["1001"], "20240101", "20240131")
         assert status == "CACHED"

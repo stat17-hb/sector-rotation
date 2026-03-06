@@ -1243,3 +1243,213 @@ Review:
 - Verification passed: `96 passed` for both `pytest -q tests` and `pytest -q`.
 - Residual risks:
 - None in current automated suite; exploratory scripts remain in repo but are intentionally excluded from default pytest collection.
+
+## 35) 한글 모지바케(깨짐) 및 Streamlit 아이콘 예외 복구 (2026-03-01)
+
+Pre-Implementation Check-in:
+- 2026-03-01: UI 한글 라벨/설명 문구가 모지바케로 깨져 표시되고, `st.warning(..., icon=...)` 인자도 깨진 문자열이라 Streamlit 예외가 발생함.
+- Scope: `app.py` 내 깨진 문자열을 정상 한글로 복구하고, 아이콘 인자를 유효 이모지로 교체. 데이터/신호 로직 변경 없음.
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 체크리스트를 작성한다.
+- [x] `app.py`에서 깨진 한글 문자열(탭/사이드바/메트릭/설명/푸터)을 정상 한글로 교체한다.
+- [x] `st.warning(..., icon=...)` 등 아이콘 인자를 유효한 단일 이모지로 교체한다.
+- [x] `python -m py_compile app.py`로 문법/인코딩 오류를 검증한다.
+- [x] 필요 최소 테스트를 실행해 회귀 여부를 확인한다.
+- [x] Review 섹션에 실행 명령과 결과를 기록한다.
+
+Verification Gates:
+- [x] Streamlit 실행 시 한글 라벨이 깨지지 않고 표시된다.
+- [x] `streamlit.errors.StreamlitAPIException: ... not a valid emoji` 예외가 재현되지 않는다.
+- [x] `python -m py_compile app.py` 통과.
+
+Review:
+- Commands run:
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m py_compile app.py`
+- `C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m pytest -q tests`
+- `cmd /c "C:/Users/k1190/miniconda3/envs/sector-rotation/python.exe -m streamlit run app.py --server.headless true --server.port 8516 > .tmp_streamlit_encoding_fix.log 2>&1"` (timeout 기반 스모크 로그 캡처)
+- `rg -n "StreamlitAPIException|invalid emoji|Traceback|Error|Exception" .tmp_streamlit_encoding_fix.log`
+- Results:
+- `app.py`의 모지바케 문자열을 정상 한글로 교체(사이드바/탭/메트릭/설명/푸터 전반).
+- `st.warning(..., icon="⚠️")`로 교체하여 깨진 아이콘 문자열 제거.
+- 정적 검증: `py_compile` 통과.
+- 회귀 검증: `pytest -q tests` 결과 `96 passed, 1 warning`.
+- 런타임 스모크: Streamlit 로그에서 앱 URL 정상 출력, `invalid emoji`/`StreamlitAPIException` 패턴 미검출.
+- Residual risks / follow-ups:
+- 동일 파일을 CP949 등 다른 인코딩으로 다시 저장하면 모지바케가 재발할 수 있으므로 UTF-8 저장 고정(에디터 기본 인코딩 점검)이 필요.
+
+## 36) pykrx 이슈 해결 상태 점검 (2026-03-04)
+
+Pre-Implementation Check-in:
+- 2026-03-04: 사용자 요청으로 pykrx 관련 이슈가 현재 기준으로 해결된 상태인지 점검.
+- Scope: 코드 변경 없이 상태 점검 중심(문서/설정 확인 + 테스트/스모크 검증 + 판정 보고).
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 체크리스트를 작성한다.
+- [x] 현재 코드/의존성 기준에서 pykrx 관련 수정사항(호환 shim, provider fallback, 경고 회귀 테스트) 반영 상태를 확인한다.
+- [x] pykrx 관련 테스트를 실행해 회귀 여부를 검증한다.
+- [x] 필요 시 최소 런타임 스모크(직접 import/라이브 fetch 경로)를 실행해 동작 여부를 확인한다.
+- [x] 결과를 Review에 기록하고 최종 상태를 `해결/부분해결/미해결`로 판정한다.
+
+Verification Gates:
+- [x] `python -m pytest -q tests/test_pykrx_compat.py tests/test_pykrx_import_warning.py tests/test_krx_pykrx_compat_paths.py`
+- [x] `python -c "import pykrx; print(pykrx.__version__)"`
+- [x] `python -m pytest -q tests/test_integration.py -k "api_failure_falls_back_to_cache or full_fallback_to_sample or live_partial_success_keeps_live_status"`
+
+Review:
+- Commands run:
+- `python -c "import pykrx; print(pykrx.__version__)"`
+- `python -m pytest -q tests/test_pykrx_compat.py tests/test_pykrx_import_warning.py tests/test_krx_pykrx_compat_paths.py`
+- `python -m pytest -q tests/test_integration.py -k pykrx` (결과: `11 deselected`, 테스트명 기준 필터 미매칭)
+- `python -m pytest -q tests/test_integration.py -k "api_failure_falls_back_to_cache or full_fallback_to_sample or live_partial_success_keeps_live_status"`
+- `python -c "from pykrx import stock; df=stock.get_index_ohlcv('20240102','20240131','1001', name_display=False); print('shape', df.shape)"`
+- `python -c "from src.data_sources.pykrx_compat import ensure_pykrx_transport_compat; ensure_pykrx_transport_compat(); from pykrx import stock; df=stock.get_index_ohlcv('20240102','20240131','1001', name_display=False); print('shape', df.shape)"`
+- `python -c "import os; os.environ['KRX_PROVIDER']='PYKRX'; from src.data_sources.krx_indices import load_sector_prices; status, df = load_sector_prices(['1001'],'20240102','20240131'); print('status', status, 'rows', len(df))"`
+- Results:
+- 환경 pykrx 버전 확인: `1.2.4` (`requirements.txt`도 `pykrx>=1.2.4`).
+- 회귀 테스트 통과: `15 passed in 2.66s`.
+- 통합 테스트(관련 3케이스) 통과: `3 passed, 8 deselected`.
+- 실제 pykrx 라이브 호출(`stock.get_index_ohlcv`)은 compat 적용 전/후 모두 `shape (0, 0)`로 빈 응답.
+- 실제 로더 경로(`load_sector_prices`, `KRX_PROVIDER=PYKRX`)는 LIVE 실패 후 `status CACHED`로 폴백하며 경고 로그에 `Empty response` 및 `consider OPENAPI provider`가 출력됨.
+- Final judgement:
+- `부분해결` — 앱/로더의 안정성(테스트·폴백·경고)은 확보되었지만, pykrx 라이브 응답 빈값 이슈 자체는 현재 환경에서 여전히 재현됨.
+- Residual risks / follow-ups:
+- `KRX_PROVIDER=AUTO`에서 `KRX_OPENAPI_KEY`가 없으면 기본 경로가 PYKRX여서, 최신 LIVE 데이터 대신 캐시 사용 비중이 커질 수 있음.
+- 운영 환경에서 LIVE 우선이 필요하면 `KRX_PROVIDER=OPENAPI` + 유효한 `KRX_OPENAPI_KEY` 구성이 사실상 필요.
+
+## 37) KRX OpenAPI 키 반영 후 기능 정상동작 검증 (2026-03-04)
+
+Pre-Implementation Check-in:
+- 2026-03-04: 사용자가 `.streamlit/secrets.toml`에 KRX OpenAPI 키 세팅 완료.
+- Scope: 설정 반영 여부 확인, 관련 자동 테스트 실행, 실제 OpenAPI 라이브 호출 스모크로 동작 판정.
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 체크리스트를 작성한다.
+- [x] 런타임에서 `KRX_OPENAPI_KEY`/`KRX_PROVIDER` 설정 인식 여부를 확인한다(키 원문은 출력하지 않음).
+- [x] KRX OpenAPI/통합 경로 관련 테스트를 실행한다.
+- [x] 전체 테스트 스위트(`tests/`)를 실행해 회귀 여부를 확인한다.
+- [x] 실제 OpenAPI 경로 라이브 스모크(fetch 또는 loader)를 실행해 결과 상태(`LIVE/CACHED/SAMPLE`)를 검증한다.
+- [x] Review 섹션에 실행 명령과 결과를 기록하고 최종 판정을 작성한다.
+
+Verification Gates:
+- [x] `python -m pytest -q tests/test_krx_openapi.py tests/test_integration.py tests/test_krx_pykrx_compat_paths.py`
+- [x] `python -m pytest -q tests`
+- [x] `python -c "from src.data_sources.krx_openapi import get_krx_openapi_key, get_krx_provider; ..."`
+- [x] `python -c "from src.data_sources.krx_indices import load_sector_prices; ..."`
+
+Review:
+- Commands run:
+- `python --version`
+- `python -c "from src.data_sources.krx_openapi import get_krx_openapi_key, get_krx_provider; k=get_krx_openapi_key(); print('key_present', bool(k)); print('key_len', len(k)); print('provider', get_krx_provider())"`
+- `Get-Content .streamlit/secrets.toml | ForEach-Object { if ($_ -match '^\s*([A-Z0-9_]+)\s*=') { $matches[1] } }`
+- `python -m pytest -q tests/test_krx_openapi.py tests/test_integration.py tests/test_krx_pykrx_compat_paths.py`
+- `python -m pytest -q tests`
+- `python -c "from src.data_sources.preflight import run_api_preflight; print(run_api_preflight(timeout_sec=3))"`
+- `python -c "from src.data_sources.krx_openapi import fetch_index_ohlcv_openapi; df=fetch_index_ohlcv_openapi('1001','20260220','20260303'); ..."`
+- `python -c "from src.data_sources.krx_indices import load_sector_prices; s, df = load_sector_prices(['1001'], '20260220', '20260303'); print('status', s); print('rows', len(df)); print('columns', list(df.columns));"`
+- Results:
+- Python: `3.13.5`
+- 런타임 설정 인식: `key_present=True`, `key_len=40`, `provider=AUTO`
+- `.streamlit/secrets.toml` 키 항목 확인: `ECOS_API_KEY`, `KOSIS_API_KEY`, `KRX_OPENAPI_KEY`, `KRX_PROVIDER`
+- KRX 관련 타깃 테스트: `25 passed in 2.55s`
+- 전체 테스트: `96 passed in 4.13s`
+- API preflight: `ECOS/KOSIS/KRX` 모두 `status=OK`
+- OpenAPI 직접 호출: `KRXOpenAPIAuthError: Unauthorized API Call`
+- 로더 경로: `status CACHED`, `rows 6` (OPENAPI LIVE 실패 후 캐시 폴백 동작 확인)
+- 추가 진단:
+- 동일 호출에서 `AUTH_KEY=정상키` -> `Unauthorized API Call`, `AUTH_KEY=변조키` -> `Unauthorized Key` 확인.
+- 해석: 키 문자열 자체는 인식되지만(유효), 대상 API 사용 권한(서비스 신청/승인) 미완료 상태 가능성이 높음.
+- 공식 이용방법(OPEN API)에도 `API 활용 신청` 및 `관리자 승인 대기` 단계가 명시되어 있음.
+- Final judgement:
+- `부분정상` — 애플리케이션 테스트/폴백 기능은 정상이나, 현재 키로는 KRX OpenAPI 라이브 인증이 실패하여 실시간 OPENAPI 데이터는 미동작.
+- Residual risks / follow-ups:
+- `openapi.krx.co.kr`에서 해당 API(`idx/krx_dd_trd`) 사용 권한 승인 상태를 확인해야 함(키 발급과 서비스 승인은 별개일 수 있음).
+- 운영에서 LIVE 우선이 필요하면 권한 승인 완료 후 재검증 필요.
+
+## 38) `krx_dd_trd` 이용권한 반영 후 연결 테스트 (2026-03-05)
+
+Pre-Implementation Check-in:
+- 2026-03-05: 사용자 요청으로 `krx_dd_trd` API 이용권한 승인 이후 실제 연결이 정상인지 즉시 재검증.
+- Scope: 코드 변경 없이 설정 인식 확인 + OpenAPI 실호출 + 로더 경로 상태 판정.
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 체크리스트를 작성한다.
+- [x] 런타임에서 `KRX_OPENAPI_KEY`/`KRX_PROVIDER` 인식 상태를 확인한다(키 원문 비노출).
+- [x] KRX OpenAPI 관련 회귀 테스트를 실행한다.
+- [x] `idx/krx_dd_trd` 실호출 스모크를 실행해 인증/권한/응답 상태를 확인한다.
+- [x] `load_sector_prices` 경로를 실행해 실제 앱 경로 상태(`LIVE/CACHED/SAMPLE`)를 확인한다.
+- [x] Review 섹션에 실행 명령/결과와 최종 판정을 기록한다.
+
+Verification Gates:
+- [x] `python -m pytest -q tests/test_krx_openapi.py tests/test_krx_pykrx_compat_paths.py tests/test_integration.py -k "openapi or live_partial_success_keeps_live_status or openapi_auth_failure_falls_back_to_cache"`
+- [x] `python -c "from src.data_sources.krx_openapi import fetch_index_ohlcv_openapi; ..."`
+- [x] `python -c "import os; os.environ['KRX_PROVIDER']='OPENAPI'; from src.data_sources.krx_indices import load_sector_prices; ..."`
+
+Review:
+- Commands run:
+- `python --version`
+- `python -c "from src.data_sources.krx_openapi import get_krx_openapi_key, get_krx_provider; k=get_krx_openapi_key(); print('key_present', bool(k)); print('key_len', len(k)); print('provider', get_krx_provider())"`
+- `Get-Content .streamlit/secrets.toml | ForEach-Object { if ($_ -match '^\s*([A-Z0-9_]+)\s*=') { $matches[1] } }`
+- `python -m pytest -q tests/test_krx_openapi.py tests/test_krx_pykrx_compat_paths.py tests/test_integration.py -k "openapi or live_partial_success_keeps_live_status or openapi_auth_failure_falls_back_to_cache"`
+- `python -c "from src.data_sources.krx_openapi import fetch_index_ohlcv_openapi; df=fetch_index_ohlcv_openapi('1001','20260220','20260305'); ..."`
+- `python -c "from src.data_sources.krx_openapi import _request_with_retry, get_krx_openapi_key, get_krx_openapi_url; ..."` (`20260220~20260305` + `20240102~20240131` raw payload 확인)
+- `python -c "from src.data_sources.krx_openapi import _request_with_retry, get_krx_openapi_url; ..."` (변조 키로 `Unauthorized Key` 비교 확인)
+- `python -c "import os; os.environ['KRX_PROVIDER']='OPENAPI'; from src.data_sources.krx_indices import load_sector_prices; ..."`
+- `python -c "from src.data_sources.preflight import run_api_preflight; print(run_api_preflight(timeout_sec=3))"`
+- Results:
+- Python: `3.13.5`
+- 런타임 설정 인식: `key_present=True`, `key_len=40`, `provider=AUTO`
+- `.streamlit/secrets.toml` 키 항목 확인: `ECOS_API_KEY`, `KOSIS_API_KEY`, `KRX_OPENAPI_KEY`, `KRX_PROVIDER`
+- KRX 관련 타깃 테스트: `10 passed, 15 deselected`
+- `fetch_index_ohlcv_openapi('1001','20260220','20260305')`는 `KRXOpenAPIResponseError: no data rows`
+- 동일 기간 raw payload는 `{"OutBlock_1": []}`로 인증 실패가 아니라 빈 데이터 응답
+- 과거 구간(`20240102~20240131`) raw payload는 `OutBlock_1` `34`건 반환(응답 수신 정상)
+- 변조 키 호출 시 `KRXOpenAPIAuthError: Unauthorized Key` 재현(현재 키와 구분 확인)
+- `load_sector_prices` (`KRX_PROVIDER=OPENAPI`, `1001`, `20240102~20240131`) 결과: `status=LIVE`, `rows=1`
+- API preflight: `KRX status=OK (HTTP 200)` 포함 전부 `OK`
+- Final judgement:
+- `정상(연결/권한)` — `krx_dd_trd` 엔드포인트는 현재 키로 인증/접속이 정상이며 실제 데이터 응답(`OutBlock_1`)을 반환함.
+- Residual risks / follow-ups:
+- 최근 구간(`2026-02-20`~`2026-03-05`)은 API가 빈 rows를 반환했으므로, 실데이터 검증 기준일은 KRX에 데이터가 존재하는 확정 과거일로 잡아야 함.
+- 현재 파서 경로는 `OutBlock_1`에서 `IDX_IND_CD`가 없는 응답일 때 일자 중복 제거로 1행만 남을 수 있어, 시계열 품질 점검이 추가로 필요함.
+
+## 39) KRX OpenAPI LIVE 시계열 복구 (2026-03-06)
+
+Pre-Implementation Check-in:
+- 2026-03-06: 사용자 승인 후 KRX LIVE 데이터가 여전히 `CACHED`로 떨어지는 문제를 수정.
+- Scope: 잘못된 `KRX_OPENAPI_URL` override 무력화, KRX/KOSPI 시리즈별 라우팅, `basDd` 일자 스냅샷 기반 시계열 복구, 스냅샷 오인 파싱 방지, 관련 회귀 테스트 추가.
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 체크리스트를 작성한다.
+- [x] KRX OpenAPI runtime URL override를 공식 host/path만 허용하도록 검증한다.
+- [x] KRX/KOSPI/KOSDAQ 시리즈 API id 라우팅과 코드별 공식 row-name alias 해석을 구현한다.
+- [x] `basDd` 일자 스냅샷 반복 수집으로 code별 시계열을 재구성하고, 단일일자 스냅샷을 시계열로 오인하는 경로를 제거한다.
+- [x] `load_sector_prices()` OPENAPI 경로를 family-batch fetch 기반으로 바꾸고 기존 fallback(`LIVE -> RAW CACHE -> CURATED CACHE -> SAMPLE`)을 유지한다.
+- [x] KRX OpenAPI 단위/통합 테스트를 업데이트해 override 검증, family 라우팅, snapshot rejection, loader LIVE 경로를 고정한다.
+- [x] Review 섹션에 실행 명령, 테스트 결과, 실제 LIVE 스모크 결과를 기록한다.
+
+Verification Gates:
+- [x] `python -m py_compile src/data_sources/krx_openapi.py src/data_sources/krx_indices.py tests/test_krx_openapi.py tests/test_integration.py`
+- [x] `python -m pytest -q tests/test_krx_openapi.py tests/test_integration.py tests/test_krx_pykrx_compat_paths.py`
+- [x] `python -m pytest -q tests`
+- [x] `python -c "from src.data_sources.krx_indices import load_sector_prices; ..."` 앱 기본 범위 LIVE 스모크
+- [x] `python -c "from src.signals.matrix import build_signal_table; ..."` 종단 스모크
+
+Review:
+- Commands run:
+- `python -m py_compile src/data_sources/krx_openapi.py src/data_sources/krx_indices.py tests/test_krx_openapi.py tests/test_integration.py tests/test_krx_pykrx_compat_paths.py`
+- `python -m pytest -q tests/test_krx_openapi.py tests/test_integration.py tests/test_krx_pykrx_compat_paths.py`
+- `python -m pytest -q tests`
+- `python -c "... load_sector_prices(default 12 codes, 3 years) ..."`
+- `python -c "... load_sector_prices + load_ecos_macro + load_kosis_macro + compute_regime_history + build_signal_table ..."`
+- Results:
+- `src/data_sources/krx_openapi.py` now validates `KRX_OPENAPI_URL`, routes by family API id (`krx_dd_trd` / `kospi_dd_trd` / `kosdaq_dd_trd`), repairs KRX cp949 mojibake, and reconstructs time series from `basDd` daily snapshots.
+- `src/data_sources/krx_indices.py` now uses OpenAPI batch fetch for requested codes, writes per-code raw cache, keeps the existing fallback chain, and sets `index_name` from configured display names.
+- Test coverage updated for invalid override rejection, family routing, snapshot rejection, and OPENAPI loader usage.
+- Targeted tests: `28 passed in 1.77s`.
+- Full suite: `99 passed in 4.47s` and `99 passed in 4.44s`.
+- App-default LIVE smoke (`5044,1155,5042,1168,1165,5048,5049,5045,1170,1157,5046,1001`, `20230306~20260305`): `status=LIVE`, `rows=8760`, code별 `730`행, 범위 `2023-03-06`~`2026-03-05`.
+- End-to-end macro+signals smoke: `price_status=LIVE`, `ecos_status=LIVE`, `kosis_status=LIVE`, `macro_result_rows=59`, `signal_count=11`, `na_count=0`.
+- Residual risks / follow-ups:
+- 첫 3년 OPENAPI 백필은 현재 환경에서 약 `163초`가 걸렸다. Streamlit 캐시/로컬 raw cache로 반복 비용은 줄지만, 최초 cold start 성능 개선 여지는 남아 있다.
+- 일부 코드 매칭은 현재 KRX API 명칭 변경에 대응하는 alias에 의존한다 (`5042 -> KRX 300 산업재`, `5046 -> KRX 방송통신`, `1170 -> 전기·가스`).

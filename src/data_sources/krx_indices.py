@@ -17,7 +17,8 @@ import pandas as pd
 
 from src.data_sources.krx_openapi import (
     KRXProvider,
-    fetch_index_ohlcv_openapi,
+    fetch_index_ohlcv_openapi_batch,
+    get_index_display_name,
     get_krx_openapi_key,
     get_krx_provider,
 )
@@ -312,6 +313,17 @@ def _save_raw_cache(code: str, frame: pd.DataFrame, end: str) -> None:
     frame.to_parquet(raw_file)
 
 
+def _build_sector_frame(code: str, frame: pd.DataFrame) -> pd.DataFrame:
+    """Normalize a close-history frame into the sector_prices contract shape."""
+    close_col = resolve_ohlcv_close_column(frame)
+    result = frame[[close_col]].copy()
+    result.columns = pd.Index(["close"])
+    result["index_code"] = code
+    result["index_name"] = get_index_display_name(code)
+    result["close"] = result["close"].astype(float)
+    return result[["index_code", "index_name", "close"]]
+
+
 def load_sector_prices(
     index_codes: list[str],
     start: str,
@@ -355,32 +367,45 @@ def load_sector_prices(
             "KRX provider is OPENAPI but KRX_OPENAPI_KEY is missing; falling back to cache."
         )
         failures = [(code, "KRX_OPENAPI_KEY not configured") for code in live_codes]
+    elif provider_mode == "OPENAPI":
+        try:
+            openapi_frames, openapi_failures = fetch_index_ohlcv_openapi_batch(
+                live_codes,
+                start,
+                end,
+            )
+            for code in live_codes:
+                if code in openapi_frames:
+                    df = openapi_frames[code]
+                    if df.empty:
+                        failures.append((code, "empty response"))
+                        logger.warning("Empty response for index %s", code)
+                        continue
+                    try:
+                        _save_raw_cache(code, df, end)
+                    except Exception as cache_exc:
+                        logger.warning("OpenAPI raw cache save failed for %s: %s", code, cache_exc)
+                    frames.append(_build_sector_frame(code, df))
+                    continue
+
+                reason = openapi_failures.get(code, "empty response")
+                failures.append((code, reason))
+                logger.warning("Live fetch failed for index %s (%s): %s", code, provider_mode, reason)
+        except Exception as exc:
+            for code in live_codes:
+                failures.append((code, str(exc)))
+            logger.warning("OPENAPI batch fetch failed for requested codes %s: %s", live_codes, exc)
     else:
         for code in live_codes:
             try:
-                if provider_mode == "OPENAPI":
-                    df = fetch_index_ohlcv_openapi(code, start, end)
-                else:
-                    df = fetch_index_ohlcv(code, start, end)
+                df = fetch_index_ohlcv(code, start, end)
 
                 if df.empty:
                     failures.append((code, "empty response"))
                     logger.warning("Empty response for index %s", code)
                     continue
 
-                if provider_mode == "OPENAPI":
-                    try:
-                        _save_raw_cache(code, df, end)
-                    except Exception as cache_exc:
-                        logger.warning("OpenAPI raw cache save failed for %s: %s", code, cache_exc)
-
-                close_col = resolve_ohlcv_close_column(df)
-                tmp = df[[close_col]].copy()
-                tmp.columns = pd.Index(["close"])
-                tmp["index_code"] = code
-                tmp["index_name"] = code
-                tmp["close"] = tmp["close"].astype(float)
-                frames.append(tmp[["index_code", "index_name", "close"]])
+                frames.append(_build_sector_frame(code, df))
             except Exception as exc:
                 failures.append((code, str(exc)))
                 logger.warning("Live fetch failed for index %s (%s): %s", code, provider_mode, exc)
@@ -431,13 +456,7 @@ def load_sector_prices(
             if raw_df.empty:
                 continue
             try:
-                close_col = resolve_ohlcv_close_column(raw_df)
-                tmp = raw_df[[close_col]].copy()
-                tmp.columns = pd.Index(["close"])
-                tmp["index_code"] = code
-                tmp["index_name"] = code
-                tmp["close"] = tmp["close"].astype(float)
-                raw_frames.append(tmp[["index_code", "index_name", "close"]])
+                raw_frames.append(_build_sector_frame(code, raw_df))
             except Exception as exc:
                 logger.warning("Raw cache column resolution failed for %s: %s", code, exc)
 

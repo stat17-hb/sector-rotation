@@ -32,3 +32,9 @@
 - Pattern: FX shock behavior was documented but runtime signal path still passed `fx_change_pct=0.0`, disabling the alert in practice.
 - Rule: For risk/input wiring changes, validate end-to-end propagation in integration tests (`caller -> build_signal_table -> scoring`) instead of relying only on helper unit tests.
 - Rule: Do not hardcode neutral sentinel values (`0.0`) for optional market inputs; pass computed runtime values and use `NaN` when data is unavailable.
+
+## 2026-03-02
+- Pattern: `app.py` UI 문자열이 모지바케로 저장되어 한글이 깨지고, `st.warning(..., icon=...)`에 깨진 문자열이 들어가 `invalid emoji` 예외가 발생함.
+- Rule: UI 텍스트/주석이 많은 파일은 수정 후 `python -m py_compile <file>`와 `rg "�|\\?곗|\\?꾩|\\?좏"` 같은 깨짐 패턴 점검을 최소 1회 실행한다.
+- Rule: Streamlit `icon=` 인자는 항상 단일 유효 이모지(`⚠️`, `✅` 등)만 사용하고, 일반 문자열/깨진 문자열은 절대 넣지 않는다.
+- Rule: VS Code/IDE 및 저장 설정을 UTF-8(권장: UTF-8 without BOM)으로 고정하고, 인코딩 전환 저장(CP949/EUC-KR)을 금지한다.
