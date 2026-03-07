@@ -8,12 +8,21 @@ from typing import Literal
 
 import requests
 
-PreflightStatus = Literal["OK", "TIMEOUT", "DNS_FAIL", "SOCKET_BLOCKED", "HTTP_ERROR"]
+from src.data_sources.krx_openapi import probe_krx_openapi_health
+
+PreflightStatus = Literal[
+    "OK",
+    "TIMEOUT",
+    "DNS_FAIL",
+    "SOCKET_BLOCKED",
+    "AUTH_ERROR",
+    "ACCESS_DENIED",
+    "HTTP_ERROR",
+]
 
 ENDPOINTS: dict[str, str] = {
     "ECOS": "https://ecos.bok.or.kr/api",
     "KOSIS": "https://kosis.kr/openapi",
-    "KRX": "https://data.krx.co.kr",
 }
 
 
@@ -21,8 +30,7 @@ def _classify_connection_error(exc: requests.ConnectionError) -> tuple[Preflight
     msg = str(exc)
     lowered = msg.lower()
 
-    # Windows socket-block policy errors often show WinError 10013.
-    if "10013" in lowered or "access permissions" in lowered or "액세스 권한" in msg:
+    if "10013" in lowered or "access permissions" in lowered or "?≪꽭??沅뚰븳" in msg:
         return ("SOCKET_BLOCKED", msg)
 
     dns_signals = (
@@ -47,7 +55,6 @@ def _probe_endpoint(url: str, timeout_sec: int) -> tuple[PreflightStatus, str]:
     except requests.RequestException as exc:
         return ("HTTP_ERROR", str(exc))
 
-    # 4xx from root endpoints still proves connectivity; treat as OK.
     if resp.status_code >= 500:
         return ("HTTP_ERROR", f"HTTP {resp.status_code}")
     return ("OK", f"HTTP {resp.status_code}")
@@ -65,4 +72,12 @@ def run_api_preflight(timeout_sec: int = 3) -> dict[str, dict[str, str]]:
             "url": url,
             "checked_at": checked_at,
         }
+
+    krx_health = probe_krx_openapi_health(timeout_sec=timeout_sec)
+    results["KRX"] = {
+        "status": str(krx_health.get("status", "HTTP_ERROR")),
+        "detail": str(krx_health.get("detail", "")).strip(),
+        "url": str(krx_health.get("url", "")).strip(),
+        "checked_at": str(krx_health.get("checked_at", checked_at)).strip() or checked_at,
+    }
     return results

@@ -65,7 +65,7 @@ def test_load_sector_prices_uses_positional_close_fallback(tmp_path, monkeypatch
     )
     monkeypatch.setattr(krx_mod, "fetch_index_ohlcv", lambda *args, **kwargs: ohlcv)
 
-    status, result = krx_mod.load_sector_prices(["5044"], "20240101", "20240131")
+    status, result = krx_mod.load_sector_prices(["5044"], "20240101", "20240103")
     assert status == "LIVE"
     assert result["close"].tolist() == [10.0, 11.0, 12.0]
     assert set(result["index_code"].unique()) == {"5044"}
@@ -94,7 +94,7 @@ def test_load_sector_prices_replaces_stale_codes_before_fetch(tmp_path, monkeypa
 
     monkeypatch.setattr(krx_mod, "fetch_index_ohlcv", _fake_fetch)
 
-    status, result = krx_mod.load_sector_prices(["5041", "1166"], "20240101", "20240131")
+    status, result = krx_mod.load_sector_prices(["5041", "1166"], "20240101", "20240102")
     assert status == "LIVE"
     assert calls == ["5049", "1157"]
     assert set(result["index_code"].unique()) == {"5049", "1157"}
@@ -123,7 +123,7 @@ def test_load_sector_prices_skips_unsupported_codes_before_fetch(tmp_path, monke
 
     monkeypatch.setattr(krx_mod, "fetch_index_ohlcv", _fake_fetch)
 
-    status, result = krx_mod.load_sector_prices(["5041", "9999"], "20240101", "20240131")
+    status, result = krx_mod.load_sector_prices(["5041", "9999"], "20240101", "20240102")
     assert status == "LIVE"
     assert calls == ["5049"]
     assert set(result["index_code"].unique()) == {"5049"}
@@ -165,21 +165,22 @@ def test_load_sector_prices_auto_prefers_openapi_when_key_present(tmp_path, monk
 
     calls = {"openapi": 0, "pykrx": 0}
 
-    def _fake_openapi(index_codes, start, end):
+    def _fake_openapi(index_codes, start, end, force=False):
         _ = (start, end)
         calls["openapi"] += 1
+        assert force is False
         assert index_codes == ["1001"]
-        return ({"1001": openapi_df}, {})
+        return ({"1001": openapi_df}, {}, {"failed_days": [], "snapshot_failures": {}})
 
     def _fake_pykrx(*args, **kwargs):
         _ = (args, kwargs)
         calls["pykrx"] += 1
         raise AssertionError("pykrx path should not be called when OPENAPI key exists")
 
-    monkeypatch.setattr(krx_mod, "fetch_index_ohlcv_openapi_batch", _fake_openapi)
+    monkeypatch.setattr(krx_mod, "fetch_index_ohlcv_openapi_batch_detailed", _fake_openapi)
     monkeypatch.setattr(krx_mod, "fetch_index_ohlcv", _fake_pykrx)
 
-    status, result = krx_mod.load_sector_prices(["1001"], "20240101", "20240131")
+    status, result = krx_mod.load_sector_prices(["1001"], "20240101", "20240103")
 
     assert status == "LIVE"
     assert not result.empty
@@ -233,24 +234,87 @@ def test_calendar_lookup_applies_transport_compat(monkeypatch):
     fake_pykrx.stock = _Stock
     monkeypatch.setitem(sys.modules, "pykrx", fake_pykrx)
 
-    result = calendar_mod.get_last_business_day(as_of=date(2026, 2, 22))
+    result = calendar_mod.get_last_business_day(as_of=date(2026, 2, 22), provider="PYKRX")
     assert result == date(2026, 2, 20)
 
 
-def test_calendar_weekend_fallback_unchanged_when_pykrx_fails(monkeypatch):
+def test_calendar_openapi_primary_skips_pykrx_warning(caplog, monkeypatch):
     import src.transforms.calendar as calendar_mod
 
+    caplog.set_level("WARNING")
+    monkeypatch.setattr(calendar_mod, "get_krx_provider", lambda raw=None: "OPENAPI")
+    monkeypatch.setattr(calendar_mod, "get_krx_openapi_key", lambda: "OPENAPI_KEY")
+
+    def _fake_openapi(index_code, start, end, auth_key=None, url=None, session=None):
+        _ = (index_code, start, auth_key, url, session)
+        if end == "20260220":
+            idx = pd.DatetimeIndex(["2026-02-20"])
+            return pd.DataFrame({"close": [3010.0]}, index=idx)
+        raise AssertionError("Unexpected probe date")
+
+    monkeypatch.setattr(calendar_mod, "fetch_index_ohlcv_openapi", _fake_openapi)
+
+    fake_pykrx = types.ModuleType("pykrx")
+
+    class _Stock:
+        @staticmethod
+        def get_index_ohlcv(start, end, ticker, **kwargs):
+            raise AssertionError("pykrx fallback should not run when OPENAPI probe succeeds")
+
+    fake_pykrx.stock = _Stock
+    monkeypatch.setitem(sys.modules, "pykrx", fake_pykrx)
+
+    result = calendar_mod.get_last_business_day(as_of=date(2026, 2, 22), provider="OPENAPI")
+    assert result == date(2026, 2, 20)
+    assert not any("weekend-only fallback" in rec.message for rec in caplog.records)
+
+
+def test_calendar_openapi_falls_back_to_pykrx_without_warning(caplog, monkeypatch):
+    import src.transforms.calendar as calendar_mod
+
+    caplog.set_level("WARNING")
+    monkeypatch.setattr(calendar_mod, "get_krx_provider", lambda raw=None: "OPENAPI")
+    monkeypatch.setattr(calendar_mod, "get_krx_openapi_key", lambda: "OPENAPI_KEY")
+    monkeypatch.setattr(
+        calendar_mod,
+        "fetch_index_ohlcv_openapi",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("Access Denied")),
+    )
     monkeypatch.setattr(calendar_mod, "ensure_pykrx_transport_compat", lambda: None)
 
     fake_pykrx = types.ModuleType("pykrx")
 
     class _Stock:
         @staticmethod
-        def get_index_ohlcv(start, end, ticker):
+        def get_index_ohlcv(start, end, ticker, **kwargs):
+            idx = pd.DatetimeIndex(["2026-02-19", "2026-02-20"])
+            return pd.DataFrame({"\uc885\uac00": [2990.0, 3010.0]}, index=idx)
+
+    fake_pykrx.stock = _Stock
+    monkeypatch.setitem(sys.modules, "pykrx", fake_pykrx)
+
+    result = calendar_mod.get_last_business_day(as_of=date(2026, 2, 22), provider="OPENAPI")
+    assert result == date(2026, 2, 20)
+    assert not any("weekend-only fallback" in rec.message for rec in caplog.records)
+
+
+def test_calendar_weekend_fallback_warns_once_when_all_providers_fail(caplog, monkeypatch):
+    import src.transforms.calendar as calendar_mod
+
+    caplog.set_level("WARNING")
+    monkeypatch.setattr(calendar_mod, "ensure_pykrx_transport_compat", lambda: None)
+
+    fake_pykrx = types.ModuleType("pykrx")
+
+    class _Stock:
+        @staticmethod
+        def get_index_ohlcv(start, end, ticker, **kwargs):
             raise KeyError("\uc9c0\uc218\uba85")
 
     fake_pykrx.stock = _Stock
     monkeypatch.setitem(sys.modules, "pykrx", fake_pykrx)
 
-    result = calendar_mod.get_last_business_day(as_of=date(2026, 2, 22))
+    result = calendar_mod.get_last_business_day(as_of=date(2026, 2, 22), provider="PYKRX")
     assert result == date(2026, 2, 20)
+    warnings = [rec.message for rec in caplog.records if "weekend-only fallback" in rec.message]
+    assert len(warnings) == 1

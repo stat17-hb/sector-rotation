@@ -34,7 +34,11 @@ st.set_page_config(
 
 # Local imports
 from src.ui.styles import get_table_style_tokens, inject_css
-from src.ui.data_status import is_sample_mode, get_button_states
+from src.ui.data_status import (
+    get_button_states,
+    is_sample_mode,
+    resolve_price_cache_banner_case,
+)
 from src.macro.series_utils import (
     build_enabled_ecos_config,
     build_enabled_kosis_config,
@@ -94,6 +98,14 @@ def _secrets_mtime_ns(path: str = ".streamlit/secrets.toml") -> int:
     return p.stat().st_mtime_ns
 
 
+def _load_bool_setting(name: str, default: bool) -> bool:
+    """Load a boolean feature flag from Streamlit secrets/environment."""
+    raw = _load_api_key(name)
+    if not raw:
+        return default
+    return raw.strip().lower() not in {"0", "false", "no", "off"}
+
+
 def _is_mobile_client() -> bool:
     """Best-effort mobile client detection from request user-agent."""
     try:
@@ -150,6 +162,129 @@ def _price_cache_token() -> str:
     )
 
 
+def _price_artifact_key() -> tuple:
+    """Return cache-busting key for raw/warm price artifacts."""
+    from src.data_sources.krx_indices import get_price_artifact_key
+
+    return get_price_artifact_key()
+
+
+def _all_sector_codes(benchmark_code: str) -> list[str]:
+    """Return the unique sector universe used by the dashboard."""
+    all_codes: list[str] = []
+    for regime_data in sector_map.get("regimes", {}).values():
+        for s in regime_data.get("sectors", []):
+            code = str(s["code"])
+            if code not in all_codes:
+                all_codes.append(code)
+    if benchmark_code and str(benchmark_code) not in all_codes:
+        all_codes.append(str(benchmark_code))
+    return all_codes
+
+
+def _resolve_market_end_date(benchmark_code: str) -> date:
+    """Resolve the market end date once per app run."""
+    from src.transforms.calendar import get_last_business_day
+
+    return get_last_business_day(
+        provider=_krx_provider_effective(),
+        benchmark_code=benchmark_code,
+    )
+
+
+def _maybe_schedule_startup_krx_warm(
+    benchmark_code: str,
+    price_years: int,
+    end_date: date,
+) -> None:
+    """Schedule a non-blocking warm job so first interactive load can stay cached."""
+    if not _load_bool_setting("KRX_WARM_ON_STARTUP", True):
+        return
+    if _krx_provider_effective() == "OPENAPI":
+        return
+
+
+def _market_range_strings(end_date_str: str, price_years: int) -> tuple[str, str]:
+    """Return the dashboard market-data lookback window."""
+    end_date = pd.Timestamp(end_date_str).date()
+    start_date = end_date - timedelta(days=365 * price_years)
+    return start_date.strftime("%Y%m%d"), end_date.strftime("%Y%m%d")
+
+
+def _format_yyyymmdd(value: str) -> str:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if len(digits) != 8:
+        return ""
+    return f"{digits[:4]}-{digits[4:6]}-{digits[6:]}"
+
+
+def _market_cache_label(warm_status: dict[str, object], cache_path: str) -> str:
+    """Return a user-facing cache label preferring the actual warm coverage date."""
+    warm_end = _format_yyyymmdd(str(warm_status.get("end", "")))
+    if warm_end:
+        return f"market data ({warm_end})"
+
+    cache_file = Path(cache_path)
+    if cache_file.exists():
+        import datetime as _dt
+
+        mtime = _dt.datetime.fromtimestamp(cache_file.stat().st_mtime).strftime("%Y-%m-%d")
+        return f"market data ({mtime})"
+
+    return "market data"
+
+
+def _build_market_refresh_notice(summary: dict[str, object]) -> tuple[str, str]:
+    """Map manual refresh summary into a user-facing flash message."""
+    status = str(summary.get("status", "")).strip().upper()
+    coverage_complete = bool(summary.get("coverage_complete"))
+    delta_codes = list(summary.get("delta_codes", []))
+    failed_days = list(summary.get("failed_days", []))
+    failed_codes = dict(summary.get("failed_codes") or {})
+
+    if status == "LIVE" and delta_codes:
+        return (
+            "success",
+            f"Market data refresh completed via OpenAPI ({len(delta_codes)} codes updated).",
+        )
+    if coverage_complete and not delta_codes:
+        return ("info", "Market data already current; latest KRX raw cache is in use.")
+    if failed_days or failed_codes:
+        return (
+            "warning",
+            "Market data refresh fell back to cache after an incomplete OpenAPI warm. "
+            "Retry later or continue with cache.",
+        )
+    if status == "CACHED":
+        return ("warning", "Market data refresh fell back to cache.")
+    return ("error", "Market data refresh did not complete successfully.")
+
+
+def _openapi_cache_fallback_note(warm_status: dict[str, object]) -> str:
+    """Return a short reason string for retryable OpenAPI cache fallback."""
+    failed_days = [str(day) for day in warm_status.get("failed_days", []) if str(day).strip()]
+    failed_codes = {
+        str(code).strip(): str(detail).strip()
+        for code, detail in dict(warm_status.get("failed_codes") or {}).items()
+        if str(code).strip() and str(detail).strip()
+    }
+
+    if failed_days:
+        preview = ", ".join(failed_days[:3])
+        suffix = "" if len(failed_days) <= 3 else ", ..."
+        return f"Latest OpenAPI warm was incomplete (failed days: {preview}{suffix})."
+    if failed_codes:
+        preview = ", ".join(sorted(failed_codes)[:3])
+        suffix = "" if len(failed_codes) <= 3 else ", ..."
+        return f"Latest OpenAPI warm failed for codes: {preview}{suffix}."
+
+    warm_state = str(warm_status.get("status", "")).strip().upper()
+    if warm_state:
+        return f"Latest OpenAPI warm did not confirm current coverage (status={warm_state})."
+
+    return "Latest OpenAPI warm did not confirm current coverage."
+
+
 @st.cache_data(ttl=600)
 def _cached_api_preflight(timeout_sec: int = 3) -> dict:
     """Cached API endpoint reachability check (10 min TTL)."""
@@ -163,30 +298,18 @@ def _cached_api_preflight(timeout_sec: int = 3) -> dict:
 
 @st.cache_data(ttl=CACHE_TTL)
 def _cached_sector_prices(
-    asof_date_str: str,
+    end_date_str: str,
     benchmark_code: str,
     price_years: int,
     price_cache_token: str,
+    price_artifact_key: tuple,
 ):
     """Fetch or load sector prices. Includes KRX provider/key cache token."""
-    _ = price_cache_token  # explicit cache key input for provider/key invalidation
+    _ = (price_cache_token, price_artifact_key)
     from src.data_sources.krx_indices import load_sector_prices
-    from src.transforms.calendar import get_last_business_day
 
-    # Gather all sector codes from map
-    all_codes: list[str] = []
-    for regime_data in sector_map.get("regimes", {}).values():
-        for s in regime_data.get("sectors", []):
-            code = str(s["code"])
-            if code not in all_codes:
-                all_codes.append(code)
-    if benchmark_code and str(benchmark_code) not in all_codes:
-        all_codes.append(str(benchmark_code))
-
-    end_date = get_last_business_day()
-    start_date = end_date - timedelta(days=365 * price_years)
-    start_str = start_date.strftime("%Y%m%d")
-    end_str = end_date.strftime("%Y%m%d")
+    all_codes = _all_sector_codes(benchmark_code)
+    start_str, end_str = _market_range_strings(end_date_str, price_years)
 
     status, df = load_sector_prices(all_codes, start_str, end_str)
     return status, df
@@ -235,23 +358,36 @@ def _cached_macro(macro_cache_token: str):
 
 @st.cache_data(ttl=CACHE_TTL)
 def _cached_signals(
+    market_end_date_str: str,
     prices_key: tuple,
     macro_key: tuple,
     params_hash: str,
     macro_cache_token: str,
     price_cache_token: str,
+    price_artifact_key: tuple,
 ):
     """Compute signals. Keyed by parquet file metadata + params hash."""
     from src.macro.regime import compute_regime_history
+    from src.data_sources.krx_indices import (
+        KRXInteractiveRangeLimitError,
+        KRXMarketDataAccessDeniedError,
+    )
     from src.signals.matrix import build_signal_table
 
     price_years = int(st.session_state.get("price_years", settings.get("price_years", 3)))
-    price_status, sector_prices = _cached_sector_prices(
-        st.session_state.get("asof_date_str", date.today().strftime("%Y%m%d")),
-        str(settings.get("benchmark_code", "1001")),
-        price_years,
-        price_cache_token,
-    )
+    market_blocking_error = ""
+    try:
+        price_status, sector_prices = _cached_sector_prices(
+            market_end_date_str,
+            str(settings.get("benchmark_code", "1001")),
+            price_years,
+            price_cache_token,
+            price_artifact_key,
+        )
+    except (KRXInteractiveRangeLimitError, KRXMarketDataAccessDeniedError) as exc:
+        price_status = "BLOCKED"
+        sector_prices = pd.DataFrame()
+        market_blocking_error = str(exc)
     macro_status, macro_df = _cached_macro(macro_cache_token)
 
     # Benchmark prices from sector_prices (benchmark_code row)
@@ -355,16 +491,19 @@ def _cached_signals(
             if not (pd.isna(prev_fx) or pd.isna(curr_fx)) and prev_fx != 0:
                 fx_change_pct = float((curr_fx / prev_fx - 1) * 100)
 
-    signals = build_signal_table(
-        sector_prices=sector_prices,
-        benchmark_prices=bench_series,
-        macro_result=macro_result,
-        sector_map=sector_map,
-        settings=runtime_settings,
-        fx_change_pct=fx_change_pct,
-    )
+    if price_status == "BLOCKED":
+        signals = []
+    else:
+        signals = build_signal_table(
+            sector_prices=sector_prices,
+            benchmark_prices=bench_series,
+            macro_result=macro_result,
+            sector_map=sector_map,
+            settings=runtime_settings,
+            fx_change_pct=fx_change_pct,
+        )
 
-    return signals, macro_result, price_status, macro_status
+    return signals, macro_result, price_status, macro_status, market_blocking_error
 
 
 # Session state defaults
@@ -580,14 +719,35 @@ rs_ma_period = int(st.session_state.get("rs_ma_period", settings.get("rs_ma_peri
 ma_fast = int(st.session_state.get("ma_fast", settings.get("ma_fast", 20)))
 ma_slow = int(st.session_state.get("ma_slow", settings.get("ma_slow", 60)))
 price_years = int(st.session_state.get("price_years", settings.get("price_years", 3)))
+benchmark_code = str(settings.get("benchmark_code", "1001"))
+market_end_date = _resolve_market_end_date(benchmark_code)
+market_end_date_str = market_end_date.strftime("%Y%m%d")
+
+_maybe_schedule_startup_krx_warm(benchmark_code, price_years, market_end_date)
 
 
 # Button handlers, each clears only its own cache (R8)
 
+market_refresh_notice: tuple[str, str] | None = None
+
 if refresh_market:
-    Path(prices_parquet).unlink(missing_ok=True)
-    _cached_sector_prices.clear()
-    st.rerun()
+    from src.data_sources.krx_indices import run_manual_price_refresh
+
+    refresh_start_str, refresh_end_str = _market_range_strings(market_end_date_str, price_years)
+    try:
+        _cached_api_preflight.clear()
+        with st.spinner("Refreshing market data..."):
+            (_, _), refresh_summary = run_manual_price_refresh(
+                _all_sector_codes(benchmark_code),
+                refresh_start_str,
+                refresh_end_str,
+            )
+        _cached_sector_prices.clear()
+        _cached_signals.clear()
+        market_refresh_notice = _build_market_refresh_notice(refresh_summary)
+    except Exception as exc:
+        logger.exception("Manual market refresh failed")
+        market_refresh_notice = ("error", f"Market data refresh failed: {exc}")
 
 if refresh_macro:
     Path(macro_parquet).unlink(missing_ok=True)
@@ -605,7 +765,7 @@ if recompute:
 
 with st.spinner("데이터 로딩 중..."):
     try:
-        prices_key = _parquet_key(prices_parquet)
+        prices_key = _price_artifact_key()
         macro_key = _parquet_key(macro_parquet)
         params = {
             "epsilon": float(st.session_state["epsilon"]),
@@ -616,12 +776,14 @@ with st.spinner("데이터 로딩 중..."):
         }
         params_hash = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()[:8]
 
-        signals, macro_result, price_status, macro_status = _cached_signals(
+        signals, macro_result, price_status, macro_status, market_blocking_error = _cached_signals(
+            market_end_date_str,
             prices_key,
             macro_key,
             params_hash,
             macro_cache_token,
             price_cache_token,
+            prices_key,
         )
 
         data_status = {"price": price_status, "macro": macro_status}
@@ -639,7 +801,23 @@ with st.spinner("데이터 로딩 중..."):
         )
         price_status = "SAMPLE"
         macro_status = "SAMPLE"
+        market_blocking_error = ""
         data_status = {"price": price_status, "macro": macro_status}
+
+
+price_warm_status: dict[str, object] = {}
+price_cache_case = None
+if price_status == "CACHED":
+    from src.data_sources.krx_indices import read_warm_status
+
+    price_warm_status = read_warm_status()
+    price_cache_case = resolve_price_cache_banner_case(
+        price_status=price_status,
+        provider_mode=krx_provider_effective,
+        openapi_key_present=krx_openapi_key_present,
+        market_end_date_str=market_end_date_str,
+        warm_status=price_warm_status,
+    )
 
 
 # SAMPLE mode warning (R9)
@@ -668,20 +846,132 @@ if preflight_issues:
 else:
     st.caption("API preflight: ECOS/KOSIS/KRX endpoints reachable.")
 
-if krx_provider_configured == "OPENAPI" and not krx_openapi_key_present:
+openapi_missing_key_warning_shown = (
+    krx_provider_configured == "OPENAPI" and not krx_openapi_key_present
+)
+if False and openapi_missing_key_warning_shown:
     st.warning(
         "KRX_PROVIDER is set to OPENAPI but KRX_OPENAPI_KEY is not configured. "
         "Market data will fall back to cache/SAMPLE until the key is provided.",
         icon="⚠️",
     )
 
+if False and openapi_missing_key_warning_shown:
+    st.warning(
+        "KRX_PROVIDER is set to OPENAPI but KRX_OPENAPI_KEY is not configured. "
+        "Market data will fall back to cache/SAMPLE until the key is provided.",
+        icon="⚠️",
+    )
+
+if False and market_refresh_notice:
+    notice_level, notice_message = market_refresh_notice
+    if notice_level == "success":
+        st.success(notice_message, icon="✅")
+    elif notice_level == "info":
+        st.info(notice_message, icon="ℹ️")
+    elif notice_level == "warning":
+        st.warning(notice_message, icon="⚠️")
+    else:
+        st.error(notice_message, icon="⚠️")
+
+if openapi_missing_key_warning_shown:
+    st.warning(
+        "KRX_PROVIDER is set to OPENAPI but KRX_OPENAPI_KEY is not configured. "
+        "Market data will fall back to cache/SAMPLE until the key is provided."
+    )
+
+if market_refresh_notice:
+    notice_level, notice_message = market_refresh_notice
+    if notice_level == "success":
+        st.success(notice_message)
+    elif notice_level == "info":
+        st.info(notice_message)
+    elif notice_level == "warning":
+        st.warning(notice_message)
+    else:
+        st.error(notice_message)
+
+if price_status == "BLOCKED" and market_blocking_error:
+    st.error(
+        "Market data refresh is blocked. "
+        f"{market_blocking_error}"
+    )
+
 if is_sample_mode(data_status):
+    st.error(
+        "SAMPLE data mode: live market data could not be loaded. "
+        "Check API settings or provider availability, then retry refresh."
+    )
+
+if False and is_sample_mode(data_status):
     st.error(
         "⚠️ **SAMPLE 데이터 모드**: 실제 시장 데이터를 불러오지 못해 합성 데이터를 표시합니다. "
         "API 설정 또는 네트워크 상태를 확인한 뒤 새로고침을 시도하세요.",
         icon="⚠️",
     )
-elif price_status == "CACHED" or macro_status == "CACHED":
+
+if not is_sample_mode(data_status):
+    if price_status == "CACHED":
+        price_cache_label = _market_cache_label(price_warm_status, prices_parquet)
+        if price_cache_case == "fresh_cache":
+            st.info(f"Using latest KRX raw cache for {price_cache_label}.")
+        elif price_cache_case == "retryable_cache_fallback":
+            st.warning(
+                f"Using cache for {price_cache_label}. "
+                f"{_openapi_cache_fallback_note(price_warm_status)} "
+                "Use the refresh button to retry or continue with cache."
+            )
+        elif price_cache_case == "pykrx_cache_fallback":
+            st.warning(
+                "Using cached market data. pykrx path may require authenticated "
+                "KRX sessions (pykrx#276). Set KRX_PROVIDER=OPENAPI with "
+                "KRX_OPENAPI_KEY for a more stable live path."
+            )
+        elif price_cache_case == "missing_openapi_key" and not openapi_missing_key_warning_shown:
+            st.warning(
+                "Using cached market data because KRX_OPENAPI_KEY is not configured "
+                "for OPENAPI mode."
+            )
+
+    if macro_status == "CACHED":
+        st.warning("Using cached macro data. Use the refresh button to retry or continue with cache.")
+
+if False and not is_sample_mode(data_status):
+    if price_status == "CACHED":
+        price_cache_label = _market_cache_label(price_warm_status, prices_parquet)
+        if price_cache_case == "fresh_cache":
+            st.info(
+                f"Using latest KRX raw cache for {price_cache_label}.",
+                icon="ℹ️",
+            )
+        elif price_cache_case == "retryable_cache_fallback":
+            st.warning(
+                f"Using cache for {price_cache_label}. "
+                f"{_openapi_cache_fallback_note(price_warm_status)} "
+                "Use the refresh button to retry or continue with cache.",
+                icon="⚠️",
+            )
+        elif price_cache_case == "pykrx_cache_fallback":
+            st.warning(
+                "Using cached market data. pykrx path may require authenticated "
+                "KRX sessions (pykrx#276). Set KRX_PROVIDER=OPENAPI with "
+                "KRX_OPENAPI_KEY for a more stable live path.",
+                icon="⚠️",
+            )
+        elif price_cache_case == "missing_openapi_key" and not openapi_missing_key_warning_shown:
+            st.warning(
+                "Using cached market data because KRX_OPENAPI_KEY is not configured "
+                "for OPENAPI mode.",
+                icon="⚠️",
+            )
+
+    if macro_status == "CACHED":
+        st.warning(
+            "Using cached macro data. Use the refresh button to retry or continue with cache.",
+            icon="⚠️",
+        )
+
+if False and (price_status == "CACHED" or macro_status == "CACHED"):
     _cache_parts = []
     if price_status == "CACHED":
         _p = Path(prices_parquet)

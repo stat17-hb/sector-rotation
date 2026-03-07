@@ -1,0 +1,31 @@
+{
+  "abort_reason": "",
+  "aborted": false,
+  "cache_hits": 1,
+  "contaminated_codes": [],
+  "coverage_complete": false,
+  "delta_codes": [],
+  "duration_sec": 0.01,
+  "end": "20240101",
+  "failed_codes": {
+    "5044": "mock network error"
+  },
+  "failed_days": [],
+  "loaded_codes": [
+    "5044"
+  ],
+  "predicted_requests": 0,
+  "processed_requests": 0,
+  "provider": "PYKRX",
+  "ranges": [],
+  "reason": "blocking_refresh",
+  "replacements": [],
+  "requested_codes": [
+    "5044"
+  ],
+  "rows": 60,
+  "skipped_codes": [],
+  "start": "20230101",
+  "status": "CACHED",
+  "unavailable_contaminated_codes": []
+}

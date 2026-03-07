@@ -1,0 +1,74 @@
+{
+  "codes": {
+    "1001": {
+      "alias_history": [],
+      "last_synced_at": "2026-03-07T05:26:11Z",
+      "official_name": "코스피"
+    },
+    "1155": {
+      "alias_history": [
+        "코스피 200"
+      ],
+      "last_synced_at": "2026-03-07T04:37:57Z",
+      "official_name": "코스피 200 정보기술"
+    },
+    "1157": {
+      "alias_history": [
+        "코스피 200"
+      ],
+      "last_synced_at": "2026-03-07T04:37:57Z",
+      "official_name": "코스피 200 생활소비재"
+    },
+    "1165": {
+      "alias_history": [
+        "코스피 200"
+      ],
+      "last_synced_at": "2026-03-07T04:37:57Z",
+      "official_name": "코스피 200 경기소비재"
+    },
+    "1168": {
+      "alias_history": [
+        "코스피 200"
+      ],
+      "last_synced_at": "2026-03-07T04:37:57Z",
+      "official_name": "코스피 200 금융"
+    },
+    "1170": {
+      "alias_history": [],
+      "last_synced_at": "2026-03-07T04:37:57Z",
+      "official_name": "전기·가스"
+    },
+    "5042": {
+      "alias_history": [],
+      "last_synced_at": "2026-03-07T04:36:31Z",
+      "official_name": "KRX 300 산업재"
+    },
+    "5044": {
+      "alias_history": [],
+      "last_synced_at": "2026-03-07T04:36:31Z",
+      "official_name": "KRX 반도체"
+    },
+    "5045": {
+      "alias_history": [],
+      "last_synced_at": "2026-03-07T04:36:31Z",
+      "official_name": "KRX 헬스케어"
+    },
+    "5046": {
+      "alias_history": [],
+      "last_synced_at": "2026-03-07T04:36:31Z",
+      "official_name": "KRX 방송통신"
+    },
+    "5048": {
+      "alias_history": [],
+      "last_synced_at": "2026-03-07T04:36:31Z",
+      "official_name": "KRX 에너지화학"
+    },
+    "5049": {
+      "alias_history": [],
+      "last_synced_at": "2026-03-07T04:36:31Z",
+      "official_name": "KRX 철강"
+    }
+  },
+  "schema_version": 1,
+  "updated_at": "2026-03-07T05:26:11Z"
+}

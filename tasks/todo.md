@@ -1453,3 +1453,197 @@ Review:
 - Residual risks / follow-ups:
 - 첫 3년 OPENAPI 백필은 현재 환경에서 약 `163초`가 걸렸다. Streamlit 캐시/로컬 raw cache로 반복 비용은 줄지만, 최초 cold start 성능 개선 여지는 남아 있다.
 - 일부 코드 매칭은 현재 KRX API 명칭 변경에 대응하는 alias에 의존한다 (`5042 -> KRX 300 산업재`, `5046 -> KRX 방송통신`, `1170 -> 전기·가스`).
+
+## 40) KRX OpenAPI 잔여 리스크 해소 (2026-03-06)
+
+Pre-Implementation Check-in:
+- 2026-03-06: 승인된 계획에 따라 cold-start backfill 지연과 KRX index alias 의존을 동시에 해소한다.
+- Scope: raw-cache-first 증분 로딩, OpenAPI 전역 병렬화/세션 재사용, metadata sync 기반 alias 해석, warm/audit CLI, startup warm 연동, 관련 회귀 테스트 추가.
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 체크리스트를 작성한다.
+- [x] KRX OpenAPI metadata sync/cache 계층과 alias fallback 우선순위(`official -> synced history -> emergency static`)를 구현한다.
+- [x] OpenAPI snapshot batch를 전 family 전역 executor + session reuse 기반으로 재구성하고 worker 수를 설정화한다.
+- [x] `load_sector_prices()`를 raw-cache-first 증분 refresh 구조로 바꾸고 기존 `LIVE -> CACHED -> SAMPLE` 계약을 유지한다.
+- [x] warm 상태/성능 로그를 추가하고, startup warm 옵션과 운영용 warm/audit 스크립트를 구현한다.
+- [x] 단위/통합 테스트를 업데이트해 cache-first 반환, delta refresh, metadata fallback, alias audit 경로를 고정한다.
+- [x] Review 섹션에 실행 명령, 결과, 남은 리스크를 기록한다.
+
+Verification Gates:
+- [x] `python -m py_compile app.py src/data_sources/krx_openapi.py src/data_sources/krx_indices.py scripts/warm_krx_cache.py scripts/audit_krx_aliases.py`
+- [x] `python -m pytest -q tests/test_krx_openapi.py tests/test_integration.py tests/test_krx_pykrx_compat_paths.py`
+- [x] `python -m pytest -q tests`
+- [x] `python scripts/audit_krx_aliases.py --date 20240131`
+- [x] `python scripts/warm_krx_cache.py --years 3 --as-of 20260305`
+
+Review:
+- Commands run:
+- `python -m py_compile app.py src/data_sources/krx_openapi.py src/data_sources/krx_indices.py scripts/warm_krx_cache.py scripts/audit_krx_aliases.py tests/test_krx_openapi.py tests/test_integration.py`
+- `python -m pytest -q tests/test_krx_openapi.py tests/test_integration.py tests/test_krx_pykrx_compat_paths.py`
+- `python -m pytest -q tests`
+- `python scripts/audit_krx_aliases.py --date 20240131`
+- `python scripts/warm_krx_cache.py --years 3 --as-of 20260305`
+- `python scripts/warm_krx_cache.py --years 3 --as-of 20260305 --force` (중도 중단)
+- `python -c "from src.data_sources.krx_indices import load_sector_prices; ..."`
+- Results:
+- `krx_openapi.py` now persists `data/raw/krx/index_name_metadata.json`, updates official names from observed snapshot matches, and filters overbroad aliases like bare `KOSPI 200` so sector codes no longer silently bind to generic benchmark rows.
+- `krx_indices.py` now exposes raw-cache-first loading, incremental delta refresh, background warm scheduling, warm-status artifact tracking, and cache-aware `CACHED` fallback when OpenAPI delta refresh fails.
+- `app.py` now schedules startup warm when `KRX_WARM_ON_STARTUP` is enabled and invalidates price caches on raw/warm artifact changes instead of only curated parquet mtime.
+- New operational commands: `scripts/warm_krx_cache.py`, `scripts/audit_krx_aliases.py`.
+- Targeted KRX tests: `34 passed in 3.10s`.
+- Full suite: `105 passed in 5.24s`.
+- Alias audit succeeded once for all 12 configured codes on `2024-01-31` (`matched=12`, `unmatched=0`), and rewrote metadata to current official names for `5042`, `5046`, `1170`, plus KOSPI200 sector codes.
+- Incremental warm on existing cache succeeded once with `status=LIVE`, `rows=8760`, `duration_sec=1.287`, and only the missing `20230306~20230306` range was fetched.
+- Later reruns of both audit/warm hit transient KRX `Access Denied` HTML responses from `data-dbg.krx.co.kr`; under that failure mode the loader now stays `CACHED` instead of misreporting `LIVE`.
+- App-default loader smoke (`20230306~20260305`) returned `status=CACHED`, `rows=8748`, `12` codes after OpenAPI delta refresh was denied, confirming cache-first behavior on the user path.
+- Residual risks / follow-ups:
+- The `90초 이하` full-force warm target was not proven. `scripts/warm_krx_cache.py --force` exceeded the local 244s command timeout and was terminated, so remaining cold-path performance is still gated by external KRX endpoint behavior.
+- KRX OpenAPI occasionally returns `Access Denied` HTML for otherwise valid requests. This patch hardens fallback/reporting but does not remove that upstream instability.
+
+## 41) KRX warm/log 잔여 이슈 수정 (2026-03-06)
+
+Pre-Implementation Check-in:
+- 2026-03-06: 승인된 계획에 따라 Streamlit startup 경고 소음을 줄이고, OpenAPI force warm partial-failure 내구성을 높인다.
+- Scope: provider-aware calendar, app end-date 단일 계산, deprecated `KRX_OPENAPI_URL` 무시/1회 경고, OpenAPI snapshot partial failure 수집, force warm coverage reporting, 관련 회귀 테스트 추가.
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 체크리스트를 작성한다.
+- [x] `get_last_business_day()`를 provider-aware로 바꾸고, OPENAPI 모드에서는 benchmark snapshot probe를 우선 사용한다.
+- [x] `app.py`에서 KRX end date를 한 번만 계산해 startup warm와 blocking load가 재사용하도록 정리한다.
+- [x] `KRX_OPENAPI_URL` 설정을 deprecated로 처리해 코드에서 무시하고, stale override가 있어도 프로세스당 1회만 경고한다.
+- [x] OpenAPI batch fetch가 `(family, basDd)` 단위 실패를 수집하면서 성공 snapshot 결과는 계속 사용하도록 바꾼다.
+- [x] `Access Denied` HTML 응답을 throttle 오류로 분류하고 긴 backoff 대신 짧은 1회 재시도 후 실패일로 집계한다.
+- [x] force warm summary에 `failed_days`, `coverage_complete`를 추가하고 incomplete fetch는 `CACHED`로 보고한다.
+- [x] 로컬 `.streamlit/secrets.toml`에서 stale `KRX_OPENAPI_URL`을 제거한다.
+- [x] 회귀 테스트/검증 명령을 실행하고 Review 섹션에 결과를 기록한다.
+
+Verification Gates:
+- [x] `python -m py_compile app.py src/transforms/calendar.py src/data_sources/krx_openapi.py src/data_sources/krx_indices.py tests/test_krx_openapi.py tests/test_krx_pykrx_compat_paths.py tests/test_integration.py`
+- [x] `python -m pytest -q tests/test_krx_openapi.py tests/test_krx_pykrx_compat_paths.py tests/test_integration.py`
+- [x] `python -m pytest -q tests`
+- [x] `python scripts/warm_krx_cache.py --years 3 --as-of 20260305`
+
+Review:
+- Commands run:
+- `python -m py_compile app.py src/transforms/calendar.py src/data_sources/krx_openapi.py src/data_sources/krx_indices.py tests/test_krx_openapi.py tests/test_krx_pykrx_compat_paths.py tests/test_integration.py`
+- `python -m pytest -q tests/test_krx_openapi.py tests/test_krx_pykrx_compat_paths.py tests/test_integration.py`
+- `python -m pytest -q tests`
+- `python scripts/warm_krx_cache.py --years 3 --as-of 20260305`
+- Results:
+- `calendar.py` now resolves provider-aware market dates: `OPENAPI + key` probes recent benchmark snapshots first, pykrx is secondary, and weekend fallback warns only when both fail.
+- `app.py` now computes the KRX `end_date` once per run and reuses it for startup warm and blocking price loads; `rg` shows a single `get_last_business_day(...)` callsite in the app flow.
+- `krx_openapi.py` now ignores deprecated `KRX_OPENAPI_URL` overrides with a once-per-process warning, classifies `Access Denied` HTML as throttle, retries it once, and keeps per-day snapshot failures in batch details instead of aborting the whole batch.
+- `krx_indices.py` now reports `failed_days` and `coverage_complete`, downgrades incomplete warm results to `CACHED`, and avoids overwriting curated cache with incomplete fetch coverage.
+- Local `.streamlit/secrets.toml` no longer carries the stale `KRX_OPENAPI_URL` override.
+- Targeted regression tests: `40 passed in 5.05s`.
+- Full suite: `111 passed in 6.80s`.
+- Warm CLI smoke (`20230306~20260305`): `status=LIVE`, `rows=8760`, `coverage_complete=true`, `failed_days=[]`, `duration_sec=1.365`.
+- Residual risks / follow-ups:
+- Public `data-dbg.krx.co.kr` volatility still exists. The code now degrades to partial-day accounting instead of batch collapse, but upstream `Access Denied` spikes can still prevent a cold full-force warm from proving the old `90초 이하` goal.
+
+## 42) KRX false cache warning 제거 및 수동 갱신 정렬 (2026-03-07)
+
+Pre-Implementation Check-in:
+- 2026-03-07: 사용자가 `캐시 데이터를 사용 중 ... KRX OpenAPI live fetch failed` 경고의 원인 파악 후 해결 구현을 요청.
+- Scope: warm-status 읽기 API 추가, cached-price 배너 해석 분리, 수동 시장데이터 갱신을 실제 incremental warm로 변경, 관련 테스트 보강.
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 체크리스트를 작성한다.
+- [x] `krx_indices.py`에 UI용 read-only warm status loader를 추가한다.
+- [x] `data_status.py`에 cached price 배너 해석용 순수 resolver를 추가한다.
+- [x] `app.py`에서 OPENAPI+CACHED 경고를 warm status 기반으로 분기하고 false failure 문구를 제거한다.
+- [x] `app.py`의 `시장데이터 갱신` 버튼을 `warm_sector_price_cache(..., reason="manual_refresh", force=False)` 기반으로 바꾼다.
+- [x] `tests/test_data_status.py`, `tests/test_integration.py`를 업데이트해 false warning 제거와 수동 갱신 경로를 고정한다.
+- [x] 검증 명령을 실행하고 Review 섹션에 결과를 기록한다.
+
+Verification Gates:
+- [x] `python -m py_compile app.py src/data_sources/krx_indices.py src/ui/data_status.py tests/test_data_status.py tests/test_integration.py`
+- [x] `python -m pytest -q tests/test_data_status.py tests/test_integration.py`
+- [x] `python -c "from src.data_sources.krx_openapi import fetch_index_ohlcv_openapi; ..."`
+- [x] `python -c "from src.data_sources.krx_indices import load_sector_prices; ..."`
+
+Review:
+- Commands run:
+- `python -m py_compile app.py src/data_sources/krx_indices.py src/ui/data_status.py tests/test_data_status.py tests/test_integration.py`
+- `python -m pytest -q tests/test_data_status.py tests/test_integration.py`
+- `python -c "from src.data_sources.krx_openapi import fetch_index_ohlcv_openapi; df=fetch_index_ohlcv_openapi('1001','20260305','20260306'); ..."`
+- `python -c "from src.data_sources.krx_indices import load_sector_prices, read_warm_status; ..."`
+- Results:
+- `krx_indices.py` now exposes `read_warm_status()` for sanitized UI diagnostics and `run_manual_price_refresh()` for the app's manual incremental warm path.
+- `data_status.py` now resolves cached market-price banners into `fresh_cache`, `retryable_cache_fallback`, `missing_openapi_key`, `pykrx_cache_fallback`.
+- `app.py` now treats `OPENAPI + CACHED + warm_status=LIVE/current_end` as fresh cache info instead of a false live-fetch-failed warning, and the market refresh button now executes manual incremental warm instead of only deleting parquet.
+- Targeted verification: `25 passed in 3.38s`.
+- OpenAPI smoke for KOSPI `1001`, `2026-03-05~2026-03-06`: `rows=2`, range `2026-03-05`~`2026-03-06`.
+- Loader smoke for app-default 12-code range `2023-03-07~2026-03-06`: `status=CACHED`, `rows=8760`, `codes=12`, `max=2026-03-06`, while warm status reported `status=LIVE`, `end=20260306`, `coverage_complete=True`, `failed_days=[]`.
+- Final judgement: false warning root cause fixed. The loader still intentionally returns `CACHED` for complete raw-cache hits, but the UI now distinguishes fresh raw cache from actual OpenAPI fallback/failure.
+
+## 43) 대시보드 섹터 수익률 정합성 복구 (2026-03-07)
+
+Pre-Implementation Check-in:
+- 2026-03-07: 사용자 보고에 따라 정보기술(`1155`), 경기소비재(`1165`) 기간 수익률이 비정상적으로 높게 보이는 문제를 raw cache 오염 기준으로 복구한다.
+- Scope: raw-cache integrity audit 추가, contaminated code 강제 재수집/격리, partial failure 시 `N/A` degrade, 관련 회귀 테스트 추가.
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 체크리스트를 작성한다.
+- [x] `src/data_sources/krx_indices.py`에 trailing 60 영업일 exact-match 기반 raw cache contamination detector를 추가한다.
+- [x] `load_sector_prices()` raw-cache fast path 전에 contamination을 점검하고 contaminated code가 있으면 cache-only 경로를 우회한다.
+- [x] `warm_sector_price_cache()`에서 contaminated code만 full-range 강제 재수집하고, incomplete refresh 시 해당 code를 결과/curated fallback에서 제외한다.
+- [x] curated/raw fallback이 contaminated code를 다시 주워오지 않도록 필터링한다.
+- [x] `tests/test_integration.py`에 detector 오탐 방지, contaminated cache 강제 refresh, incomplete refresh -> `N/A` 회귀를 추가한다.
+- [x] 검증 명령을 실행하고 Review 섹션에 결과를 기록한다.
+
+Verification Gates:
+- [x] `python -m py_compile src/data_sources/krx_indices.py tests/test_integration.py`
+- [x] `pytest -q tests/test_integration.py -k "contaminated or force_refreshes or drops_contaminated or prefers_complete_raw_cache_before_openapi or openapi_provider_live_success"`
+- [x] `pytest -q tests/test_integration.py tests/test_krx_pykrx_compat_paths.py`
+- [x] `pytest -q tests/test_data_status.py`
+
+Review:
+- Commands run:
+- `python -m py_compile src/data_sources/krx_indices.py tests/test_integration.py`
+- `pytest -q tests/test_integration.py -k "contaminated or force_refreshes or drops_contaminated or prefers_complete_raw_cache_before_openapi or openapi_provider_live_success"`
+- `pytest -q tests/test_integration.py tests/test_krx_pykrx_compat_paths.py`
+- `pytest -q tests/test_data_status.py`
+- Results:
+- `krx_indices.py` now detects raw cache contamination when two or more codes share the exact trailing 60-business-day close series, forces only those codes through full-range live rebuild, and removes them from partial/incomplete fallback results instead of reusing corrupted cache.
+- `load_sector_prices()` no longer returns raw-cache fast-path results when contaminated codes are present; `warm_sector_price_cache()` now isolates contaminated codes from curated fallback if rebuild coverage is incomplete.
+- Added regressions in `tests/test_integration.py` for: `1170` false-positive avoidance, contaminated KOSPI200 cache forced refresh, and incomplete contaminated refresh producing downstream `N/A`.
+- Verification: focused contaminated-cache regression `5 passed`, broader loader/path suite `31 passed`, data-status suite `8 passed`.
+- Residual risks / follow-ups:
+- 실환경 KRX OpenAPI는 간헐적으로 `Access Denied`를 반환하므로, 이번 검증은 `tmp_path + monkeypatch` 기반 loader smoke로 고정했다. 실제 운영 데이터는 다음 대시보드 로드/수동 refresh 시 새 detector가 오염 cache를 차단한다.
+- 현재 작업 트리에 `data/curated/sector_prices.parquet` 삭제 등 사용자/사전 작업 흔적이 있으므로, 이번 구현은 tracked market data를 임의로 복구하지 않고 코드 경로와 회귀 테스트만 고정했다.
+
+## 44) KRX OpenAPI Access Denied fail-fast 경로 구현 (2026-03-07)
+
+Pre-Implementation Check-in:
+- 2026-03-07: 사용자가 Streamlit 실행 중 `data-dbg.krx.co.kr` HTML `Access Denied` 경고 폭주를 보고했고, 기존 합의한 대응 계획의 실제 구현을 요청.
+- Scope: OpenAPI access-denied 전용 예외/health probe 추가, batch replay chunk/window 제한, interactive request budget fail-fast, startup warm 차단, 시장데이터만 block하는 앱 경로, preflight 진단 고도화, 회귀 테스트 보강.
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 체크리스트를 작성한다.
+- [x] `src/data_sources/krx_openapi.py`에 `KRXOpenAPIAccessDeniedError`, health probe, chunked batch replay, abort summary 필드를 추가한다.
+- [x] `src/data_sources/krx_indices.py`에 interactive request budget(`60`)와 access-denied fail-fast 예외를 추가한다.
+- [x] `src/data_sources/krx_indices.py`에서 warm/load summary에 `aborted`, `abort_reason`, `predicted_requests`, `processed_requests`를 반영한다.
+- [x] `app.py`에서 startup OPENAPI warm를 끄고, 시장데이터만 `BLOCKED`로 차단한 채 매크로/앱 shell은 계속 렌더링하도록 바꾼다.
+- [x] `src/data_sources/preflight.py`를 실제 KRX OpenAPI probe 기반으로 교체한다.
+- [x] `scripts/warm_krx_cache.py`를 out-of-band warm CLI 용도로 명시한다.
+- [x] `tests/test_krx_openapi.py`, `tests/test_integration.py`, `tests/test_preflight.py`를 갱신하고 관련 경로 회귀를 확인한다.
+- [x] 검증 명령을 실행하고 Review 섹션에 결과를 기록한다.
+
+Verification Gates:
+- [x] `python -m py_compile app.py src/data_sources/krx_openapi.py src/data_sources/krx_indices.py src/data_sources/preflight.py tests/test_krx_openapi.py tests/test_integration.py tests/test_preflight.py`
+- [x] `python -m pytest tests/test_krx_openapi.py tests/test_integration.py tests/test_data_status.py tests/test_preflight.py -q`
+- [x] `python -m pytest tests/test_krx_pykrx_compat_paths.py -q`
+
+Review:
+- Commands run:
+- `python -m pip install requests pyyaml pyarrow`
+- `python -m py_compile app.py src/data_sources/krx_openapi.py src/data_sources/krx_indices.py src/data_sources/preflight.py tests/test_krx_openapi.py tests/test_integration.py tests/test_preflight.py`
+- `python -m pytest tests/test_krx_openapi.py tests/test_integration.py tests/test_data_status.py tests/test_krx_pykrx_compat_paths.py tests/test_preflight.py -q`
+- Results:
+- `krx_openapi.py` now classifies HTML `Access Denied` as a dedicated non-retryable exception, exposes a real `data-dbg` health probe, and replays daily snapshots in `10`-business-day chunks with at most `2` concurrent in-flight requests before aborting the batch on the first denial.
+- `krx_indices.py` now fail-fast blocks interactive OPENAPI loads above `60` predicted snapshot requests, propagates `ACCESS_DENIED` as a market-data-specific blocking error, and writes normalized warm summaries including `aborted`, `abort_reason`, `predicted_requests`, and `processed_requests`.
+- `app.py` now disables automatic OPENAPI startup warm, resets preflight before manual market refresh, and keeps macro/app shell rendering even when market data is `BLOCKED` instead of collapsing the dashboard into `SAMPLE`.
+- `preflight.py` now distinguishes `AUTH_ERROR` and `ACCESS_DENIED` on the real KRX OpenAPI endpoint instead of treating the root site as reachable.
+- Additional compatibility fix: `sector_prices` generation/validation now normalizes `index_code` and `index_name` to `object` dtype so pandas 3 string dtypes do not trip the schema contract during warm/load/cache paths.
+- Verification status: combined targeted regression `62 passed`, and all touched files passed `py_compile`.
