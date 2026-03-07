@@ -17,6 +17,8 @@ from typing import Literal
 import pandas as pd
 import requests
 
+from src.data_sources.macro_sync import sync_provider_macro
+
 logger = logging.getLogger(__name__)
 
 DataStatus = Literal["LIVE", "CACHED", "SAMPLE"]
@@ -300,8 +302,6 @@ def load_kosis_macro(
     Returns:
         LoaderResult = (DataStatus, DataFrame).
     """
-    curated_path = CURATED_DIR / "macro_monthly.parquet"
-
     if series_config is None:
         series_config = {
             "cpi_yoy": {
@@ -327,66 +327,35 @@ def load_kosis_macro(
             },
         }
 
-    active_config = {
-        name: cfg for name, cfg in series_config.items() if bool(cfg.get("enabled", True))
-    }
-    if not active_config:
-        logger.warning("No enabled KOSIS series configured; returning empty LIVE macro frame.")
-        empty = pd.DataFrame(
-            columns=["series_id", "value", "source", "fetched_at", "is_provisional"]
+    def _fetch(alias: str, cfg: dict, provider_start: str, provider_end: str) -> pd.DataFrame:
+        _ = alias
+        return fetch_kosis_series(
+            cfg["org_id"],
+            cfg["tbl_id"],
+            cfg["item_id"],
+            provider_start,
+            provider_end,
+            obj_params=cfg.get("obj_params"),
         )
-        empty.index = pd.PeriodIndex([], freq="M")
-        return ("LIVE", empty)
 
-    frames: list[pd.DataFrame] = []
-    failures: list[tuple[str, str]] = []
-
-    for name, cfg in active_config.items():
-        try:
-            df = fetch_kosis_series(
-                cfg["org_id"],
-                cfg["tbl_id"],
-                cfg["item_id"],
-                start_ym,
-                end_ym,
-                obj_params=cfg.get("obj_params"),
-            )
-            frames.append(df)
-        except Exception as exc:
-            failures.append((name, str(exc)))
-            logger.warning("KOSIS series fetch failed (%s): %s", name, exc)
-
-    if frames:
-        result = pd.concat(frames).sort_index()
-        CURATED_DIR.mkdir(parents=True, exist_ok=True)
-
-        from src.contracts.validators import normalize_then_validate
-
-        result = normalize_then_validate(result, "macro_monthly")
-        result.to_parquet(curated_path)
-
-        if failures:
-            failed_names = ", ".join(name for name, _ in failures)
-            logger.warning(
-                "KOSIS partial success: %d series loaded, %d failed (%s)",
-                len(frames),
-                len(failures),
-                failed_names,
-            )
-        return ("LIVE", result)
-
-    if failures:
-        logger.error("KOSIS live fetch failed for all series: %s", failures)
-
-    # CACHED fallback
-    if curated_path.exists():
-        try:
-            cached = pd.read_parquet(curated_path)
-            logger.info("Loaded KOSIS macro from cache")
-            return ("CACHED", cached)
-        except Exception as exc:
-            logger.error("Cache load failed: %s", exc)
-
-    # SAMPLE fallback
-    logger.warning("Using SAMPLE data for KOSIS macro")
-    return ("SAMPLE", _make_sample_kosis())
+    status, result, summary = sync_provider_macro(
+        provider="KOSIS",
+        start_ym=start_ym,
+        end_ym=end_ym,
+        series_config=series_config,
+        fetch_fn=_fetch,
+        reason="load_kosis_macro",
+        force=False,
+    )
+    failed_aliases = dict(summary.get("failed_aliases") or {})
+    if failed_aliases and status != "SAMPLE":
+        logger.warning(
+            "KOSIS partial success: %d aliases loaded, %d failed (%s)",
+            len(summary.get("delta_aliases", [])),
+            len(failed_aliases),
+            ", ".join(sorted(failed_aliases)),
+        )
+    if status == "SAMPLE":
+        logger.warning("Using SAMPLE data for KOSIS macro")
+        return ("SAMPLE", _make_sample_kosis())
+    return status, result

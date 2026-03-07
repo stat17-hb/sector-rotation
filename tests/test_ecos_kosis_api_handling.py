@@ -81,6 +81,32 @@ def test_ecos_fetch_series_uses_cycle_path_in_url(monkeypatch):
     assert "/MM/" not in seen["url"]
 
 
+def test_ecos_fetch_series_paginates_when_page_is_full(monkeypatch):
+    monkeypatch.setattr(ecos, "_get_api_key", lambda: "DUMMY_KEY")
+    urls: list[str] = []
+
+    def fake_get(url: str):
+        urls.append(url)
+        if "/1/1000/" in url:
+            rows = [{"TIME": "20240101", "DATA_VALUE": "1.0"}] * ecos.ECOS_PAGE_SIZE
+            return {"StatisticSearch": {"row": rows}}
+        return {"StatisticSearch": {"row": [{"TIME": "20240102", "DATA_VALUE": "2.0"}]}}
+
+    monkeypatch.setattr(ecos, "_get_with_retry", fake_get)
+
+    df = ecos.fetch_series(
+        stat_code="817Y002",
+        item_code="010200000",
+        start_ym="202401",
+        end_ym="202401",
+        cycle="D",
+    )
+
+    assert not df.empty
+    assert any("/1/1000/" in url for url in urls)
+    assert any("/1001/2000/" in url for url in urls)
+
+
 def test_ecos_load_partial_success(tmp_path, monkeypatch, caplog):
     caplog.set_level(logging.WARNING)
     curated = tmp_path / "curated"

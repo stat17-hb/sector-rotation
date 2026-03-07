@@ -297,6 +297,49 @@ def test_fetch_index_ohlcv_openapi_batch_detailed_collects_failed_days_and_prese
     assert details["processed_requests"] == 2
 
 
+def test_fetch_index_ohlcv_openapi_batch_force_retries_access_denied_then_succeeds():
+    attempts = {"20260226": 0}
+    original_delay = krx_openapi.OPENAPI_FORCE_ACCESS_DENIED_DELAY_SEC
+    krx_openapi.OPENAPI_FORCE_ACCESS_DENIED_DELAY_SEC = 0.0
+
+    class _RetrySession(_FakeSession):
+        def get(self, url, params=None, headers=None, timeout=None):  # type: ignore[override]
+            bas_dd = str((params or {}).get("basDd", ""))
+            attempts[bas_dd] = attempts.get(bas_dd, 0) + 1
+            if bas_dd == "20260226" and attempts[bas_dd] == 1:
+                return _FakeResponse(
+                    status_code=200,
+                    payload=ValueError("not json"),
+                    text="<html><body>Access Denied</body></html>",
+                )
+            return _FakeResponse(
+                status_code=200,
+                payload={
+                    "OutBlock_1": [
+                        {"BAS_DD": bas_dd, "IDX_NM": "\ucf54\uc2a4\ud53c", "CLSPRC_IDX": "2600.12"},
+                    ]
+                },
+            )
+
+    try:
+        session = _RetrySession({})
+        successes, failures, details = krx_openapi.fetch_index_ohlcv_openapi_batch_detailed(
+            ["1001"],
+            "20260226",
+            "20260226",
+            auth_key="DUMMY",
+            session=session,
+            force=True,
+        )
+        assert failures == {}
+        assert list(successes["1001"].index.strftime("%Y%m%d")) == ["20260226"]
+        assert details["failed_days"] == []
+        assert details["aborted"] is False
+        assert attempts["20260226"] == 2
+    finally:
+        krx_openapi.OPENAPI_FORCE_ACCESS_DENIED_DELAY_SEC = original_delay
+
+
 def test_update_index_name_metadata_moves_previous_official_into_history(tmp_path, monkeypatch):
     metadata_path = tmp_path / "index_name_metadata.json"
     monkeypatch.setattr(krx_openapi, "INDEX_NAME_METADATA_PATH", metadata_path)

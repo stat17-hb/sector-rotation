@@ -1647,3 +1647,138 @@ Review:
 - `preflight.py` now distinguishes `AUTH_ERROR` and `ACCESS_DENIED` on the real KRX OpenAPI endpoint instead of treating the root site as reachable.
 - Additional compatibility fix: `sector_prices` generation/validation now normalizes `index_code` and `index_name` to `object` dtype so pandas 3 string dtypes do not trip the schema contract during warm/load/cache paths.
 - Verification status: combined targeted regression `62 passed`, and all touched files passed `py_compile`.
+
+## 45) DuckDB 기반 초기 이행/증분 적재 전환 (2026-03-07)
+
+Pre-Implementation Check-in:
+- 2026-03-07: 사용자 승인된 계획에 따라 parquet 중심 로컬 캐시를 DuckDB warehouse 중심 구조로 전환한다.
+- Scope: `warehouse.duckdb` 스키마 추가, 시장/매크로 loader의 warehouse 우선 조회 + 증분 sync, ingest 메타데이터 도입, app cache/status wiring 교체, bootstrap/sync CLI 추가, 관련 회귀 테스트 보강.
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 체크리스트를 작성한다.
+- [x] `src/data_sources/warehouse.py`를 추가해 `dim_index`, `fact_krx_index_daily`, `dim_macro_series`, `fact_macro_monthly`, `ingest_runs`, `ingest_watermarks`를 정의한다.
+- [x] `krx_indices.py`를 warehouse 우선 읽기 + warehouse upsert + ingest 메타데이터 기록 구조로 전환한다.
+- [x] `read_warm_status()`와 `get_price_artifact_key()`를 `_warm_status.json`/parquet 대신 DuckDB 메타데이터 기준으로 바꾼다.
+- [x] background warm thread 의존을 제거하고 수동 refresh/sync 경로만 유지한다.
+- [x] `macro_sync.py`를 추가해 ECOS/KOSIS alias 기준 upsert, 최근 6개월 재동기화, provider 통합 sync를 구현한다.
+- [x] `load_ecos_macro()`/`load_kosis_macro()`를 warehouse 우선 조회 구조로 전환하고 `macro_monthly.parquet`는 export-only로 유지한다.
+- [x] `app.py`를 warehouse probe/artifact key/manual macro sync 기준으로 갱신한다.
+- [x] `scripts/bootstrap_warehouse.py`, `scripts/sync_warehouse.py`를 추가한다.
+- [x] `requirements.txt`에 `duckdb`를 추가한다.
+- [x] `tests/conftest.py`로 DuckDB 경로를 test-local tmp path로 격리하고, warehouse/CLI 회귀 테스트를 추가한다.
+- [x] 검증 명령을 실행하고 Review 섹션에 결과를 기록한다.
+
+Verification Gates:
+- [x] `python -m py_compile src/data_sources/warehouse.py src/data_sources/macro_sync.py src/data_sources/krx_indices.py src/data_sources/ecos.py src/data_sources/kosis.py app.py scripts/bootstrap_warehouse.py scripts/sync_warehouse.py tests/test_warehouse_cli.py tests/conftest.py`
+- [x] `pytest -q tests/test_data_status.py tests/test_ecos_kosis_api_handling.py tests/test_krx_pykrx_compat_paths.py tests/test_integration.py`
+- [x] `pytest -q tests/test_warehouse_cli.py`
+- [x] `pytest -q`
+
+Review:
+- Commands run:
+- `python -m py_compile src/data_sources/warehouse.py src/data_sources/macro_sync.py src/data_sources/krx_indices.py src/data_sources/ecos.py src/data_sources/kosis.py app.py scripts/bootstrap_warehouse.py scripts/sync_warehouse.py`
+- `pytest -q tests/test_data_status.py tests/test_ecos_kosis_api_handling.py tests/test_krx_pykrx_compat_paths.py tests/test_integration.py`
+- `pytest -q tests/test_warehouse_cli.py`
+- `pytest -q`
+- Results:
+- Added `src/data_sources/warehouse.py` as the authoritative local DuckDB store and persisted market/macro ingest metadata through `ingest_runs` / `ingest_watermarks`.
+- Added `src/data_sources/macro_sync.py` to unify ECOS/KOSIS sync by alias, avoid provider overwrite collisions, and re-fetch the latest 6 months for provisional revisions.
+- `krx_indices.py` now reads DuckDB first, imports complete raw-cache slices into DuckDB when present, records warm status in warehouse metadata, and no longer relies on background warm threads for runtime freshness.
+- `app.py` now probes warehouse availability instead of parquet existence, uses warehouse artifact keys for cache invalidation, and manual macro refresh triggers actual warehouse sync instead of deleting `macro_monthly.parquet`.
+- Added `scripts/bootstrap_warehouse.py` and `scripts/sync_warehouse.py` as the two operational entrypoints for initial seeding and incremental sync.
+- Added `tests/conftest.py` to isolate DuckDB state per test and added `tests/test_warehouse_cli.py` for schema/upsert/CLI regressions.
+- Verification status: targeted regression suite `55 passed`, warehouse/CLI suite `4 passed`, full suite `130 passed in 7.80s`, and all touched files passed `py_compile`.
+- Residual risks / follow-ups:
+- Real-network bootstrap/sync against ECOS/KOSIS/KRX was not run in this turn; verification used deterministic pytest coverage and compile checks. Initial live seeding should be performed with local API keys via `python scripts/bootstrap_warehouse.py`.
+
+## 46) 로컬 bootstrap 실운영 검증 (2026-03-07)
+
+Pre-Implementation Check-in:
+- 2026-03-07: 사용자가 `python scripts/bootstrap_warehouse.py`를 실제 로컬 환경에서 실행해 초기 적재가 문제없이 되는지 점검 요청.
+- Scope: 실환경 bootstrap 실행, 생성된 warehouse 상태 확인, 실패 시 원인 진단과 코드 수정, 재검증.
+
+Execution Checklist:
+- [x] 현재 로컬 환경에서 `python scripts/bootstrap_warehouse.py`를 실행한다.
+- [x] 실패 시 warehouse row count / watermark / provider 상태를 점검한다.
+- [x] 매크로 bootstrap 실패 원인이 코드 문제면 수정한다.
+- [x] KRX market bootstrap 실패가 환경/provider 문제인지 분리 진단한다.
+- [x] 수정 후 bootstrap 및 pytest 회귀를 재실행한다.
+
+Review:
+- Commands run:
+- `python scripts/bootstrap_warehouse.py`
+- `python -c "from src.data_sources.ecos import fetch_series; ... bond_3y ..."`
+- `python -c "from pykrx import stock; ..."`
+- `python -c "from src.data_sources.pykrx_compat import ensure_pykrx_transport_compat; ..."`
+- `python -c "from src.data_sources.preflight import run_api_preflight; ..."`
+- `python -c "from src.data_sources.krx_openapi import fetch_index_ohlcv_openapi; ..."`
+- `pytest -q tests/test_ecos_kosis_api_handling.py tests/test_warehouse_cli.py`
+- `pytest -q`
+- Results:
+- 실환경 bootstrap 결과, `market`은 계속 실패했고 `macro`는 코드 수정 후 정상 bootstrap 되었다.
+- 매크로 실패 원인은 `src/data_sources/ecos.py`가 daily ECOS series를 `1..1000` row만 받아 `bond_3y`가 `2020-03`까지만 적재되던 pagination 버그였다. pagination 추가 후 `bond_3y`는 `2016-03`~`2026-01`까지 확장되었고, bootstrap macro coverage는 `true`가 되었다.
+- bootstrap/sync 기본 macro 종료월은 발표 시차를 고려해 `현재월-2개월`(`2026-01`) 기준으로 조정했다.
+- KRX market bootstrap 실패는 코드 경로가 아니라 provider 문제로 확인되었다. 현재 로컬 설정은 `KRX_PROVIDER=OPENAPI`, `KRX_OPENAPI_KEY` 존재 상태이지만, 단일일 fetch(`2026-03-05`)조차 `Access Denied`를 반환한다.
+- `pykrx` 직접 경로도 실환경에서는 `get_index_ohlcv(..., name_display=False)`가 빈 DataFrame을 반환했고, 기본 호출은 여전히 `'지수명'` KeyError로 깨졌다. 따라서 현재 로컬 환경에서는 시장 초기 적재를 완료할 수 있는 살아 있는 provider가 없다.
+- 최종 warehouse 상태: `fact_macro_monthly=718 rows`, `fact_krx_index_daily=0 rows`, watermark는 `('macro_data', '202601', 'LIVE', True, 'KOSIS')`.
+- Verification status: targeted regressions `18 passed`, full suite `131 passed in 7.72s`.
+- Residual risks / follow-ups:
+- 시장 bootstrap 완료를 위해서는 KRX OpenAPI 권한/승인 상태 복구가 필요하다. 현재 로컬 key는 endpoint reachability는 있지만 실제 data fetch는 `Access Denied`로 차단된다.
+- 대체 provider를 새로 도입하지 않는 한, 이 환경에서 시장 초기 적재는 코드 수정만으로 해결되지 않는다.
+
+## 47) KRX bootstrap 재시도/증분 sync 안정화 (2026-03-07)
+
+Pre-Implementation Check-in:
+- 2026-03-07: 직전 실환경 검증에서 KRX OpenAPI가 단건/배치 모두 간헐적으로 `Access Denied`를 반환해 bootstrap이 반복 실패했다.
+- Scope: bootstrap chunk 제어 버그 수정, force/backfill 전용 Access Denied 재시도 추가, warehouse coverage 판정 보정, sync CLI를 실제 증분 경로로 정렬, 실환경 bootstrap/sync 재검증.
+
+Execution Checklist:
+- [x] bootstrap chunk가 요청 구간 밖 raw cache 때문에 5년 전체로 확장되던 missing-range 버그를 수정한다.
+- [x] 시장 warm completeness를 raw calendar gap이 아니라 warehouse stored-date 기준으로 판정한다.
+- [x] `bootstrap_warehouse.py`를 월 단위 chunk + chunk retry 구조로 바꾼다.
+- [x] `krx_openapi.py`에 force/backfill 전용 Access Denied 재시도를 추가한다.
+- [x] `sync_warehouse.py`를 warehouse 최신일 기준 증분 sync로 바꾼다.
+- [x] 관련 회귀 테스트를 추가/수정하고 전체 pytest를 통과시킨다.
+- [x] 실환경에서 bootstrap/sync를 다시 실행하고 warehouse 상태를 확인한다.
+
+Review:
+- Commands run:
+- `python -m py_compile src/data_sources/krx_openapi.py src/data_sources/krx_indices.py scripts/bootstrap_warehouse.py scripts/sync_warehouse.py tests/test_krx_openapi.py tests/test_integration.py tests/test_warehouse_cli.py tests/test_krx_pykrx_compat_paths.py`
+- `pytest -q tests/test_krx_openapi.py tests/test_integration.py tests/test_warehouse_cli.py tests/test_krx_pykrx_compat_paths.py`
+- `python scripts/bootstrap_warehouse.py`
+- `python scripts/sync_warehouse.py`
+- `python -c "import duckdb; ... fact_krx_index_daily/fact_macro_monthly/watermarks ..."`
+- `pytest -q`
+- Results:
+- `src/data_sources/krx_indices.py` now avoids expanding fetch ranges when the latest raw cache lies completely outside the requested window, and market coverage is validated from warehouse-stored trade dates so holiday boundaries no longer produce false incomplete chunks.
+- `src/data_sources/krx_openapi.py` now runs force/backfill batches serially by business day and retries transient `Access Denied` snapshots with bounded backoff; this is restricted to CLI-style force runs and does not relax the interactive fail-fast policy.
+- `scripts/bootstrap_warehouse.py` now uses `1`-month market chunks with per-chunk retries, which converted the previously failing 5-year market bootstrap into a successful run.
+- `scripts/sync_warehouse.py` now derives market sync start from warehouse latest dates and reads the full reporting window back from DuckDB after sync, so routine sync is incremental/no-op after bootstrap instead of replaying 5 years.
+- Real-network bootstrap finally succeeded: `fact_krx_index_daily=14700`, `fact_macro_monthly=718`, watermarks `('market_prices', '20260306', 'LIVE', True, 'OPENAPI')` and `('macro_data', '202601', 'LIVE', True, 'KOSIS')`.
+- Real-network `python scripts/sync_warehouse.py` succeeded immediately after bootstrap with `success=true`, market `status=CACHED`, `delta_codes=[]`, and no additional market backfill.
+- Full regression suite passed: `136 passed in 14.59s`.
+- Residual risks / follow-ups:
+- KRX OpenAPI edge denial is still intermittent in this environment; bootstrap succeeded by slowing the force/backfill path and retrying, not because the upstream became fully stable.
+- `read_dataset_status("market_prices")` still surfaces the latest recorded ingest run rather than the watermark row, so a previous failed sync run can remain visible until a new market ingest run is written.
+
+## 48) 시장 캐시 배너 no-op warm 오탐 수정 (2026-03-07)
+
+Pre-Implementation Check-in:
+- 2026-03-07: 앱 시작 시 `Using local warehouse data for market data (2026-03-06). Latest OpenAPI warm did not confirm current coverage (status=CACHED).` 경고가 표시되었고, 실제 warehouse 상태는 `coverage_complete=True`, `failed_days=[]`, `failed_codes={}`였다.
+- Scope: `CACHED`라도 최신 종료일이 맞고 coverage가 complete이며 실패 흔적이 없는 OpenAPI warm/no-op sync는 retryable fallback이 아니라 fresh cache/info로 분류하도록 수정한다.
+
+Execution Checklist:
+- [x] `src/ui/data_status.py`에서 complete `CACHED` warm 상태를 fresh cache로 인식하도록 판정 조건을 보정한다.
+- [x] `tests/test_data_status.py`에 no-op OpenAPI warm 회귀 테스트를 추가한다.
+- [x] 대상 테스트와 로컬 상태 재현 커맨드로 수정 결과를 검증한다.
+
+Review:
+- Commands run:
+- `pytest -q tests/test_data_status.py`
+- `python -m py_compile src/ui/data_status.py tests/test_data_status.py`
+- `python -c "from src.data_sources.krx_indices import read_warm_status; from src.ui.data_status import resolve_price_cache_banner_case; ..."`
+- Results:
+- `src/ui/data_status.py` now treats `OPENAPI + CACHED + coverage_complete + current_end + no failures` as `fresh_cache`, and it falls back to `watermark_key` when `end` is absent.
+- Added a regression test for the no-op warm case where the latest market sync is current but no new delta rows were fetched.
+- Targeted verification passed: `9 passed in 0.44s`, `py_compile` succeeded, and the current local warm status (`status=CACHED`, `end=20260306`, `coverage_complete=True`) now resolves to `fresh_cache`.
+- Final judgement: the warning shown at app startup was a UI classification bug, not a market-data freshness problem.

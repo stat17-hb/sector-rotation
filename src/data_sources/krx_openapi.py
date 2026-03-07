@@ -76,6 +76,8 @@ FORCE_BATCH_WORKERS = 4
 OPENAPI_HEALTHCHECK_BAS_DD = "20240131"
 OPENAPI_BATCH_CHUNK_DAYS = 10
 OPENAPI_BATCH_MAX_CONCURRENCY = 2
+OPENAPI_FORCE_ACCESS_DENIED_RETRIES = 2
+OPENAPI_FORCE_ACCESS_DENIED_DELAY_SEC = 2.0
 
 _SUCCESS_CODES = {"0", "00", "200", "0000"}
 _AUTH_CODES = {"401"}
@@ -840,6 +842,45 @@ def _fetch_snapshot_rows_threadsafe(
     )
 
 
+def _fetch_snapshot_rows_force_retry(
+    *,
+    api_id: str,
+    bas_dd: str,
+    auth_key: str,
+    url: str,
+    session: requests.Session | None = None,
+) -> tuple[str, dict[str, float]]:
+    """Retry transient Access Denied responses during force/backfill runs."""
+    last_exc: Exception | None = None
+    attempts = max(1, int(OPENAPI_FORCE_ACCESS_DENIED_RETRIES) + 1)
+    for attempt in range(1, attempts + 1):
+        try:
+            return _fetch_snapshot_rows(
+                api_id=api_id,
+                bas_dd=bas_dd,
+                auth_key=auth_key,
+                url=url,
+                session=session,
+            )
+        except KRXOpenAPIAccessDeniedError as exc:
+            last_exc = exc
+            if attempt >= attempts:
+                raise
+            delay_sec = float(OPENAPI_FORCE_ACCESS_DENIED_DELAY_SEC) * attempt
+            logger.warning(
+                "KRX OpenAPI force retry %d/%d for %s %s after Access Denied; sleeping %.1fs",
+                attempt,
+                attempts - 1,
+                api_id,
+                bas_dd,
+                delay_sec,
+            )
+            time.sleep(delay_sec)
+
+    assert last_exc is not None
+    raise last_exc
+
+
 def fetch_index_ohlcv_openapi_batch_detailed(
     index_codes: list[str],
     start: str,
@@ -892,7 +933,10 @@ def fetch_index_ohlcv_openapi_batch_detailed(
     abort_reason = ""
     abort_detail = ""
 
-    day_chunks = _chunk_business_days(bas_days)
+    day_chunks = _chunk_business_days(
+        bas_days,
+        size=1 if force else OPENAPI_BATCH_CHUNK_DAYS,
+    )
 
     def _record_failure(api_id: str, bas_dd: str, exc: Exception) -> None:
         nonlocal aborted, abort_reason, abort_detail
@@ -909,7 +953,7 @@ def fetch_index_ohlcv_openapi_batch_detailed(
             for bas_dd in day_chunk
         ]
 
-    if session is not None or total_requests <= 1:
+    if force or session is not None or total_requests <= 1:
         for day_chunk in day_chunks:
             if aborted:
                 break
@@ -917,12 +961,22 @@ def fetch_index_ohlcv_openapi_batch_detailed(
                 processed_requests += 1
                 try:
                     family_snapshots[api_id].append(
-                        _fetch_snapshot_rows(
-                            api_id=api_id,
-                            bas_dd=bas_dd,
-                            auth_key=key,
-                            url=endpoints[api_id],
-                            session=session,
+                        (
+                            _fetch_snapshot_rows_force_retry(
+                                api_id=api_id,
+                                bas_dd=bas_dd,
+                                auth_key=key,
+                                url=endpoints[api_id],
+                                session=session,
+                            )
+                            if force
+                            else _fetch_snapshot_rows(
+                                api_id=api_id,
+                                bas_dd=bas_dd,
+                                auth_key=key,
+                                url=endpoints[api_id],
+                                session=session,
+                            )
                         )
                     )
                 except Exception as exc:

@@ -17,6 +17,8 @@ from typing import Iterable, Literal
 import pandas as pd
 import requests
 
+from src.data_sources.macro_sync import sync_provider_macro
+
 logger = logging.getLogger(__name__)
 
 DataStatus = Literal["LIVE", "CACHED", "SAMPLE"]
@@ -30,6 +32,7 @@ MAX_RETRIES = 3
 BACKOFF_BASE = 2
 MAX_ITEM_CODES = 3
 VALID_CYCLES = {"A", "Q", "M", "D"}
+ECOS_PAGE_SIZE = 1000
 
 
 def _normalize_cycle(cycle: str | None) -> str:
@@ -167,6 +170,9 @@ def _build_statistic_url(
     start_date: str,
     end_date: str,
     item_codes: list[str],
+    *,
+    start_count: int = 1,
+    end_count: int = ECOS_PAGE_SIZE,
 ) -> str:
     path_parts = [
         ECOS_BASE_URL,
@@ -174,8 +180,8 @@ def _build_statistic_url(
         api_key,
         "json",
         "kr",
-        "1",
-        "1000",
+        str(start_count),
+        str(end_count),
         stat_code,
         cycle,
         start_date,
@@ -201,6 +207,13 @@ def _extract_result_block(data: dict) -> dict:
             return nested_result
 
     return {}
+
+
+def _extract_rows_block(data: dict) -> list[dict]:
+    if not isinstance(data, dict):
+        return []
+    rows_raw = data.get("StatisticSearch", {}).get("row", [])
+    return rows_raw if isinstance(rows_raw, list) else []
 
 
 def fetch_series(
@@ -232,29 +245,44 @@ def fetch_series(
     cycle_norm = _normalize_cycle(cycle)
     normalized_item_codes = _normalize_item_codes(item_code=item_code, item_codes=item_codes)
     start_date, end_date = _normalize_date_bounds(start_ym, end_ym, cycle_norm)
-    url = _build_statistic_url(
-        api_key=api_key,
-        stat_code=stat_code,
-        cycle=cycle_norm,
-        start_date=start_date,
-        end_date=end_date,
-        item_codes=normalized_item_codes,
-    )
-    masked_url = url.replace(api_key, api_key[:4] + "****")
-    logger.info("ECOS request: %s", masked_url)
-    data = _get_with_retry(url)
+    rows_raw: list[dict] = []
+    start_count = 1
+    while True:
+        end_count = start_count + ECOS_PAGE_SIZE - 1
+        url = _build_statistic_url(
+            api_key=api_key,
+            stat_code=stat_code,
+            cycle=cycle_norm,
+            start_date=start_date,
+            end_date=end_date,
+            item_codes=normalized_item_codes,
+            start_count=start_count,
+            end_count=end_count,
+        )
+        masked_url = url.replace(api_key, api_key[:4] + "****")
+        logger.info("ECOS request: %s", masked_url)
+        data = _get_with_retry(url)
 
-    # ECOS returns RESULT envelopes for invalid key / bad schema / no data.
-    result_block = _extract_result_block(data)
-    if result_block:
-        code = str(result_block.get("CODE", "")).strip()
-        msg = str(result_block.get("MESSAGE", "")).strip()
-        hint = ""
-        if code == "ERROR-100":
-            hint = " (invalid key OR missing/invalid request schema such as item code path)"
-        raise ValueError(f"ECOS API error [{code}]: {msg}{hint}")
+        # ECOS returns RESULT envelopes for invalid key / bad schema / no data.
+        result_block = _extract_result_block(data)
+        if result_block:
+            code = str(result_block.get("CODE", "")).strip()
+            msg = str(result_block.get("MESSAGE", "")).strip()
+            if code == "INFO-200" and rows_raw:
+                break
+            hint = ""
+            if code == "ERROR-100":
+                hint = " (invalid key OR missing/invalid request schema such as item code path)"
+            raise ValueError(f"ECOS API error [{code}]: {msg}{hint}")
 
-    rows_raw = data.get("StatisticSearch", {}).get("row", []) if isinstance(data, dict) else []
+        page_rows = _extract_rows_block(data)
+        if not page_rows:
+            break
+        rows_raw.extend(page_rows)
+        if len(page_rows) < ECOS_PAGE_SIZE:
+            break
+        start_count += ECOS_PAGE_SIZE
+
     if not rows_raw:
         keys = list(data.keys()) if isinstance(data, dict) else [type(data).__name__]
         logger.error("ECOS raw response keys: %s", keys)
@@ -348,8 +376,6 @@ def load_ecos_macro(
     Returns:
         LoaderResult = (DataStatus, DataFrame).
     """
-    curated_path = CURATED_DIR / "macro_monthly.parquet"
-
     if series_config is None:
         series_config = {
             "base_rate": {
@@ -375,66 +401,35 @@ def load_ecos_macro(
             },
         }
 
-    active_config = {
-        name: cfg for name, cfg in series_config.items() if bool(cfg.get("enabled", True))
-    }
-    if not active_config:
-        logger.warning("No enabled ECOS series configured; returning empty LIVE macro frame.")
-        empty = pd.DataFrame(
-            columns=["series_id", "value", "source", "fetched_at", "is_provisional"]
+    def _fetch(alias: str, cfg: dict, provider_start: str, provider_end: str) -> pd.DataFrame:
+        _ = alias
+        return fetch_series(
+            stat_code=cfg["stat_code"],
+            item_code=cfg.get("item_code"),
+            start_ym=provider_start,
+            end_ym=provider_end,
+            item_codes=cfg.get("item_codes"),
+            cycle=str(cfg.get("cycle", "M")),
         )
-        empty.index = pd.PeriodIndex([], freq="M")
-        return ("LIVE", empty)
 
-    frames: list[pd.DataFrame] = []
-    failures: list[tuple[str, str]] = []
-    for name, cfg in active_config.items():
-        try:
-            df = fetch_series(
-                stat_code=cfg["stat_code"],
-                item_code=cfg.get("item_code"),
-                start_ym=start_ym,
-                end_ym=end_ym,
-                item_codes=cfg.get("item_codes"),
-                cycle=str(cfg.get("cycle", "M")),
-            )
-            if not df.empty:
-                frames.append(df)
-        except Exception as exc:
-            failures.append((name, str(exc)))
-            logger.warning("ECOS series fetch failed (%s): %s", name, exc)
-
-    if frames:
-        result = pd.concat(frames)
-        result = result.sort_index()
-        CURATED_DIR.mkdir(parents=True, exist_ok=True)
-
-        from src.contracts.validators import normalize_then_validate
-
-        result = normalize_then_validate(result, "macro_monthly")
-        result.to_parquet(curated_path)
-        if failures:
-            failed_names = ", ".join(name for name, _ in failures)
-            logger.warning(
-                "ECOS partial success: %d series loaded, %d failed (%s)",
-                len(frames),
-                len(failures),
-                failed_names,
-            )
-        return ("LIVE", result)
-
-    if failures:
-        logger.error("ECOS live fetch failed for all series: %s", failures)
-
-    # CACHED fallback
-    if curated_path.exists():
-        try:
-            cached = pd.read_parquet(curated_path)
-            logger.info("Loaded ECOS macro from cache")
-            return ("CACHED", cached)
-        except Exception as exc:
-            logger.error("Cache load failed: %s", exc)
-
-    # SAMPLE fallback
-    logger.warning("Using SAMPLE data for ECOS macro")
-    return ("SAMPLE", _make_sample_macro())
+    status, result, summary = sync_provider_macro(
+        provider="ECOS",
+        start_ym=start_ym,
+        end_ym=end_ym,
+        series_config=series_config,
+        fetch_fn=_fetch,
+        reason="load_ecos_macro",
+        force=False,
+    )
+    failed_aliases = dict(summary.get("failed_aliases") or {})
+    if failed_aliases and status != "SAMPLE":
+        logger.warning(
+            "ECOS partial success: %d aliases loaded, %d failed (%s)",
+            len(summary.get("delta_aliases", [])),
+            len(failed_aliases),
+            ", ".join(sorted(failed_aliases)),
+        )
+    if status == "SAMPLE":
+        logger.warning("Using SAMPLE data for ECOS macro")
+        return ("SAMPLE", _make_sample_macro())
+    return status, result

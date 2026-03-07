@@ -169,6 +169,27 @@ def _price_artifact_key() -> tuple:
     return get_price_artifact_key()
 
 
+def _macro_artifact_key() -> tuple:
+    """Return cache-busting key for macro warehouse artifacts."""
+    from src.data_sources.macro_sync import get_macro_artifact_key
+
+    return get_macro_artifact_key()
+
+
+def _probe_market_status() -> str:
+    """Return current market-data availability from the warehouse."""
+    from src.data_sources.krx_indices import probe_market_status
+
+    return probe_market_status()
+
+
+def _probe_macro_status() -> str:
+    """Return current macro-data availability from the warehouse."""
+    from src.data_sources.macro_sync import probe_macro_status
+
+    return probe_macro_status()
+
+
 def _all_sector_codes(benchmark_code: str) -> list[str]:
     """Return the unique sector universe used by the dashboard."""
     all_codes: list[str] = []
@@ -218,19 +239,13 @@ def _format_yyyymmdd(value: str) -> str:
     return f"{digits[:4]}-{digits[4:6]}-{digits[6:]}"
 
 
-def _market_cache_label(warm_status: dict[str, object], cache_path: str) -> str:
-    """Return a user-facing cache label preferring the actual warm coverage date."""
-    warm_end = _format_yyyymmdd(str(warm_status.get("end", "")))
+def _market_cache_label(warm_status: dict[str, object]) -> str:
+    """Return a user-facing cache label preferring the warehouse coverage date."""
+    warm_end = _format_yyyymmdd(
+        str(warm_status.get("end", "") or warm_status.get("watermark_key", ""))
+    )
     if warm_end:
         return f"market data ({warm_end})"
-
-    cache_file = Path(cache_path)
-    if cache_file.exists():
-        import datetime as _dt
-
-        mtime = _dt.datetime.fromtimestamp(cache_file.stat().st_mtime).strftime("%Y-%m-%d")
-        return f"market data ({mtime})"
-
     return "market data"
 
 
@@ -258,6 +273,21 @@ def _build_market_refresh_notice(summary: dict[str, object]) -> tuple[str, str]:
     if status == "CACHED":
         return ("warning", "Market data refresh fell back to cache.")
     return ("error", "Market data refresh did not complete successfully.")
+
+
+def _build_macro_refresh_notice(summary: dict[str, object]) -> tuple[str, str]:
+    """Map macro warehouse refresh summary into a user-facing flash message."""
+    status = str(summary.get("status", "")).strip().upper()
+    coverage_complete = bool(summary.get("coverage_complete"))
+    rows = int(summary.get("rows", 0) or 0)
+
+    if status == "LIVE":
+        return ("success", f"Macro data refresh completed ({rows} rows available).")
+    if status == "CACHED" and coverage_complete:
+        return ("info", "Macro data already current in the local warehouse.")
+    if status == "CACHED":
+        return ("warning", "Macro data refresh fell back to warehouse cache.")
+    return ("error", "Macro data refresh did not complete successfully.")
 
 
 def _openapi_cache_fallback_note(warm_status: dict[str, object]) -> str:
@@ -536,16 +566,14 @@ inject_css(theme_mode)
 
 # Sidebar
 
-prices_parquet = "data/curated/sector_prices.parquet"
-macro_parquet = "data/curated/macro_monthly.parquet"
 macro_cache_token = _macro_cache_token()
 price_cache_token = _price_cache_token()
 krx_provider_configured = _krx_provider_configured()
 krx_provider_effective = _krx_provider_effective()
 krx_openapi_key_present = bool(_load_api_key("KRX_OPENAPI_KEY"))
 
-probe_price_status = "CACHED" if Path(prices_parquet).exists() else "SAMPLE"
-probe_macro_status = "CACHED" if Path(macro_parquet).exists() else "SAMPLE"
+probe_price_status = _probe_market_status()
+probe_macro_status = _probe_macro_status()
 probe_data_status = {"price": probe_price_status, "macro": probe_macro_status}
 btn_states = get_button_states(probe_data_status)
 
@@ -729,6 +757,7 @@ _maybe_schedule_startup_krx_warm(benchmark_code, price_years, market_end_date)
 # Button handlers, each clears only its own cache (R8)
 
 market_refresh_notice: tuple[str, str] | None = None
+macro_refresh_notice: tuple[str, str] | None = None
 
 if refresh_market:
     from src.data_sources.krx_indices import run_manual_price_refresh
@@ -750,9 +779,25 @@ if refresh_market:
         market_refresh_notice = ("error", f"Market data refresh failed: {exc}")
 
 if refresh_macro:
-    Path(macro_parquet).unlink(missing_ok=True)
-    _cached_macro.clear()
-    st.rerun()
+    from src.data_sources.macro_sync import sync_macro_warehouse
+
+    macro_end_ym = date.today().strftime("%Y%m")
+    macro_start_ym = (date.today() - timedelta(days=365 * 10)).strftime("%Y%m")
+    try:
+        with st.spinner("Refreshing macro data..."):
+            _, _, macro_summary = sync_macro_warehouse(
+                start_ym=macro_start_ym,
+                end_ym=macro_end_ym,
+                macro_series_cfg=macro_series_cfg,
+                reason="manual_refresh",
+                force=False,
+            )
+        _cached_macro.clear()
+        _cached_signals.clear()
+        macro_refresh_notice = _build_macro_refresh_notice(macro_summary)
+    except Exception as exc:
+        logger.exception("Manual macro refresh failed")
+        macro_refresh_notice = ("error", f"Macro data refresh failed: {exc}")
 
 if recompute:
     shutil.rmtree("data/features", ignore_errors=True)
@@ -766,7 +811,7 @@ if recompute:
 with st.spinner("데이터 로딩 중..."):
     try:
         prices_key = _price_artifact_key()
-        macro_key = _parquet_key(macro_parquet)
+        macro_key = _macro_artifact_key()
         params = {
             "epsilon": float(st.session_state["epsilon"]),
             "rs_ma_period": rs_ma_period,
@@ -891,6 +936,17 @@ if market_refresh_notice:
     else:
         st.error(notice_message)
 
+if macro_refresh_notice:
+    notice_level, notice_message = macro_refresh_notice
+    if notice_level == "success":
+        st.success(notice_message)
+    elif notice_level == "info":
+        st.info(notice_message)
+    elif notice_level == "warning":
+        st.warning(notice_message)
+    else:
+        st.error(notice_message)
+
 if price_status == "BLOCKED" and market_blocking_error:
     st.error(
         "Market data refresh is blocked. "
@@ -912,12 +968,12 @@ if False and is_sample_mode(data_status):
 
 if not is_sample_mode(data_status):
     if price_status == "CACHED":
-        price_cache_label = _market_cache_label(price_warm_status, prices_parquet)
+        price_cache_label = _market_cache_label(price_warm_status)
         if price_cache_case == "fresh_cache":
-            st.info(f"Using latest KRX raw cache for {price_cache_label}.")
+            st.info(f"Using local warehouse data for {price_cache_label}.")
         elif price_cache_case == "retryable_cache_fallback":
             st.warning(
-                f"Using cache for {price_cache_label}. "
+                f"Using local warehouse data for {price_cache_label}. "
                 f"{_openapi_cache_fallback_note(price_warm_status)} "
                 "Use the refresh button to retry or continue with cache."
             )
@@ -934,11 +990,11 @@ if not is_sample_mode(data_status):
             )
 
     if macro_status == "CACHED":
-        st.warning("Using cached macro data. Use the refresh button to retry or continue with cache.")
+        st.warning("Using macro data from the local warehouse. Use refresh to retry or continue with cache.")
 
 if False and not is_sample_mode(data_status):
     if price_status == "CACHED":
-        price_cache_label = _market_cache_label(price_warm_status, prices_parquet)
+        price_cache_label = _market_cache_label(price_warm_status)
         if price_cache_case == "fresh_cache":
             st.info(
                 f"Using latest KRX raw cache for {price_cache_label}.",

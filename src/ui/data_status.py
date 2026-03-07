@@ -93,14 +93,14 @@ def resolve_price_cache_banner_case(
 
     warm = dict(warm_status or {})
     warm_state = str(warm.get("status", "")).strip().upper()
-    warm_end = _normalize_yyyymmdd(warm.get("end"))
+    warm_end = _normalize_yyyymmdd(warm.get("end") or warm.get("watermark_key"))
     requested_end = _normalize_yyyymmdd(market_end_date_str)
     coverage_complete = bool(warm.get("coverage_complete"))
     failed_days = _normalize_string_list(warm.get("failed_days"))
     failed_codes = _normalize_string_map(warm.get("failed_codes"))
 
     if (
-        warm_state == "LIVE"
+        warm_state in {"LIVE", "CACHED"}
         and coverage_complete
         and warm_end
         and warm_end == requested_end

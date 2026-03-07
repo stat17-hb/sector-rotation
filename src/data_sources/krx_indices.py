@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 import pandas as pd
+import yaml
 
 from src.data_sources.krx_openapi import (
     KRXOpenAPIAccessDeniedError,
@@ -30,6 +31,18 @@ from src.data_sources.krx_openapi import (
 from src.data_sources.pykrx_compat import (
     ensure_pykrx_transport_compat,
     resolve_ohlcv_close_column,
+)
+from src.data_sources.warehouse import (
+    export_market_parquet,
+    get_dataset_artifact_key,
+    is_market_coverage_complete,
+    probe_dataset_mode,
+    record_ingest_run,
+    read_dataset_status,
+    read_market_prices,
+    update_ingest_watermark,
+    upsert_index_dimension,
+    upsert_market_prices,
 )
 
 logger = logging.getLogger(__name__)
@@ -134,6 +147,114 @@ def _warm_status_path() -> Path:
     return RAW_DIR / WARM_STATUS_FILE
 
 
+@lru_cache(maxsize=1)
+def _configured_index_metadata() -> dict[str, dict[str, Any]]:
+    """Return configured dashboard index metadata keyed by code."""
+    path = Path("config/sector_map.yml")
+    if not path.exists():
+        return {}
+
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        logger.warning("Failed to read sector_map.yml for index metadata sync: %s", exc)
+        return {}
+
+    benchmark_code = str(payload.get("benchmark", {}).get("code", "")).strip()
+    benchmark_name = str(payload.get("benchmark", {}).get("name", "")).strip()
+    metadata: dict[str, dict[str, Any]] = {}
+    if benchmark_code:
+        metadata[benchmark_code] = {
+            "index_code": benchmark_code,
+            "index_name": benchmark_name or get_index_display_name(benchmark_code),
+            "family": resolve_openapi_api_id(benchmark_code),
+            "is_benchmark": True,
+            "is_active": True,
+            "export_sector": False,
+        }
+
+    for regime_data in (payload.get("regimes", {}) or {}).values():
+        for sector in regime_data.get("sectors", []) or []:
+            code = str(sector.get("code", "")).strip()
+            if not code:
+                continue
+            metadata[code] = {
+                "index_code": code,
+                "index_name": str(sector.get("name", "")).strip() or get_index_display_name(code),
+                "family": resolve_openapi_api_id(code),
+                "is_benchmark": code == benchmark_code,
+                "is_active": True,
+                "export_sector": bool(sector.get("export_sector", False)),
+            }
+    return metadata
+
+
+def _configured_benchmark_code() -> str:
+    """Return the configured benchmark index code, defaulting to KOSPI."""
+    for code, metadata in _configured_index_metadata().items():
+        if bool(metadata.get("is_benchmark")):
+            return str(code)
+    return "1001"
+
+
+def _warehouse_coverage_complete(index_codes: list[str], start: str, end: str) -> bool:
+    """Validate warehouse coverage using benchmark dates when available."""
+    frame = read_market_prices(index_codes, start, end)
+    if frame.empty:
+        return False
+
+    requested_codes = [str(code).strip() for code in index_codes if str(code).strip()]
+    reference_code = _configured_benchmark_code()
+    if reference_code not in requested_codes:
+        reference_code = requested_codes[0] if requested_codes else ""
+
+    reference = frame[frame["index_code"].astype(str) == reference_code]
+    if reference.empty:
+        for code in requested_codes:
+            reference = frame[frame["index_code"].astype(str) == code]
+            if not reference.empty:
+                reference_code = code
+                break
+    if reference.empty:
+        return False
+
+    expected_dates = pd.Index(reference.index.unique()).sort_values()
+    if expected_dates.empty:
+        return False
+
+    for code in requested_codes:
+        code_dates = pd.Index(frame[frame["index_code"].astype(str) == code].index.unique())
+        if len(code_dates) != len(expected_dates):
+            return False
+        if not code_dates.sort_values().equals(expected_dates):
+            return False
+    return True
+
+
+def _sync_index_dimension(index_codes: list[str]) -> None:
+    """Upsert active index metadata for the requested codes into the warehouse."""
+    configured = _configured_index_metadata()
+    rows: list[dict[str, Any]] = []
+    for code in [str(value).strip() for value in index_codes if str(value).strip()]:
+        row = configured.get(code)
+        if row is None:
+            try:
+                family = resolve_openapi_api_id(code)
+            except Exception:
+                family = "UNKNOWN"
+            row = {
+                "index_code": code,
+                "index_name": get_index_display_name(code),
+                "family": family,
+                "is_benchmark": False,
+                "is_active": True,
+                "export_sector": False,
+            }
+        rows.append(dict(row))
+    if rows:
+        upsert_index_dimension(rows)
+
+
 def _business_days_in_range(start: str, end: str) -> list[pd.Timestamp]:
     """Return business-day timestamps in the inclusive request range."""
     return list(pd.date_range(pd.Timestamp(start), pd.Timestamp(end), freq="B"))
@@ -209,81 +330,23 @@ def _access_denied_detail(summary: dict[str, Any]) -> str:
 
 
 def _write_warm_status(payload: dict[str, Any]) -> None:
-    """Persist warm job status for app cache invalidation and diagnostics."""
-    path = _warm_status_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True),
-        encoding="utf-8",
-    )
+    """Legacy compatibility hook; warehouse metadata is now authoritative."""
+    _ = payload
 
 
 def read_warm_status() -> dict[str, Any]:
     """Return the latest warm status summary for diagnostics/UI use."""
-    path = _warm_status_path()
-    if not path.exists():
-        return {}
-
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        logger.warning("Ignoring unreadable warm status %s: %s", path, exc)
-        return {}
-
-    if not isinstance(payload, dict):
-        return {}
-
-    def _digits(value: Any) -> str:
-        raw = "".join(ch for ch in str(value or "") if ch.isdigit())
-        return raw if len(raw) == 8 else ""
-
-    def _string_list(value: Any) -> list[str]:
-        if not isinstance(value, list):
-            return []
-        return [str(item).strip() for item in value if str(item).strip()]
-
-    def _string_map(value: Any) -> dict[str, str]:
-        if not isinstance(value, dict):
-            return {}
-        return {
-            str(key).strip(): str(val).strip()
-            for key, val in value.items()
-            if str(key).strip() and str(val).strip()
-        }
-
-    def _int(value: Any) -> int:
-        try:
-            return max(0, int(value))
-        except (TypeError, ValueError):
-            return 0
-
-    return {
-        "status": str(payload.get("status", "")).strip().upper(),
-        "provider": str(payload.get("provider", "")).strip().upper(),
-        "end": _digits(payload.get("end")),
-        "coverage_complete": bool(payload.get("coverage_complete")),
-        "failed_days": _string_list(payload.get("failed_days")),
-        "failed_codes": _string_map(payload.get("failed_codes")),
-        "reason": str(payload.get("reason", "")).strip(),
-        "delta_codes": _string_list(payload.get("delta_codes")),
-        "aborted": bool(payload.get("aborted")),
-        "abort_reason": str(payload.get("abort_reason", "")).strip(),
-        "predicted_requests": _int(payload.get("predicted_requests")),
-        "processed_requests": _int(payload.get("processed_requests")),
-    }
+    return read_dataset_status("market_prices")
 
 
-def get_price_artifact_key() -> tuple[int, int, int, int, int, int]:
-    """Return a cache-busting key for curated prices + warm status artifacts."""
-    def _stat_tuple(path: Path) -> tuple[int, int]:
-        if not path.exists():
-            return (0, 0)
-        stat = path.stat()
-        return (stat.st_mtime_ns, stat.st_size)
+def get_price_artifact_key() -> tuple[int, int, str, str, str]:
+    """Return a cache-busting key for the market-data warehouse state."""
+    return get_dataset_artifact_key("market_prices")
 
-    curated = CURATED_DIR / "sector_prices.parquet"
-    warm_status = _warm_status_path()
-    return (*_stat_tuple(curated), *_stat_tuple(warm_status), *_stat_tuple(RAW_DIR))
+
+def probe_market_status() -> str:
+    """Return CACHED when the warehouse already contains market data, else SAMPLE."""
+    return probe_dataset_mode("market_prices")
 
 
 @lru_cache(maxsize=1)
@@ -557,6 +620,8 @@ def _compute_missing_ranges(frame: pd.DataFrame, start: str, end: str) -> list[t
     frame = frame.sort_index()
     earliest = pd.Timestamp(frame.index.min()).normalize()
     latest = pd.Timestamp(frame.index.max()).normalize()
+    if latest < start_ts or earliest > end_ts:
+        return [(start_ts.strftime("%Y%m%d"), end_ts.strftime("%Y%m%d"))]
     ranges: list[tuple[str, str]] = []
 
     if earliest > start_ts:
@@ -1029,7 +1094,20 @@ def warm_sector_price_cache(
                 "processed_requests": 0,
             }
         )
-        _write_warm_status(summary)
+        record_ingest_run(
+            dataset="market_prices",
+            reason=reason,
+            provider=provider_mode,
+            requested_start=start,
+            requested_end=end,
+            status="CACHED",
+            coverage_complete=False,
+            failed_days=[],
+            failed_codes={},
+            delta_keys=[],
+            row_count=0,
+            summary=summary,
+        )
         return ("CACHED", pd.DataFrame()), summary
 
     if provider_mode == "OPENAPI":
@@ -1062,22 +1140,36 @@ def warm_sector_price_cache(
     summary["unavailable_contaminated_codes"] = unavailable_contaminated_codes
 
     failed_days = list(refresh_summary.get("failed_days", []))
-    coverage_complete = _is_requested_coverage_complete(
-        frames_by_code,
-        live_codes,
-        start,
-        end,
-        failures=failures,
-        failed_days=failed_days,
-    )
     result = _build_result_from_raw_frames(frames_by_code, live_codes, start, end)
+    coverage_complete = False
     if not result.empty:
-        validated = _validate_sector_prices(result)
+        warehouse_frame = _validate_sector_prices(result)
+        validated = warehouse_frame
+        _sync_index_dimension(sorted(warehouse_frame["index_code"].astype(str).unique().tolist()))
+        upsert_market_prices(warehouse_frame, provider=provider_mode)
+        coverage_complete = (
+            not failures
+            and not failed_days
+            and _warehouse_coverage_complete(live_codes, start, end)
+        )
         status: DataStatus = (
             "LIVE" if coverage_complete and refresh_summary.get("delta_codes") else "CACHED"
         )
         if coverage_complete:
-            validated = _persist_curated_sector_prices(validated)
+            validated = _persist_curated_sector_prices(warehouse_frame)
+            export_market_parquet()
+            update_ingest_watermark(
+                dataset="market_prices",
+                watermark_key=end,
+                status=status,
+                coverage_complete=True,
+                provider=provider_mode,
+                details={
+                    "reason": reason,
+                    "delta_codes": refresh_summary.get("delta_codes", []),
+                    "failed_days": failed_days,
+                },
+            )
         else:
             if not unavailable_contaminated_codes:
                 cached = _load_curated_sector_prices()
@@ -1101,7 +1193,24 @@ def warm_sector_price_cache(
                 "duration_sec": round(time.perf_counter() - started, 3),
             }
         )
-        _write_warm_status(summary)
+        record_ingest_run(
+            dataset="market_prices",
+            reason=reason,
+            provider=provider_mode,
+            requested_start=start,
+            requested_end=end,
+            status=status,
+            coverage_complete=coverage_complete,
+            failed_days=failed_days,
+            failed_codes=failures,
+            delta_keys=list(summary.get("delta_codes", [])),
+            row_count=int(len(validated)),
+            aborted=bool(summary.get("aborted")),
+            abort_reason=str(summary.get("abort_reason", "")),
+            predicted_requests=int(summary.get("predicted_requests", 0) or 0),
+            processed_requests=int(summary.get("processed_requests", 0) or 0),
+            summary=summary,
+        )
         logger.info(
             "KRX warm completed reason=%s provider=%s rows=%d coverage_complete=%s failed_days=%s cache_hits=%s delta_codes=%s duration_sec=%.2f",
             reason,
@@ -1135,7 +1244,24 @@ def warm_sector_price_cache(
                 "duration_sec": round(time.perf_counter() - started, 3),
             }
         )
-        _write_warm_status(summary)
+        record_ingest_run(
+            dataset="market_prices",
+            reason=reason,
+            provider=provider_mode,
+            requested_start=start,
+            requested_end=end,
+            status="CACHED",
+            coverage_complete=coverage_complete,
+            failed_days=failed_days,
+            failed_codes=failures,
+            delta_keys=list(summary.get("delta_codes", [])),
+            row_count=int(len(cached)),
+            aborted=bool(summary.get("aborted")),
+            abort_reason=str(summary.get("abort_reason", "")),
+            predicted_requests=int(summary.get("predicted_requests", 0) or 0),
+            processed_requests=int(summary.get("processed_requests", 0) or 0),
+            summary=summary,
+        )
         if not cached.empty:
             return ("CACHED", cached), summary
 
@@ -1155,7 +1281,24 @@ def warm_sector_price_cache(
             "duration_sec": round(time.perf_counter() - started, 3),
         }
     )
-    _write_warm_status(summary)
+    record_ingest_run(
+        dataset="market_prices",
+        reason=reason,
+        provider=provider_mode,
+        requested_start=start,
+        requested_end=end,
+        status="FAILED",
+        coverage_complete=coverage_complete,
+        failed_days=failed_days,
+        failed_codes=failures,
+        delta_keys=list(summary.get("delta_codes", [])),
+        row_count=0,
+        aborted=bool(summary.get("aborted")),
+        abort_reason=str(summary.get("abort_reason", "")),
+        predicted_requests=int(summary.get("predicted_requests", 0) or 0),
+        processed_requests=int(summary.get("processed_requests", 0) or 0),
+        summary=summary,
+    )
     return ("SAMPLE", pd.DataFrame()), summary
 
 
@@ -1192,66 +1335,9 @@ def schedule_background_warm(
     reason: str = "background",
     force: bool = False,
 ) -> bool:
-    """Start one background warm thread per normalized request key."""
-    provider_mode = _resolve_provider_mode()
-    if provider_mode == "OPENAPI" and not get_krx_openapi_key():
-        return False
-
-    normalized_codes, _ = _normalize_requested_codes(index_codes)
-    predicted_requests = _predict_openapi_requests(normalized_codes, start, end)
-    if (
-        provider_mode == "OPENAPI"
-        and predicted_requests > INTERACTIVE_OPENAPI_REQUEST_LIMIT
-    ):
-        logger.info(
-            "Skipping background OPENAPI warm for oversized interactive range %s~%s (%d predicted requests)",
-            start,
-            end,
-            predicted_requests,
-        )
-        return False
-    thread_key = "|".join([provider_mode, start, end, ",".join(normalized_codes), str(force)])
-
-    with _BACKGROUND_WARM_LOCK:
-        existing = _BACKGROUND_WARM_THREADS.get(thread_key)
-        if existing is not None and existing.is_alive():
-            return False
-
-        def _runner() -> None:
-            try:
-                warm_sector_price_cache(
-                    normalized_codes,
-                    start,
-                    end,
-                    reason=reason,
-                    force=force,
-                )
-            except Exception:
-                logger.exception("Background KRX warm failed")
-            finally:
-                with _BACKGROUND_WARM_LOCK:
-                    _BACKGROUND_WARM_THREADS.pop(thread_key, None)
-
-        _write_warm_status(
-            {
-                "status": "scheduled",
-                "reason": reason,
-                "provider": provider_mode,
-                "start": start,
-                "end": end,
-                "requested_codes": normalized_codes,
-                "force": force,
-                "predicted_requests": predicted_requests,
-            }
-        )
-        thread = threading.Thread(
-            target=_runner,
-            name=f"krx-warm-{len(_BACKGROUND_WARM_THREADS)+1}",
-            daemon=True,
-        )
-        _BACKGROUND_WARM_THREADS[thread_key] = thread
-        thread.start()
-        return True
+    """Background warming is disabled; refreshes run through explicit sync paths."""
+    _ = (index_codes, start, end, reason, force)
+    return False
 
 
 def load_sector_prices(
@@ -1288,6 +1374,20 @@ def load_sector_prices(
             skipped_summary,
         )
 
+    coverage_code = "1001" if "1001" in live_codes else (live_codes[0] if live_codes else "1001")
+    warehouse_cached = read_market_prices(live_codes, start, end)
+    if (
+        not warehouse_cached.empty
+        and is_market_coverage_complete(
+            live_codes,
+            start,
+            end,
+            benchmark_code=coverage_code,
+        )
+    ):
+        logger.info("Loaded %d codes from DuckDB warehouse", len(live_codes))
+        return ("CACHED", _validate_sector_prices(warehouse_cached))
+
     raw_frames, raw_state = _collect_raw_cache_state(live_codes, start, end)
     contaminated_codes = _detect_contaminated_raw_cache_codes(
         live_codes,
@@ -1306,30 +1406,46 @@ def load_sector_prices(
         raw_state[code]["has_slice"] and not raw_state[code]["has_older_gap"]
         for code in live_codes
     )
-    should_background_refresh = has_all_cache_slices and any(
-        raw_state[code]["newer_gap_days"] > STALE_CACHE_TOLERANCE_BUSINESS_DAYS
-        for code in live_codes
-    )
 
     if has_all_cache_slices:
         cached_result = _build_result_from_raw_frames(raw_frames, live_codes, start, end)
         if not cached_result.empty:
             validated = _validate_sector_prices(cached_result)
+            _sync_index_dimension(sorted(validated["index_code"].astype(str).unique().tolist()))
+            upsert_market_prices(validated, provider="WAREHOUSE_MIGRATION")
             if not (CURATED_DIR / "sector_prices.parquet").exists():
                 _persist_curated_sector_prices(validated)
-            if should_background_refresh:
-                schedule_background_warm(
-                    live_codes,
-                    start,
-                    end,
-                    reason="cache_delta_refresh",
-                    force=False,
-                )
+            export_market_parquet()
+            update_ingest_watermark(
+                dataset="market_prices",
+                watermark_key=end,
+                status="CACHED",
+                coverage_complete=True,
+                provider="WAREHOUSE_MIGRATION",
+                details={"reason": "raw_cache_import"},
+            )
+            record_ingest_run(
+                dataset="market_prices",
+                reason="raw_cache_import",
+                provider="WAREHOUSE_MIGRATION",
+                requested_start=start,
+                requested_end=end,
+                status="CACHED",
+                coverage_complete=True,
+                failed_days=[],
+                failed_codes={},
+                delta_keys=[],
+                row_count=int(len(validated)),
+                summary={
+                    "status": "CACHED",
+                    "coverage_complete": True,
+                    "rows": int(len(validated)),
+                    "reason": "raw_cache_import",
+                },
+            )
             logger.info(
-                "Loaded %d codes from raw cache first (provider=%s, background_refresh=%s)",
+                "Loaded %d codes from raw cache and imported them into DuckDB",
                 len(live_codes),
-                provider_mode,
-                should_background_refresh,
             )
             return ("CACHED", validated)
 
@@ -1337,6 +1453,10 @@ def load_sector_prices(
         logger.warning(
             "KRX provider is OPENAPI but KRX_OPENAPI_KEY is missing; falling back to cache."
         )
+        if not warehouse_cached.empty:
+            filtered_warehouse = _filter_sector_price_result(warehouse_cached, contaminated_codes)
+            if not filtered_warehouse.empty:
+                return ("CACHED", _validate_sector_prices(filtered_warehouse))
         cached = _load_curated_sector_prices()
         if not cached.empty:
             filtered_cached = _filter_sector_price_result(cached, contaminated_codes)
@@ -1375,6 +1495,13 @@ def load_sector_prices(
                 summary.get("failed_codes", {}),
             )
         return (status, result)
+
+    cached = read_market_prices(live_codes, start, end)
+    if not cached.empty:
+        cached = _filter_sector_price_result(cached, contaminated_codes)
+        if not cached.empty:
+            logger.info("Loaded sector prices from DuckDB warehouse after warm fallback")
+            return ("CACHED", _validate_sector_prices(cached))
 
     cached = _load_curated_sector_prices()
     if not cached.empty:

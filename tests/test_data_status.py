@@ -48,6 +48,23 @@ class TestDataStatus:
         )
         assert case == "fresh_cache"
 
+    def test_resolve_price_cache_banner_case_fresh_openapi_noop_cache(self):
+        """A complete no-op warm should stay on the fresh-cache path."""
+        case = resolve_price_cache_banner_case(
+            price_status="CACHED",
+            provider_mode="OPENAPI",
+            openapi_key_present=True,
+            market_end_date_str="20260306",
+            warm_status={
+                "status": "CACHED",
+                "watermark_key": "20260306",
+                "coverage_complete": True,
+                "failed_days": [],
+                "failed_codes": {},
+            },
+        )
+        assert case == "fresh_cache"
+
     def test_resolve_price_cache_banner_case_retryable_openapi_fallback(self):
         """Incomplete warm evidence should keep the retryable warning path."""
         case = resolve_price_cache_banner_case(

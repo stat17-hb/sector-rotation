@@ -303,27 +303,22 @@ class TestIntegration:
         assert by_code["1170"].action != "N/A"
 
     def test_read_warm_status_returns_sanitized_summary(self, tmp_path, monkeypatch):
-        """Warm-status reader should expose only the UI-relevant normalized fields."""
+        """Warm-status reader should expose the latest warehouse ingest summary."""
         import src.data_sources.krx_indices as krx_mod
+        import src.data_sources.warehouse as warehouse
 
-        raw_dir = tmp_path / "raw"
-        raw_dir.mkdir()
-        monkeypatch.setattr(krx_mod, "RAW_DIR", raw_dir)
-
-        payload = {
-            "status": "live",
-            "provider": "openapi",
-            "end": "2026-03-06",
-            "coverage_complete": True,
-            "failed_days": ["20260305", ""],
-            "failed_codes": {"1001": "Access Denied", "": "skip"},
-            "reason": "manual_refresh",
-            "delta_codes": ["1001", ""],
-            "ignored": "value",
-        }
-        (raw_dir / krx_mod.WARM_STATUS_FILE).write_text(
-            json.dumps(payload),
-            encoding="utf-8",
+        warehouse.record_ingest_run(
+            dataset="market_prices",
+            reason="manual_refresh",
+            provider="OPENAPI",
+            requested_start="20240101",
+            requested_end="20260306",
+            status="LIVE",
+            coverage_complete=True,
+            failed_days=["20260305", ""],
+            failed_codes={"1001": "Access Denied", "": "skip"},
+            delta_keys=["1001", ""],
+            row_count=42,
         )
 
         summary = krx_mod.read_warm_status()
@@ -435,6 +430,54 @@ class TestIntegration:
         assert len(result) == 6
         assert summary["delta_codes"] == ["1001"]
 
+    def test_warm_sector_price_cache_uses_benchmark_dates_for_coverage(self, tmp_path, monkeypatch):
+        """Coverage should be based on stored benchmark trade dates, not raw calendar boundaries."""
+        import src.data_sources.krx_indices as krx_mod
+
+        curated = tmp_path / "curated"
+        raw_dir = tmp_path / "raw"
+        monkeypatch.setattr(krx_mod, "CURATED_DIR", curated)
+        monkeypatch.setattr(krx_mod, "RAW_DIR", raw_dir)
+        monkeypatch.setattr(krx_mod, "get_krx_provider", lambda: "OPENAPI")
+        monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "OPENAPI_KEY")
+
+        live_idx = pd.DatetimeIndex(["2024-01-02"])
+        live_frame = pd.DataFrame({"close": [100.0]}, index=live_idx)
+        monkeypatch.setattr(
+            krx_mod,
+            "fetch_index_ohlcv_openapi_batch_detailed",
+            lambda *a, **kw: (
+                {"1001": live_frame},
+                {},
+                {"failed_days": [], "snapshot_failures": {}, "delta_codes": ["1001"]},
+            ),
+        )
+
+        (status, result), summary = krx_mod.warm_sector_price_cache(
+            ["1001"],
+            "20240101",
+            "20240102",
+            reason="test_holiday_boundary",
+            force=True,
+        )
+
+        assert status == "LIVE"
+        assert not result.empty
+        assert summary["coverage_complete"] is True
+
+    def test_compute_missing_ranges_does_not_expand_future_only_cache(self):
+        """A cache slice outside the requested window should not expand the fetch range."""
+        import src.data_sources.krx_indices as krx_mod
+
+        frame = pd.DataFrame(
+            {"close": [1.0, 2.0, 3.0]},
+            index=pd.DatetimeIndex(["2026-03-03", "2026-03-04", "2026-03-05"]),
+        )
+
+        assert krx_mod._compute_missing_ranges(frame, "20210307", "20210906") == [
+            ("20210307", "20210906")
+        ]
+
     def test_force_warm_partial_failure_returns_cached_with_failed_days(self, tmp_path, monkeypatch):
         """Force warm reports CACHED when snapshot failures leave coverage incomplete."""
         import src.data_sources.krx_indices as krx_mod
@@ -478,9 +521,10 @@ class TestIntegration:
         assert summary["failed_days"] == ["20240103"]
         assert len(result) == len(cached)
 
-    def test_load_sector_prices_schedules_background_refresh_for_stale_raw_cache(self, tmp_path, monkeypatch):
-        """Stale-but-usable raw cache returns CACHED and schedules background delta refresh."""
+    def test_load_sector_prices_imports_stale_raw_cache_without_background_refresh(self, tmp_path, monkeypatch):
+        """Stale-but-usable raw cache returns CACHED and is imported into DuckDB without background warm."""
         import src.data_sources.krx_indices as krx_mod
+        import src.data_sources.warehouse as warehouse
 
         monkeypatch.setattr(krx_mod, "CURATED_DIR", tmp_path / "curated")
         monkeypatch.setattr(krx_mod, "RAW_DIR", tmp_path / "raw")
@@ -509,7 +553,9 @@ class TestIntegration:
 
         assert status == "CACHED"
         assert not result.empty
-        assert scheduled == [(["1001"], "20240101", "20240110", "cache_delta_refresh")]
+        assert scheduled == []
+        warehouse_frame = warehouse.read_market_prices(["1001"], "20240101", "20240110")
+        assert not warehouse_frame.empty
 
     def test_load_sector_prices_fails_fast_for_oversized_openapi_range(self, tmp_path, monkeypatch):
         """Interactive OpenAPI loads should reject ranges above the snapshot budget."""
