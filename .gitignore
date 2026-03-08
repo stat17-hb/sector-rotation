@@ -24,3 +24,12 @@ htmlcov/
 # Local temporary logs and scratch files
 .tmp*
 .tmp_test/
+logs/
+backups/
+
+# Local database and generated warehouse artifacts
+data/*.duckdb
+data/*.duckdb-wal
+data/curated/*.parquet
+data/raw/krx/*/*.parquet
+data/raw/krx/index_name_metadata.json

@@ -1,4 +1,45 @@
-﻿# Korea Sector Rotation Dashboard - Execution Plan (Synced)
+# 2026-03-08 - Git Push Large File Fix
+
+Status: In progress
+Owner: Codex + User
+
+## Execution Checklist
+- [x] Push failure root cause identified: `data/warehouse.duckdb` in local `HEAD` exceeds GitHub 100 MB limit
+- [ ] Update `.gitignore` to keep local DuckDB and generated artifacts untracked
+- [ ] Rewrite local commit to exclude large/generated files while preserving intended code changes
+- [ ] Verify local branch no longer contains oversized tracked blobs in the new commit
+- [ ] Confirm `git push origin main` is ready to succeed
+
+## Review
+- Remote rejected `git push origin main:main` on 2026-03-08 because `data/warehouse.duckdb` was 112.51 MB.
+- `origin/main` already tracks an older smaller `data/warehouse.duckdb`; the fix must remove the oversized blob from the local commit history before pushing.
+
+# 2026-03-08 - Stock-dashboard Palette Migration
+
+Status: In progress
+Owner: Codex + User
+
+## Execution Checklist
+- [x] 현재 프로젝트 스타일 구조 파악
+- [x] 기준선 파일 확정: `app.py`, `src/ui/styles.py`, `src/ui/components.py`, `.streamlit/config.toml`, `tests/test_ui_theme.py`, `tests/test_ui_components.py`, `tests/test_ui_contrast.py`
+- [x] 토큰 파일 생성 방향 확정: Python dict 기반 중앙 모듈 `config/theme.py`
+- [x] `config/theme.py` 생성 및 `stock-dashboard` 구조(`ui/chart/dataframe/signal/navigation`) 이식
+- [ ] `.streamlit/config.toml`을 새 다크 기본 팔레트로 갱신
+- [ ] `src/ui/styles.py`를 `config.theme` 기반 호환 계층으로 리팩터링
+- [ ] `src/ui/components.py` 하드코딩 색상을 중앙 토큰으로 교체
+- [ ] `app.py` 테마 상태 관리를 `config.theme` helper로 이관
+- [ ] 테스트 갱신: `tests/test_ui_theme.py`, `tests/test_ui_contrast.py`, `tests/test_ui_components.py`
+- [ ] 잔여 하드코딩 색상 grep 점검 (`app.py`, `src/ui`)
+- [ ] 검증: `pytest -q tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_ui_components.py`
+- [ ] 수동 점검: `streamlit run app.py`에서 dark/light 일관성 확인
+
+## Review
+- Baseline findings:
+- App already has a dark/light sidebar toggle and `st.session_state["theme_mode"]`.
+- Theme logic is concentrated in `src/ui/styles.py`; `src/ui/components.py` still contains multiple hardcoded chart/timeline colors.
+- Existing `.streamlit/config.toml` still uses the old navy palette, not the `stock-dashboard` indigo/zinc palette.
+
+# Korea Sector Rotation Dashboard - Execution Plan (Synced)
 
 Last updated: 2026-02-22
 Source of truth: `plan.md`
@@ -1782,3 +1823,461 @@ Review:
 - Added a regression test for the no-op warm case where the latest market sync is current but no new delta rows were fetched.
 - Targeted verification passed: `9 passed in 0.44s`, `py_compile` succeeded, and the current local warm status (`status=CACHED`, `end=20260306`, `coverage_complete=True`) now resolves to `fresh_cache`.
 - Final judgement: the warning shown at app startup was a UI classification bug, not a market-data freshness problem.
+
+## 49) 개인 투자자 중심 UX/UI 재구성 (2026-03-07)
+
+Pre-Implementation Check-in:
+- 2026-03-07: 사용자 승인된 UX/UI 개선 계획 v2를 기준으로 Streamlit 레이아웃과 상태 표현을 재구성한다.
+- Scope: 메인 상단 필터 이동, 사이드바 단순화, 단일 상태 배너, toast 기반 갱신 피드백, 카드형 상태 요약, 탭 재배치, native dataframe 전환, 모바일 레이아웃 보정.
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 진행 상태를 기록한다.
+- [x] `src/ui/data_status.py`에 단일 상태 배너 payload 생성 helper를 추가한다.
+- [x] `src/ui/components.py`에 top bar, decision hero, status card row, top picks table helper를 추가한다.
+- [x] `render_signal_table()`를 `st.dataframe + st.column_config` 기반으로 재작성한다.
+- [x] `src/ui/styles.py`에 top bar, 상태 카드, compact note, 반응형 CSS를 추가한다.
+- [x] `app.py`에서 글로벌 필터를 메인 상단으로 이동하고 사이드바를 재정리한다.
+- [x] `app.py`에서 탭 이름/콘텐츠 배치를 요약, 차트 분석, 전체 종목 데이터 흐름으로 재구성한다.
+- [x] `app.py`에서 상단 알림을 단일 상태 배너로 통합하고 refresh 결과는 toast로 전환한다.
+- [x] `tests/test_data_status.py`, `tests/test_ui_components.py`, `tests/test_ui_theme.py`를 갱신해 새 UI contract를 검증한다.
+- [x] `py_compile` 및 대상 pytest를 실행하고 Review 섹션에 결과를 기록한다.
+
+Review:
+- Commands run:
+- `python -m py_compile app.py src/ui/components.py src/ui/styles.py src/ui/data_status.py tests/test_ui_components.py tests/test_ui_theme.py tests/test_data_status.py`
+- `pytest -q tests/test_data_status.py tests/test_ui_components.py tests/test_ui_theme.py tests/test_ui_contrast.py`
+- `pytest -q`
+- `python -m streamlit run app.py --server.headless true --server.port 8513` (10초 기동 확인 후 종료)
+- Results:
+- `src/ui/data_status.py`에 단일 상태 배너 우선순위 helper를 추가해 `BLOCKED > SAMPLE > OpenAPI key 누락 > 시장 cache fallback > 매크로 cache > preflight info` 순으로 한 개의 시스템 배너만 노출하도록 정리했다.
+- `src/ui/components.py`를 재구성해 top bar 필터, decision hero, 상태 카드, Top Picks native dataframe, 전체 신호 native dataframe, compact note 기반 차트 안내를 도입했다.
+- `src/ui/styles.py`에 top bar summary, decision hero, status card grid, compact note, 모바일 대응 media query를 추가해 새 레이아웃 스타일을 통일했다.
+- `app.py`에서 글로벌 필터를 메인 상단으로 이동하고 사이드바를 기준일/테마/데이터 작업 중심으로 축소했으며, refresh 결과를 toast로 전환하고 탭 구성을 `대시보드 요약 / 모멘텀/차트 분석 / 전체 종목 데이터`로 재배치했다.
+- 검증 결과: 대상 UI 회귀 `44 passed in 1.03s`, 전체 테스트 스위트 `147 passed in 15.13s`, 대상 파일 `py_compile` 통과, Streamlit 헤드리스 기동 성공(`Local URL: http://localhost:8513`).
+- Residual risks / follow-ups:
+- 실제 브라우저에서의 시각 검수는 별도로 수행하지 않았다. 상호작용 흐름과 모바일 체감 품질은 한 번 더 수동 확인하는 것이 좋다.
+- 헤드리스 기동 로그에 `Failed to scan component manifests: 'NoneType' object has no attribute 'lower'` 경고가 1회 남았다. 앱 기동 자체는 성공했지만, Streamlit 런타임/환경성 경고인지 후속 확인이 필요하다.
+
+## 50) Streamlit 유지형 shadcn 디자인 시스템 이식 (2026-03-07)
+
+Pre-Implementation Check-in:
+- 2026-03-07: 승인된 "Streamlit 유지형 shadcn 디자인 개선 계획"을 구현한다.
+- Scope: 임시 shadcn 랩으로 패턴을 확인하고, 프로덕션은 Streamlit 단일 앱을 유지한 채 상단 command bar, 패널형 chart shell, persistent status strip, table shell, 토큰 레이어를 이식한다.
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 진행 상태를 기록한다.
+- [x] 배포 경로 밖 임시 폴더에 shadcn 랩을 생성하고 `card`, `badge`, `tabs`, `sidebar`, `sheet`, `chart`, `data-table`, `sonner`, `skeleton`, `separator` 패턴을 확인한다.
+- [x] `src/ui/styles.py`에 shadcn식 radius/spacing/surface/ring 토큰과 app shell, filter bar, status strip, panel shell, table shell CSS를 추가한다.
+- [x] `src/ui/components.py`의 핵심 helper 마크업을 shadcn식 패턴으로 재구성하되 함수 시그니처 호환성을 유지한다.
+- [x] `src/ui/data_status.py`와 `app.py`를 조정해 refresh 결과는 toast-first, 장기 상태는 단일 persistent strip으로 표현한다.
+- [x] 사이드바는 유지보수 중심으로 더 압축하고, 글로벌 필터 및 페이지 헤더를 본문 상단 shell로 재배치한다.
+- [x] `tests/test_ui_components.py`, `tests/test_ui_theme.py`, `tests/test_ui_contrast.py`, `tests/test_data_status.py`를 갱신해 새 UI contract를 검증한다.
+- [x] `py_compile`, 대상 pytest, Streamlit headless smoke를 실행하고 Review를 채운다.
+
+Review:
+- Commands run:
+- `npx shadcn@latest --help`
+- `npx shadcn@latest init --help`
+- `npx shadcn@latest add --help`
+- `npx shadcn@latest init --template vite --name sector-rotation-ui-lab --cwd $env:TEMP\\sector-rotation-shadcn-lab --yes --no-monorepo --base radix --preset nova`
+- `npx shadcn@latest add card badge tabs sidebar sheet chart sonner skeleton separator --cwd $env:TEMP\\sector-rotation-shadcn-lab\\sector-rotation-ui-lab --yes`
+- `npx shadcn@latest view '@shadcn/dashboard-01' -c $env:TEMP\\sector-rotation-shadcn-lab\\sector-rotation-ui-lab`
+- `python -m py_compile app.py src/ui/components.py src/ui/styles.py tests/test_ui_components.py tests/test_ui_theme.py`
+- `pytest -q tests/test_ui_components.py tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_data_status.py`
+- `pytest -q`
+- `rg -n "�|\\?곗|\\?꾩|\\?좏" app.py src/ui/components.py src/ui/styles.py tests/test_ui_components.py tests/test_ui_theme.py`
+- `python -m streamlit run app.py --server.headless true --server.port 8516` (10초 기동 확인 후 종료)
+- Results:
+- 임시 shadcn 랩을 `%TEMP%\\sector-rotation-shadcn-lab\\sector-rotation-ui-lab`에 생성해 CLI v4 흐름과 `dashboard-01` 블록 구조를 확인했다. `data-table`는 현재 `radix-nova` 레지스트리에서 단일 컴포넌트가 아니라 블록 예제로 노출되어, 패턴 추출은 `dashboard-01` 블록과 `chart/sidebar/sonner` 개별 컴포넌트로 대체했다.
+- `src/ui/components.py`를 재구성해 `page-shell`, `status-strip`, `panel-header`, shadcn식 `command-bar`, 영문 column contract를 추가했고, 기존 차트/테이블 helper 시그니처는 유지했다.
+- `src/ui/styles.py`에 shadcn식 radius/spacing/ring/muted 토큰과 page shell, persistent status strip, command bar, panel header, focus ring, 840px 이하 모바일 규칙을 추가했다.
+- `app.py`는 상단 persistent strip + page shell + 메인 command bar 흐름으로 보강했고, summary/charts/table 영역에 panel header를 연결했다. Streamlit 단일 런타임, 데이터 계약, 캐시 정책은 변경하지 않았다.
+- 검증 결과: 대상 UI 회귀 `47 passed in 0.94s`, 전체 테스트 스위트 `150 passed in 14.23s`, 수정 파일 인코딩 깨짐 패턴 검색 clean, `py_compile` 통과, Streamlit 헤드리스 기동 성공(`Local URL: http://localhost:8516`).
+- Residual risks / follow-ups:
+- `app.py`의 기존 한국어 카피는 이번 작업에서 전체 재번역하지 않았다. 구조/스타일은 업데이트됐지만 일부 레이블은 후속 정리 여지가 있다.
+- 헤드리스 기동 로그에 `Failed to scan component manifests: 'NoneType' object has no attribute 'lower'` 경고가 1회 남았다. 이번 변경과 무관하게 Streamlit 런타임/환경성 경고로 보이며, 앱 기동 자체는 성공했다.
+
+## 51) 전체 종목 데이터 빈 상태 원인 분석 (2026-03-07)
+
+Pre-Implementation Check-in:
+- 2026-03-07: `"전체 종목 데이터"` 탭에서 `No sectors match the active filters.`가 노출되는 원인을 코드와 현재 로컬 데이터 기준으로 추적한다.
+- Scope: UI empty-state 경로, 전역 필터 sentinel 일관성, 현재 로컬 signal 분포를 확인하고 설명 근거를 남긴다.
+
+Execution Checklist:
+- [x] `tasks/lessons.md`와 관련 UI 코드 위치를 확인한다.
+- [x] `render_signal_table()`의 empty-state 조건과 호출부를 추적한다.
+- [x] 현재 로컬 curated 데이터로 signal/action/regime 분포를 재계산한다.
+- [x] 원인을 `tasks/todo.md` Review와 사용자 응답에 정리한다.
+
+Review:
+- Commands run:
+- `rg -n "No sectors match the active filters|전체 종목 데이터|render_signal_table|signals_filtered|filter_regime_only_global|ALL_ACTION_OPTION" app.py src tests -S`
+- `python` inline script to rebuild current signals from `data/curated/sector_prices.parquet` and `data/curated/macro_monthly.parquet`
+- Results:
+- `src/ui/components.py`의 `render_signal_table()`는 `filter_action != ALL_ACTION_OPTION("All")`이면 `signal.action == filter_action` 비교를 수행하고, 결과가 0건이면 `No sectors match the active filters.`를 띄운다.
+- `app.py`는 상단 전역 필터 기본값과 옵션으로 한국어 `"전체"`를 사용하고, `tab_all_signals`에서 그 값을 그대로 `render_signal_table()`에 넘긴다.
+- 따라서 기본값 `"전체"`가 `render_signal_table()` 내부에서는 `"All"`로 인식되지 않아 `signal.action == "전체"` 필터가 적용되고, 실제 signal action domain(`Strong Buy/Watch/Hold/Avoid/N/A`)과 불일치해 0건이 된다.
+- 현재 로컬 curated 데이터 자체는 비어 있지 않다. 재계산 결과 signal `11`건, 현재 confirmed regime은 `Indeterminate`, action 분포는 `Hold 4`, `Avoid 7`이었다.
+- 추가로 현재 confirmed regime이 `Indeterminate`라서 `현재 국면만 보기`를 켜면 일치하는 sector가 `0`건이 되는 것도 별도의 empty-state 원인이다.
+
+## 52) 전체 종목 데이터 액션 필터 sentinel 정합성 수정 (2026-03-07)
+
+Pre-Implementation Check-in:
+- 2026-03-07: `"전체 종목 데이터"` 탭 기본 액션 필터가 빈 결과로 해석되는 문제를 수정한다.
+- Scope: 액션 필터 canonical sentinel을 한국어 UI와 맞추고, 구버전 `"All"` 세션 값도 호환 처리한다.
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 수정 범위를 기록한다.
+- [x] `src/ui/components.py`의 액션 필터 sentinel을 한국어 UI 기준으로 정리하고 legacy `"All"` 호환 helper를 추가한다.
+- [x] `app.py`에서 전역 액션 필터 옵션/비교/세션 정규화를 동일 sentinel로 맞춘다.
+- [x] `tests/test_ui_components.py`에 legacy `"All"` 회귀 테스트를 추가한다.
+- [x] 대상 테스트와 정적 검증을 실행하고 Review를 기록한다.
+
+Review:
+- Commands run:
+- `python -m py_compile app.py src/ui/components.py tests/test_ui_components.py`
+- `pytest -q tests/test_ui_components.py`
+- `python` inline script to rebuild current signals from curated parquet data and validate the default all-action filter path
+- Results:
+- `src/ui/components.py`의 canonical `ALL_ACTION_OPTION`을 한국어 `"전체"`로 정리하고, `LEGACY_ALL_ACTION_OPTIONS` / `_is_all_action_filter()`를 추가해 구세션 `"All"` 값도 전체 필터로 해석하도록 했다.
+- `app.py`는 전역 액션 필터 옵션과 비교를 `ALL_ACTION_OPTION` 기준으로 통일했고, 세션 상태에 남아 있을 수 있는 `"All"` 값을 `"전체"`로 정규화한다.
+- `tests/test_ui_components.py`에 legacy `"All"` 필터가 빈 상태를 만들지 않는 회귀 테스트를 추가했다.
+- 검증 결과: 대상 파일 `py_compile` 통과, `tests/test_ui_components.py` `19 passed in 0.89s`.
+- 현재 로컬 curated 데이터 재검증 결과 `ALL_ACTION_OPTION="전체"`, `_is_all_action_filter("전체")==True`, 총 signal `11`건, 기본 UI 필터 적용 후에도 `11`건이 유지됐다.
+- Residual risks / follow-ups:
+- 현재 confirmed regime은 여전히 `Indeterminate`라서 `현재 국면만 보기`를 켜면 0건이 되는 동작은 정상적으로 남아 있다. 이번 수정 범위는 액션 필터 sentinel 정합성에 한정했다.
+
+## 53) 분석 캔버스 UI 재구성 구현 (2026-03-08)
+
+Pre-Implementation Check-in:
+- 2026-03-08: 승인된 "섹터 로테이션 대시보드 UI 재구성안"을 구현한다.
+- Scope: 상단 분석 컨트롤 바, 월별 섹터 강도 히트맵, 경기 사이클 타임라인 카드, 선택 섹터 상세 추적 패널, 패널 공통 쉘, 세션 상태 연동, 관련 UI 테스트.
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 진행 상태를 기록한다.
+- [x] `src/ui/components.py`에 `render_analysis_toolbar`, `render_cycle_timeline_panel`, `render_sector_detail_panel` 및 관련 figure/helper를 추가한다.
+- [x] `src/ui/styles.py`에 분석 컨트롤 바, 선택 칩, 히트맵 패널, 사이클 타임라인, 섹터 리스트, 상세 차트 쉘 CSS를 추가한다.
+- [x] `app.py`에 `selected_sector`, `selected_month`, `selected_cycle_phase`, `selected_range_preset` 세션 상태를 추가한다.
+- [x] `app.py`에서 가격/국면 데이터를 기반으로 분석 캔버스용 월별 히트맵, 국면 세그먼트, 선택 섹터 상세 데이터셋을 구성한다.
+- [x] `app.py`에 상단부터 `분석 컨트롤 바 -> 월별 섹터 강도 -> 경기 사이클 맥락 -> 선택 섹터 상세 추적` 흐름을 렌더링한다.
+- [x] 히트맵 선택, 국면 선택, 섹터 선택, 기간 프리셋이 동일 세션 상태를 공유하도록 연결한다.
+- [x] 기존 요약/차트/테이블 흐름이 깨지지 않도록 보조 뷰로 유지하거나 안전하게 정리한다.
+- [x] `tests/test_ui_components.py`, `tests/test_ui_theme.py`를 갱신해 새 컴포넌트와 CSS contract를 검증한다.
+- [x] `py_compile`, 깨짐 패턴 점검, 대상 pytest, 전체 pytest, Streamlit headless smoke를 실행하고 Review를 기록한다.
+
+Review:
+- Commands run:
+- `python -m py_compile app.py src/ui/components.py src/ui/styles.py tests/test_ui_components.py tests/test_ui_theme.py`
+- `pytest -q tests/test_ui_components.py tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_data_status.py`
+- `pytest -q`
+- `rg -n "�|\\?곗|\\?꾩|\\?좏" app.py src/ui/components.py src/ui/styles.py tests/test_ui_components.py tests/test_ui_theme.py`
+- `python -m streamlit run app.py --server.headless true --server.port 8517` (12초 기동 확인 후 종료, stdout/stderr 로그 캡처)
+- Results:
+- `app.py`는 기존 signal/tabs 흐름 위에 분석 캔버스를 추가해 `analysis toolbar -> monthly sector strength heatmap -> cycle timeline -> selected sector detail` 순서로 재구성했다.
+- `src/ui/components.py`에 분석 바, 월별 히트맵, 경기 사이클 타임라인, 상세 비교 차트, 섹터 랭킹 패널 helper를 추가했고, 히트맵 셀 선택/국면 선택/상세 range toggle을 세션 상태와 연결했다.
+- `src/ui/styles.py`에 `analysis-toolbar`, `phase-chip-row`, `sector-rank-list__metric` 등 새 캔버스용 CSS shell을 추가했다.
+- UI 대상 회귀는 `52 passed in 1.10s`, 전체 테스트 스위트는 `155 passed in 15.59s`로 통과했다.
+- `py_compile` 통과, 깨짐 패턴 검색은 매치 0건으로 clean, Streamlit headless smoke는 `Local URL: http://localhost:8517`까지 정상 기동했다.
+- Residual risks / follow-ups:
+- Plotly selection 기반 히트맵 셀 선택은 Streamlit의 chart selection API 동작에 의존하므로, 실제 브라우저에서 클릭/선택 UX를 한 번 더 수동 확인하는 것이 좋다.
+- headless smoke stderr에 `Failed to scan component manifests: 'NoneType' object has no attribute 'lower'` 경고가 1회 남았다. 기존에도 보이던 Streamlit 런타임/환경성 경고로 보이며 앱 기동 자체는 정상이다.
+
+## 54) 사이클 타임라인 가독성 수정 (2026-03-08)
+
+Pre-Implementation Check-in:
+- 2026-03-08: 사용자 피드백 기준으로 사이클 타임라인이 국면 색상과 시점을 제대로 구분하지 못하는 문제를 수정한다.
+- Scope: `render_cycle_timeline_panel()` 렌더링 방식, 월 단위 x축, 선택/현재 국면 강조, 관련 테스트와 검증만 포함한다.
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 진행 상태를 기록한다.
+- [x] `src/ui/components.py`의 사이클 타임라인을 date-span 밴드형 렌더링으로 교체한다.
+- [x] 회복/확장/둔화/침체 base color family와 early/late 변형을 재정의한다.
+- [x] 현재 국면과 선택 국면 강조 규칙을 분리해 스타일 차이를 반영한다.
+- [x] x축을 월 단위 고정 레이블로 바꾸고 title/hover를 월 해상도 중심으로 정리한다.
+- [x] `tests/test_ui_components.py`를 갱신해 trace/fill/tickformat/style 차이를 검증한다.
+- [x] `py_compile`, 대상 pytest, 전체 pytest, 깨짐 패턴 점검, Streamlit headless smoke를 실행하고 Review를 기록한다.
+
+Review:
+- Commands run:
+- `python -m py_compile src/ui/components.py tests/test_ui_components.py app.py`
+- `pytest -q tests/test_ui_components.py`
+- `pytest -q`
+- `rg -n "�|\\?곗|\\?꾩|\\?좏" src/ui/components.py tests/test_ui_components.py app.py`
+- `python -m streamlit run app.py --server.headless true --server.port 8518` (12초 기동 확인 후 종료, stdout/stderr 로그 캡처)
+- Results:
+- `render_cycle_timeline_panel()`을 `go.Bar + numeric duration`에서 `go.Scatter + fill="toself"` 기반의 date-span 밴드 렌더링으로 교체해 구간 면적이 실제로 보이도록 수정했다.
+- 회복/확장/둔화/침체는 서로 다른 base color family를 쓰고, early/late는 같은 hue 내 농도 차이로 유지했다. 선택 국면은 가장 두꺼운 외곽선, 현재 국면은 그 다음 강도의 외곽선과 높은 opacity로 분리했다.
+- x축은 `tickformat="%Y-%m"`, `dtick="M1"`, `tickangle=-45`로 고정해 월 단위 시점을 직접 읽을 수 있게 바꿨고, 차트 title도 `Cycle timeline (monthly)`로 조정했다.
+- 대상 테스트 `23 passed in 1.02s`, 전체 테스트 `155 passed in 15.69s`, `py_compile` 통과, Streamlit headless smoke 정상 기동(`Local URL: http://localhost:8518`).
+- Residual risks / follow-ups:
+- 월 고정 tick은 `ALL` 범위가 더 길어질 경우 레이블 혼잡도가 다시 올라갈 수 있다. 현재 분석 창(최대 18개월 중심)에서는 적절하지만, 장기 확장 시 적응형 tick density를 재검토할 수 있다.
+- headless smoke stderr의 `Failed to scan component manifests: 'NoneType' object has no attribute 'lower'`는 기존과 동일하게 1회 남아 있다. 앱 기동 자체는 정상이다.
+
+## 55) 사이클 타임라인 팔레트/연속성 보강 (2026-03-08)
+
+Pre-Implementation Check-in:
+- 2026-03-08: 사용자 피드백 기준으로 사이클-색 매핑 정보 부족, 4개 국면 팔레트 구분 부족, 특정 월 단절 표현을 수정한다.
+- Scope: `_build_cycle_segments()` 월 경계 정규화, `NaN` segment 제외, `Indeterminate` 중립 구간 유지, 타임라인 범례/팔레트 표시, 관련 테스트와 검증만 포함한다.
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 진행 상태를 기록한다.
+- [x] `app.py`의 `_build_cycle_segments()`에서 월 start/end 정규화와 `NaN` 제외 규칙을 반영한다.
+- [x] `src/ui/components.py`의 `render_cycle_timeline_panel()`에 4개 국면 + `Indeterminate` 팔레트 범례를 추가한다.
+- [x] 국면별 base palette를 명확히 분리하고 `Indeterminate`를 중립색으로 처리한다.
+- [x] hover에 상태(Current/Selected/Indeterminate)를 포함하고 연속 구간이 끊기지 않도록 밴드 범위를 정리한다.
+- [x] `tests/test_ui_components.py`에 월 경계/NaN 제외/중립 구간/범례 렌더링 회귀를 추가한다.
+- [x] `py_compile`, 대상 pytest, 전체 pytest, 깨짐 패턴 점검, Streamlit headless smoke를 실행하고 Review를 기록한다.
+
+Review:
+- Commands run:
+- `python -m py_compile app.py src/ui/components.py src/ui/styles.py tests/test_ui_components.py`
+- `pytest -q tests/test_ui_components.py`
+- `pytest -q`
+- `rg -n "�|\\?곗|\\?꾩|\\?좏" app.py src/ui/components.py src/ui/styles.py tests/test_ui_components.py`
+- `python -m streamlit run app.py --server.headless true --server.port 8519` (12초 기동 확인 후 종료, stdout/stderr 로그 캡처)
+- Results:
+- `_build_cycle_segments()`는 이제 regime month index를 month-start로 정규화하고, 각 segment `start/end`를 월 전체 구간으로 생성한다. `NaN` 값은 segment 생성에서 제외하고 `Indeterminate`는 중립 구간으로 유지한다.
+- `render_cycle_timeline_panel()`에는 `Cycle palette` 범례를 추가해 회복기/확장기/둔화기/침체기/Indeterminate 색 매핑을 패널 내부에서 바로 읽을 수 있게 했다.
+- 타임라인 밴드는 `Indeterminate`를 중립 슬레이트 계열로 표시하고, hover에 `Status`를 추가해 `Selected`, `Current`, `Indeterminate`, `Context`를 구분한다.
+- `app.py`의 월말 리샘플링을 `ME`로 바꿔 관련 `FutureWarning`도 같이 제거했다.
+- 대상 테스트 `24 passed in 7.59s`, 전체 테스트 `156 passed in 22.16s`, `py_compile` 통과, Streamlit headless smoke 정상 기동(`Local URL: http://localhost:8519`).
+- Residual risks / follow-ups:
+- 현재 타임라인은 `Indeterminate`를 의도적으로 보여 주므로, 사용자가 “미확정 구간 숨김”을 원한다면 별도 토글을 추가하는 후속 설계가 필요하다.
+- headless smoke stderr의 `Failed to scan component manifests: 'NoneType' object has no attribute 'lower'` 경고는 기존과 동일하게 1회 남아 있다. 앱 기동 자체는 정상이다.
+
+## 56) 가격 데이터 10년 Backfill 실운영 검증 (2026-03-08)
+
+Pre-Implementation Check-in:
+- 2026-03-08: 사용자 요청으로 가격 데이터가 `2016-03` 전후까지 확장 가능한지 실운영 경로에서 검증한다.
+- Scope: 현재 가격/warehouse 범위를 캡처하고, `bootstrap_warehouse.py --prices-years 10` 백필을 실행한 뒤 결과를 warehouse/curated/app smoke 기준으로 판정한다. UI 변경은 이번 범위에서 제외한다.
+
+Execution Checklist:
+- [x] 본 섹션을 `tasks/todo.md`에 추가하고 기준 범위/실행 계획을 기록한다.
+- [x] `sector_prices.parquet`, `fact_krx_index_daily`, `ingest_watermarks`의 현재 범위를 캡처한다.
+- [x] `data/warehouse.duckdb`, `data/curated/sector_prices.parquet`, `data/raw/krx/_warm_status.json` 백업을 생성한다.
+- [x] `python scripts/bootstrap_warehouse.py --prices-years 10 --macro-years 10 --market-chunk-months 1 --market-chunk-retries 3 --market-chunk-retry-sleep-sec 5 --as-of 20260306`를 실행한다.
+- [x] coverage incomplete 또는 `Access Denied` 계열 실패면 동일 명령을 최대 2회 재시도한다.
+- [x] 실행 후 `fact_krx_index_daily` 최소/최대일, row 수, distinct code 수와 `sector_prices.parquet` 범위를 재검증한다.
+- [x] Streamlit headless smoke로 앱이 확장된 데이터셋에서도 정상 기동하는지 확인한다.
+- [x] Review에 실행 명령, 결과, 실패/성공 판정과 후속 액션을 기록한다.
+
+Review:
+- Commands run:
+- `python -c "import pandas as pd; df=pd.read_parquet('data/curated/sector_prices.parquet'); idx=df.index; print(...)"` (실행 전 기준 범위 캡처)
+- `Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'python|streamlit' } | Select-Object ProcessId,Name,CommandLine`
+- `Copy-Item data/warehouse.duckdb`, `Copy-Item data/curated/sector_prices.parquet`, `Copy-Item data/raw/krx/_warm_status.json` to `backups/backfill_10y_20260308_140408/`
+- `python scripts/bootstrap_warehouse.py --prices-years 10 --macro-years 10 --market-chunk-months 1 --market-chunk-retries 3 --market-chunk-retry-sleep-sec 5 --as-of 20260306`
+- `python -X utf8 -c "import duckdb; ... fact_krx_index_daily ... ingest_watermarks ..."`
+- `python -c "import pandas as pd; df=pd.read_parquet('data/curated/sector_prices.parquet'); ..."`
+- `python -m streamlit run app.py --server.headless true --server.port 8520` (15초 smoke 후 종료)
+- Results:
+- 실행 전 기준 범위:
+- `data/curated/sector_prices.parquet`: `2021-03-08` ~ `2026-03-06`, `14700` rows, `12` codes.
+- `fact_krx_index_daily`: `2021-03-08` ~ `2026-03-06`, `14700` rows, `12` codes.
+- 첫 bootstrap 시도는 `_duckdb.IOException`으로 즉시 실패했다. 원인은 현재 저장소에서 실행 중이던 `python -m streamlit run app.py` 프로세스가 `data/warehouse.duckdb`를 쓰기 잠근 상태였기 때문이다.
+- 해당 Streamlit 프로세스를 종료한 뒤 같은 명령으로 재실행했고, 재시도 없이 성공했다.
+- bootstrap 결과:
+- `market.status=LIVE`, `market.summary.coverage_complete=true`, `market.summary.start=20160308`, `market.summary.end=20260306`, `market.rows=29424`.
+- `market.summary.chunks` 전체가 `attempts=1`, `coverage_complete=true`, `failed_days=[]`, `failed_codes={}` 상태로 완료됐다.
+- `market.warehouse_status`: `('market_prices', '20260306', 'LIVE', True, 'OPENAPI')`.
+- 실행 후 검증:
+- `fact_krx_index_daily`: `2016-03-08` ~ `2026-03-06`, `29424` rows, `12` distinct codes.
+- `data/curated/sector_prices.parquet`: `2016-03-08` ~ `2026-03-06`, `29424` rows, `12` codes.
+- Streamlit headless smoke는 `http://localhost:8520`까지 정상 기동했다. stderr에는 기존과 동일한 `Failed to scan component manifests: 'NoneType' object has no attribute 'lower'` 경고가 1회 남았다.
+- Final judgement:
+- 가격 데이터 10년 backfill은 현재 로컬 환경에서 성공적으로 검증됐다. `ALL=전체 기간`과 `최근 1년 / 최근 3년 / 최근 5년 / 전체` UI 확장은 이제 데이터 부족이 아니라 UI/상태 설계만의 문제다.
+- Residual risks / follow-ups:
+- DuckDB warehouse write 작업 전에는 로컬 Streamlit 앱 등 `warehouse.duckdb`를 붙잡는 프로세스가 없는지 먼저 확인해야 한다.
+- `_warm_status.json`은 이번 bootstrap 결과와 무관한 오래된 테스트/과거 상태를 담고 있을 수 있으므로, 장기 backfill 성공 판정의 기준은 warehouse와 curated export 범위로 삼는 것이 안전하다.
+
+## 57) 분석 캔버스 공용 기간 프리셋 재정의 (`1Y/3Y/5Y/ALL`) (2026-03-08)
+
+Pre-Implementation Check-in:
+- 2026-03-08: 사용자 요청으로 분석 캔버스의 공용 기간 선택 체계를 `최근 1년 / 최근 3년 / 최근 5년 / 전체`로 바꾼다.
+- Scope: 상단 analysis toolbar, cycle timeline/heatmap/detail panel이 공유하는 `selected_range_preset` 계약을 `1Y/3Y/5Y/ALL/CUSTOM`으로 재정의하고, legacy `3M/6M/12M/18M` 값을 정규화한다.
+
+Execution Checklist:
+- [x] `src/ui/components.py`의 preset helper와 toolbar/detail panel 옵션을 `1Y/3Y/5Y/ALL/CUSTOM`으로 교체한다.
+- [x] `resolve_range_from_preset()`, `infer_range_preset()`을 연 단위 프리셋 기준으로 갱신한다.
+- [x] legacy preset 값(`12M`, `3M`, `6M`, `18M`)을 새 계약으로 정규화하는 helper를 추가한다.
+- [x] `app.py`의 기본 `selected_range_preset`을 `1Y`로 바꾸고, 세션 상태를 초기 진입 시 정규화한다.
+- [x] 상세 패널 range toggle도 동일한 공용 프리셋 계약을 따르도록 정리한다.
+- [x] `tests/test_ui_components.py`에 새 preset helper/toolbar/detail panel 회귀를 추가한다.
+- [x] `py_compile`, 대상 pytest, 전체 pytest, Streamlit headless smoke를 실행하고 Review를 기록한다.
+
+Review:
+- Commands run:
+- `python -m py_compile app.py src/ui/components.py tests/test_ui_components.py`
+- `pytest -q tests/test_ui_components.py`
+- `pytest -q`
+- `python -m streamlit run app.py --server.headless true --server.port 8521` (15초 smoke 후 종료)
+- `rg -n "�|\\?곗|\\?꾩|\\?좏" app.py src/ui/components.py tests/test_ui_components.py`
+- Results:
+- `src/ui/components.py`의 분석 캔버스 range preset 계약을 `1Y`, `3Y`, `5Y`, `ALL`, `CUSTOM`으로 재정의했다.
+- `normalize_range_preset()`를 추가해 legacy `12M -> 1Y`, `3M/6M/18M -> CUSTOM` 매핑을 고정했다.
+- `render_analysis_toolbar()`의 quick range 옵션은 이제 `1Y / 3Y / 5Y / All / Custom`만 노출한다.
+- `render_sector_detail_panel()`의 range toggle도 `1Y / 3Y / 5Y / All`로 통일했고, 기존처럼 전체 분석 기간을 함께 갱신한다.
+- `app.py`는 기본 `selected_range_preset`을 `1Y`로 바꿨고, 기존 세션에 남은 legacy 값도 초기 진입 시 새 계약으로 정규화한다.
+- 히트맵, cycle timeline, 선택 섹터 상세 패널은 기존처럼 동일한 `analysis_start_date` / `analysis_end_date`를 공유하므로, 상단 toolbar나 상세 패널 toggle에서 범위를 바꾸면 세 컴포넌트가 함께 갱신된다.
+- 대상 UI 회귀 `26 passed in 8.12s`, 전체 테스트 `158 passed in 23.44s`, `py_compile` 통과.
+- Streamlit headless smoke는 `Local URL: http://localhost:8521`까지 정상 기동했다.
+- `rg` 깨짐 패턴 검색은 매치가 없어 clean했다.
+- Residual risks / follow-ups:
+- `CUSTOM`은 legacy `3M/6M/18M` 세션 복원용으로 남아 있으므로, 새 UI에서는 노출되더라도 정상 동작하지만 주 사용자 경로는 `1Y/3Y/5Y/ALL`이다.
+- headless smoke stderr에는 기존과 동일하게 `Failed to scan component manifests: 'NoneType' object has no attribute 'lower'` 경고가 1회 남아 있다. 앱 기동 자체는 정상이다.
+
+## 58) Streamlit component manifest 경고 정리 (2026-03-08)
+
+Pre-Implementation Check-in:
+- 2026-03-08: headless smoke stderr의 `Failed to scan component manifests: 'NoneType' object has no attribute 'lower'` 경고 원인을 환경 패키지 메타데이터로 진단했고, 해당 orphaned `dist-info`를 정리한다.
+- Scope: repo 코드 수정 없이 현재 `python`이 사용하는 base interpreter 환경에서 깨진 package metadata를 정리하고 Streamlit smoke로 경고 제거를 검증한다.
+
+Execution Checklist:
+- [x] 현재 `python`/`streamlit` 경로와 `name is None` distribution 후보를 확인한다.
+- [x] 실제 import 버전과 정상 `dist-info`가 있는지 확인해 orphaned metadata만 제거 대상으로 제한한다.
+- [x] 깨진 `requests-2.32.4.dist-info`, `urllib3-2.5.0.dist-info`를 백업 후 제거한다.
+- [x] `importlib.metadata.distributions()` 기준 `name is None` 항목이 0개가 되는지 확인한다.
+- [x] Streamlit headless smoke를 재실행해 경고가 사라졌는지 검증한다.
+
+Review:
+- Commands run:
+- `python -X utf8 -c "import sys, streamlit; print(sys.executable); print(streamlit.__version__)"`
+- `python -X utf8 -c "import importlib.metadata as md; ... if dist.name is None ..."`
+- `python -X utf8 -c "import requests, urllib3; print(__file__/__version__)"`
+- `Copy-Item` + `Remove-Item` for:
+- `C:\\Users\\k1190\\miniconda3\\Lib\\site-packages\\requests-2.32.4.dist-info`
+- `C:\\Users\\k1190\\miniconda3\\Lib\\site-packages\\urllib3-2.5.0.dist-info`
+- `python -m streamlit run app.py --server.headless true --server.port 8522` (15초 smoke 후 종료)
+- Results:
+- 현재 `python`은 `C:\\Users\\k1190\\miniconda3\\python.exe`, `streamlit`은 `1.51.0`이었다.
+- 경고 원인은 repo 코드가 아니라 Streamlit v2 component manifest scanner가 `dist.name.lower()`를 호출하는 동안 `name=None` 배포판을 만나는 환경 문제였다.
+- 문제 배포판은 실제 사용 중인 패키지가 아니라 orphaned metadata였다:
+- `requests-2.32.4.dist-info` (깨짐)
+- `urllib3-2.5.0.dist-info` (깨짐)
+- 실제 import 버전은 `requests 2.32.5`, `urllib3 2.6.3`였고, 대응하는 정상 `dist-info` (`METADATA`, `RECORD` 포함)도 따로 존재했다.
+- 깨진 두 `dist-info`는 `backups/python_distinfo_cleanup_20260308_145135/`에 백업 후 제거했다.
+- 제거 후 `importlib.metadata.distributions()` 기준 `name is None` distribution은 `0`건이 됐다.
+- Streamlit headless smoke는 `http://localhost:8522`까지 정상 기동했고, stderr에 `Failed to scan component manifests...` 경고가 더 이상 나타나지 않았다.
+
+## 59) 분석 캔버스 기간 확장 및 시작월 NaN 수정 (2026-03-08)
+
+Pre-Implementation Check-in:
+- 2026-03-08: 사용자 보고 기준으로 분석 캔버스의 `5Y`/`ALL` 프리셋이 `Apply` 후에도 시작일을 넓히지 못하고, 히트맵의 `2023-03` 월 수익률이 전부 `NaN`으로 보이는 문제를 수정한다.
+- Scope: signals용 3년 가격 로더는 유지하고, analysis canvas만 full cached history를 읽는 전용 경로로 분리한다. 월 수익률은 full history에서 계산한 뒤 visible window를 잘라 첫 visible month가 이전 월말을 참조할 수 있게 만든다.
+
+Execution Checklist:
+- [x] `app.py`에 analysis canvas 전용 cache-only 가격 로더/helper를 추가하고, wider preset이 full cached history를 기준으로 동작하게 한다.
+- [x] `app.py`의 analysis bounds와 heatmap 월 수익률 계산을 full analysis history 기준으로 재구성한다.
+- [x] 기존 signals 계산 경로와 OpenAPI interactive safety contract는 그대로 유지한다.
+- [x] `tests/test_ui_components.py` 또는 적절한 테스트 모듈에 wider preset/first visible month NaN 회귀를 추가한다.
+- [x] `python -m py_compile`, 대상 pytest, 필요시 전체 pytest를 실행하고 Review를 기록한다.
+
+Review:
+- Commands run:
+- `python -m py_compile app.py tests/test_ui_components.py`
+- `pytest -q tests/test_ui_components.py`
+- `pytest -q`
+- Results:
+- `app.py`에 `read_market_prices`/curated parquet를 직접 읽는 analysis 전용 cache-only loader(`_load_analysis_sector_prices_from_cache()`, `_cached_analysis_sector_prices()`)를 추가했다.
+- analysis canvas는 더 이상 `price_years=3` 신호 로더를 재사용하지 않고, cached full history를 기준으로 `analysis_min_date`를 계산한다. 따라서 local cached history가 `2016-03-08 ~ 2026-03-06`일 때 `5Y`는 `2021-03-07`, `ALL`은 `2016-03-08`로 확장된다.
+- 월별 히트맵 수익률 계산을 `_build_monthly_sector_returns()` helper로 분리했고, full analysis history에서 월말 수익률을 계산한 뒤 visible window를 자르도록 유지했다. 이 경로를 통해 `2023-03` 첫 visible month 전체가 `NaN`이 되던 문제가 제거된다.
+- 수동 시장 refresh 시 `_cached_analysis_sector_prices.clear()`도 함께 수행하도록 맞췄다.
+- `tests/test_ui_components.py`에 full cached history 기준 `5Y`/`ALL` 회귀 테스트와 first visible month monthly return non-null 회귀 테스트를 추가했다.
+- `python -m py_compile` 통과, 대상 UI 테스트 `28 passed in 12.18s`.
+- `pytest -q` 전체 실행은 환경 이슈로 중단됐다. 로컬에서 실행 중이던 `python -m streamlit run app.py` 프로세스(PID `47584`)와 `stock-dashboard` env의 `python -m streamlit run app.py --server.headless false` 프로세스(PID `14016`)가 `data/warehouse.duckdb`를 점유해 `tests/test_ui_components.py` import 시 macro sync write가 `_duckdb.IOException`으로 실패했다.
+- Residual risks / follow-ups:
+- 현재 수정은 analysis canvas를 cache-only로 만들어 UI preset 확장이 대형 live refresh를 트리거하지 않도록 유지한다.
+- 전체 pytest가 필요하면 먼저 위 Streamlit 프로세스를 종료해 warehouse lock을 해제해야 한다.
+
+## 60) 분석 히트맵 축/셀 레이블 과밀도 완화 (2026-03-08)
+
+Pre-Implementation Check-in:
+- 2026-03-08: 사용자 보고 기준으로 `5Y` 구간에서는 월별 x축 레이블이 가로 상태로 겹치고, `ALL` 구간에서는 히트맵 내부 값과 x축 레이블이 동시에 과밀해져 읽기 어렵다.
+- Scope: analysis canvas의 `build_sector_strength_heatmap()`에 월 수 기준 density heuristic을 추가해 `5Y`에서는 세로 라벨 전환, `ALL`에서는 축 가독성 우선 모드(세로 + thinning + 셀 숫자 숨김)를 적용한다.
+
+Execution Checklist:
+- [x] `src/ui/components.py`의 analysis heatmap builder에 month-count 기반 x축 tickangle/ticktext/texttemplate/margin 규칙을 추가한다.
+- [x] dense mode에서 hover/click로 값 확인 가능함을 안내하는 짧은 보조 문구를 heatmap title 근처에 반영한다.
+- [x] `tests/test_ui_components.py`에 small/5Y/ALL density mode 회귀와 기존 선택 highlight 유지 검증을 추가한다.
+- [x] `python -m py_compile`, 대상 pytest를 실행하고 Review를 기록한다.
+
+Review:
+- Commands run:
+- `python -m py_compile src/ui/components.py tests/test_ui_components.py`
+- `pytest -q tests/test_ui_components.py -k "sector_strength_heatmap or render_cycle_timeline_panel or build_cycle_segments"`
+- `pytest -q tests/test_ui_components.py`
+- Results:
+- `src/ui/components.py`에 `_resolve_heatmap_density_mode()`를 추가해 visible month count 기준으로 `<=36` 수평 라벨 + 셀 값 표시, `37-72` 세로 라벨, `>72` 세로 라벨 + tick thinning(`ceil(month_count / 48)`) + 셀 값 숨김 규칙을 고정했다.
+- dense mode에서는 heatmap title에 `Hover or click a cell...` 보조 문구를 붙여 exact value 확인 경로를 명시했다.
+- `build_sector_strength_heatmap()`는 density mode에 따라 x축 `ticktext`, `tickangle`, `tickfont`, 하단 margin, `texttemplate`를 자동 조정한다.
+- small-range 회귀는 기존 selected row/column/cell 강조가 유지되고, `5Y` 회귀는 세로 x축 라벨 전환, `ALL` 회귀는 tick thinning + 셀 값 숨김이 검증됐다.
+- `python -m py_compile` 통과, targeted heatmap/UI 회귀 `5 passed, 25 deselected in 9.36s`, `tests/test_ui_components.py` 전체 `30 passed in 8.82s`.
+- Residual risks / follow-ups:
+- 현재 dense-mode threshold는 month count 기반 heuristic이므로, 향후 행 수가 크게 늘어나면 `show_cell_text` cell-density cutoff(`432`)와 thinning 목표치(`48`)를 같이 재조정하는 편이 안전하다.
+
+## 61) 분석 히트맵 수익률/강도 분리 및 부분 월 제외 (2026-03-08)
+
+Pre-Implementation Check-in:
+- 2026-03-08: 사용자 요청으로 analysis canvas의 trailing partial month를 히트맵에서 제외하고, 기존 절대 월간 수익률 히트맵의 명칭을 바로잡으며, KOSPI 대비 초과수익률 히트맵을 추가한다.
+- Scope: absolute return heatmap은 `Monthly sector return`으로 유지하되 partial trailing month를 제거하고, 동일한 selection state를 공유하는 `Monthly sector strength vs KOSPI` 패널을 추가한다. detail/ranking 로직은 기존 절대 수익률 기준을 유지한다.
+
+Execution Checklist:
+- [x] `app.py`에 monthly return/excess-return helper와 trailing partial month 제외 로직을 추가한다.
+- [x] analysis canvas에 absolute return / excess return 두 히트맵을 같은 선택 상태로 렌더링한다.
+- [x] `src/ui/components.py`의 heatmap builder를 custom title/empty/hover wording을 지원하도록 일반화한다.
+- [x] `tests/test_ui_components.py`에 renamed title, excess-return heatmap, partial trailing month, excess-return 계산 회귀를 추가한다.
+- [x] `python -m py_compile`, 대상 pytest를 실행하고 Review를 기록한다.
+
+Review:
+- Commands run:
+- `python -m py_compile app.py src/ui/components.py tests/test_ui_components.py`
+- `pytest -q tests/test_ui_components.py -k "sector_strength_heatmap or monthly_return_views or filter_monthly_frame_for_analysis or build_heatmap_display or extract_heatmap_selection"`
+- `pytest -q tests/test_ui_components.py`
+- Results:
+- `app.py`에 `_build_monthly_return_views()`, `_filter_monthly_frame_for_analysis()`, `_build_heatmap_display()`, `_extract_heatmap_selection()`를 추가해 absolute/excess return 계산, trailing partial month 제외, shared heatmap selection을 순수 helper로 분리했다.
+- analysis canvas는 이제 `Monthly sector return` 절대수익률 히트맵과 `Monthly sector strength vs KOSPI` 초과수익률 히트맵을 세로로 추가 렌더링하며, 두 히트맵은 같은 `selected_month` / `selected_sector` 상태를 공유한다.
+- trailing month filtering은 실제 `analysis_end_date`를 기준으로 월말 인덱스를 잘라, 예를 들어 종료일이 `2026-03-06`이면 `2026-03-31` 월 열은 히트맵에 포함되지 않도록 바뀌었다.
+- `src/ui/components.py`의 `build_sector_strength_heatmap()`는 custom `title`, `empty_message`, `helper_metric_label`, `hover_value_suffix`를 받아 absolute return과 excess return 두 variant를 동일한 렌더링 로직으로 처리한다.
+- `tests/test_ui_components.py`에 renamed absolute-return title, custom excess-return title/hover suffix, excess-return 계산, trailing partial month exclusion, shared month-display, shared selection helper 회귀를 추가했다.
+- `python -m py_compile` 통과, targeted regression `8 passed, 27 deselected in 9.60s`, `tests/test_ui_components.py` 전체 `35 passed in 8.81s`.
+- Residual risks / follow-ups:
+- 새 `Monthly sector strength vs KOSPI`는 히트맵만 추가한 것이며, detail/ranking 패널은 여전히 기존 absolute normalized return 기준이다.
+- 전체 pytest는 이번 변경 범위상 필수는 아니어서 실행하지 않았다. repo-local Streamlit/DuckDB lock 이슈가 있는 환경에서는 UI 대상 테스트처럼 범위 제한 실행이 더 안전하다.
+
+## 62) 분석 히트맵 팔레트 토글 실험 모드 (2026-03-08)
+
+Pre-Implementation Check-in:
+- 2026-03-08: 사용자 요청으로 분석 히트맵에서 0 근처 양수/음수 부호를 더 분명하게 비교할 수 있도록 2~3개 팔레트를 즉시 전환해 볼 수 있는 실험 모드를 추가한다.
+- Scope: analysis canvas의 두 월간 히트맵에만 palette preset 토글을 붙이고, 기본값은 현재 팔레트를 유지한다. 실험용 preset은 최소 3개(`classic`, `contrast`, `blue_orange`)를 제공한다.
+
+Execution Checklist:
+- [x] `src/ui/components.py`에 analysis heatmap palette preset/label/colorscale helper를 추가한다.
+- [x] `build_sector_strength_heatmap()`가 selected palette를 받아 colorscale에 반영하도록 확장한다.
+- [x] `app.py`에 session state 기본값과 sidebar palette toggle UI를 추가하고, 두 analysis heatmap에 동일하게 전달한다.
+- [x] `tests/test_ui_components.py`에 palette helper와 builder palette 반영 회귀를 추가한다.
+- [x] `python -m py_compile`, 대상 pytest를 실행하고 Review를 기록한다.
+
+Review:
+- Commands run:
+- `python -m py_compile app.py src/ui/components.py tests/test_ui_components.py`
+- `pytest -q tests/test_ui_components.py -k "heatmap_palette or sector_strength_heatmap"`
+- `pytest -q tests/test_ui_components.py`
+- Results:
+- `src/ui/components.py`에 `HEATMAP_PALETTE_OPTIONS`, `HEATMAP_PALETTE_LABELS`, `normalize_heatmap_palette()`, `format_heatmap_palette_label()`, `get_analysis_heatmap_colorscale()`를 추가해 analysis heatmap용 palette preset을 분리했다.
+- 제공 preset은 `classic`, `contrast`, `blue_orange` 3개이며, `contrast`는 0 근처 부호 대비를 더 강하게 주는 red/green 계열, `blue_orange`는 적록 해석 부담을 줄이는 diverging 대안이다.
+- `build_sector_strength_heatmap()`는 새 `palette` 인자를 받아 selected colorscale을 그대로 적용하도록 확장했다.
+- `app.py`에 `analysis_heatmap_palette` 세션 상태 기본값과 sidebar `Heatmap palette` selectbox를 추가했고, absolute/relative analysis heatmap 두 곳에 같은 preset을 전달하도록 연결했다.
+- `tests/test_ui_components.py`에 palette helper 정규화/라벨링/colorscale preset 회귀와 builder palette 반영 회귀를 추가했다.
+- `python -m py_compile` 통과, `tests/test_ui_components.py` 전체 `38 passed in 9.00s`.
+- 첫 targeted pytest 시도는 외부 `python.exe`가 `warehouse.duckdb`를 잠깐 점유하면서 import 단계에서 `_duckdb.IOException`이 발생했지만, 이후 `tests/test_ui_components.py` 전체 재실행은 정상 통과했다.
+- Residual risks / follow-ups:
+- 현재 palette toggle은 analysis canvas heatmap 두 개에만 적용된다. `render_returns_heatmap()` 등 다른 히트맵은 기존 팔레트를 유지한다.
+
+- Progress update (2026-03-08):
+- Added central theme module: `config/theme.py` with `ui/chart/dataframe/signal/navigation` tokens.
+- Updated `.streamlit/config.toml` to the stock-dashboard dark default palette (`#6366F1`, `#09090B`, `#18181B`, `#FAFAFA`).
+- Refactored `src/ui/styles.py`, `src/ui/components.py`, and `app.py` to consume central tokens and preserve existing helper signatures.
+- Residual hardcoded color audit (`app.py`, `src/ui`): only `rgba(0,0,0,0)` and one `color-mix(... #000 ...)` expression remain.
+- Targeted theme verification: `58 passed in 11.10s` via `pytest -q tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_ui_components.py`.
+- Headless Streamlit startup verification: `python -m streamlit run app.py --server.headless true --server.port 8516` reached startup banner; stderr remained empty.
+- Manual in-browser dark/light inspection was not performed in this environment.

@@ -38,3 +38,12 @@
 - Rule: UI 텍스트/주석이 많은 파일은 수정 후 `python -m py_compile <file>`와 `rg "�|\\?곗|\\?꾩|\\?좏"` 같은 깨짐 패턴 점검을 최소 1회 실행한다.
 - Rule: Streamlit `icon=` 인자는 항상 단일 유효 이모지(`⚠️`, `✅` 등)만 사용하고, 일반 문자열/깨진 문자열은 절대 넣지 않는다.
 - Rule: VS Code/IDE 및 저장 설정을 UTF-8(권장: UTF-8 without BOM)으로 고정하고, 인코딩 전환 저장(CP949/EUC-KR)을 금지한다.
+
+## 2026-03-08
+- Pattern: User reported that the cycle timeline visually collapsed into near-invisible lines, so regime colors were technically present in code but not legible in the actual chart.
+- Rule: For time-interval visuals, verify that the rendering primitive matches the semantics of a duration; do not use point-like bars for date spans when the goal is a visible band/timeline.
+- Rule: When a user calls out “can’t distinguish periods,” inspect both palette contrast and chart geometry before treating it as a theme-only bug.
+- Pattern: A real-network `bootstrap_warehouse.py` run failed immediately with `_duckdb.IOException` because a local `streamlit run app.py` process still held a write lock on `data/warehouse.duckdb`.
+- Rule: Before any warehouse bootstrap/backfill/sync that writes to DuckDB, check for repo-local `python -m streamlit run app.py` or other writer processes and stop them first; otherwise treat file-lock errors as environment/process conflicts before changing code.
+- Pattern: `git push` to GitHub failed because a regenerated `data/warehouse.duckdb` blob in the latest commit exceeded the 100 MB file limit.
+- Rule: Before committing or pushing, inspect staged/generated artifacts for size-sensitive paths (`data/`, `backups/`, `logs/`) and keep local DuckDB files untracked via `.gitignore` plus `git rm --cached` when they were already tracked.

@@ -6,6 +6,7 @@ import pytest
 from src.ui.data_status import (
     get_button_states,
     is_sample_mode,
+    resolve_dashboard_status_banner,
     resolve_price_cache_banner_case,
 )
 
@@ -103,3 +104,60 @@ class TestDataStatus:
             warm_status={},
         )
         assert case == "pykrx_cache_fallback"
+
+    def test_resolve_dashboard_status_banner_prefers_sample_over_lower_priority_items(self):
+        banner = resolve_dashboard_status_banner(
+            data_status={"price": "SAMPLE", "macro": "CACHED"},
+            price_cache_case="retryable_cache_fallback",
+            preflight_status={
+                "KRX": {"status": "HTTP_ERROR", "detail": "timeout"},
+            },
+            price_warm_status={"failed_days": ["20260306"]},
+        )
+
+        assert banner is not None
+        assert banner["level"] == "error"
+        assert banner["title"] == "SAMPLE 데이터 모드"
+
+    def test_resolve_dashboard_status_banner_prefers_blocked_over_general_warning(self):
+        banner = resolve_dashboard_status_banner(
+            data_status={"price": "BLOCKED", "macro": "LIVE"},
+            market_blocking_error="Access denied",
+            price_cache_case="retryable_cache_fallback",
+            preflight_status={
+                "KRX": {"status": "ACCESS_DENIED", "detail": "auth"},
+            },
+        )
+
+        assert banner is not None
+        assert banner["level"] == "error"
+        assert banner["title"] == "시장 데이터 접근 차단"
+        assert "Access denied" in banner["details"][0]
+
+    def test_resolve_dashboard_status_banner_uses_single_missing_key_message(self):
+        banner = resolve_dashboard_status_banner(
+            data_status={"price": "CACHED", "macro": "LIVE"},
+            price_cache_case="missing_openapi_key",
+            openapi_key_warning=True,
+            preflight_status={
+                "KRX": {"status": "OK", "detail": ""},
+            },
+        )
+
+        assert banner is not None
+        assert banner["level"] == "warning"
+        assert banner["title"] == "KRX OpenAPI 키 누락"
+        assert len(banner["details"]) == 2
+
+    def test_resolve_dashboard_status_banner_surfaces_preflight_when_no_higher_priority(self):
+        banner = resolve_dashboard_status_banner(
+            data_status={"price": "LIVE", "macro": "LIVE"},
+            preflight_status={
+                "ECOS": {"status": "HTTP_ERROR", "detail": "timeout"},
+            },
+        )
+
+        assert banner is not None
+        assert banner["level"] == "info"
+        assert banner["title"] == "API 사전 점검 참고"
+        assert "ECOS: HTTP_ERROR (timeout)" in banner["details"]
