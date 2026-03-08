@@ -1,18 +1,20 @@
 # 2026-03-08 - Git Push Large File Fix
 
-Status: In progress
+Status: Completed
 Owner: Codex + User
 
 ## Execution Checklist
 - [x] Push failure root cause identified: `data/warehouse.duckdb` in local `HEAD` exceeds GitHub 100 MB limit
-- [ ] Update `.gitignore` to keep local DuckDB and generated artifacts untracked
-- [ ] Rewrite local commit to exclude large/generated files while preserving intended code changes
-- [ ] Verify local branch no longer contains oversized tracked blobs in the new commit
-- [ ] Confirm `git push origin main` is ready to succeed
+- [x] Update `.gitignore` to keep local DuckDB and generated artifacts untracked
+- [x] Rewrite local commit to exclude large/generated files while preserving intended code changes
+- [x] Verify local branch no longer contains oversized tracked blobs in the new commit
+- [x] Confirm `git push origin main` is ready to succeed
 
 ## Review
 - Remote rejected `git push origin main:main` on 2026-03-08 because `data/warehouse.duckdb` was 112.51 MB.
 - `origin/main` already tracks an older smaller `data/warehouse.duckdb`; the fix must remove the oversized blob from the local commit history before pushing.
+- Completed with commit `507e23b` and a successful `git push origin main:main` on 2026-03-08.
+- The repo now stops tracking `data/warehouse.duckdb` and all tracked `__pycache__` artifacts; local generated parquet changes remain only in the working tree.
 
 # 2026-03-08 - Stock-dashboard Palette Migration
 
