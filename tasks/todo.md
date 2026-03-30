@@ -1,3 +1,24 @@
+# 2026-03-30 - DuckDB Recompute Crash Fix
+
+Status: Completed
+Owner: Codex + User
+
+## Execution Checklist
+- [x] Reproduce the connection-configuration conflict with same-process DuckDB handles
+- [x] Patch warehouse read/write connection handling to avoid unnecessary schema writes on read paths
+- [x] Add an explicit helper to release cached read-only warehouse connections before refresh/recompute flows
+- [x] Update app refresh/recompute handlers to release cached warehouse connections before rerun or writes
+- [x] Add regression tests for artifact/status reads under connection conflicts
+- [x] Run focused verification and record results
+
+## Review
+- Root cause: read-side status/artifact lookups could call `ensure_warehouse_schema()` even when the warehouse schema was already ready, which forced a write-mode `duckdb.connect(...)` during rerun/bootstrap flows.
+- Failure mode: if another read-only DuckDB connection to the same `warehouse.duckdb` was already open, DuckDB raised `Connection Error: Can't open a connection to same database file with a different configuration than existing connections`.
+- Intended fix: skip schema writes on read paths when required tables/columns already exist, normalize write-open conflicts to `RuntimeError`, and release cached read-only connections before refresh/recompute-triggered reruns.
+- Code changes: `src/data_sources/warehouse.py` now guards read paths with a schema-readiness check, exposes `close_cached_read_only_connection()`, and normalizes `duckdb.ConnectionException` alongside `duckdb.IOException`. `app.py` now releases cached warehouse read handles before market refresh, macro refresh, and `전체 재계산` reruns.
+- Verification: `python -m py_compile app.py src/data_sources/warehouse.py tests/test_warehouse_cli.py`, `pytest tests/test_warehouse_cli.py tests/test_warehouse_multimarket.py -q` -> `11 passed`, `pytest tests/test_integration.py -q -k "read_warm_status_returns_sanitized_summary or load_sector_prices_imports_stale_raw_cache_without_background_refresh"` -> `2 passed`.
+- Residual note: local pytest cleanup still emits a Windows temp-directory `PermissionError` at interpreter shutdown, but the test runs themselves passed.
+
 # 2026-03-08 - Git Push Large File Fix
 
 Status: Completed

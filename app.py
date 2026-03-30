@@ -79,7 +79,10 @@ from src.dashboard.tabs import (
 )
 from src.dashboard.types import AnalysisWindow, DashboardContext, DashboardDataBundle
 from src.macro.series_utils import extract_macro_series
-from src.data_sources.warehouse import read_market_prices
+from src.data_sources.warehouse import (
+    close_cached_read_only_connection,
+    read_market_prices,
+)
 from src.ui.components import (
     ALL_ACTION_OPTION,
     HEATMAP_PALETTE_OPTIONS,
@@ -240,6 +243,7 @@ if refresh_market:
 
     refresh_start_str, refresh_end_str = _market_range_strings(context.market_end_date_str, price_years)
     try:
+        close_cached_read_only_connection()
         _cached_api_preflight.clear()
         with st.spinner("Refreshing market data..."):
             (_, _), refresh_summary = run_manual_price_refresh(
@@ -262,6 +266,7 @@ if refresh_macro:
     macro_end_ym = macro_end_period.strftime("%Y%m")
     macro_start_ym = (macro_end_period - 119).strftime("%Y%m")
     try:
+        close_cached_read_only_connection()
         with st.spinner("Refreshing macro data..."):
             _, _, macro_summary = sync_macro_warehouse(
                 start_ym=macro_start_ym,
@@ -279,6 +284,7 @@ if refresh_macro:
         macro_refresh_notice = ("error", f"Macro data refresh failed: {exc}")
 
 if recompute:
+    close_cached_read_only_connection()
     shutil.rmtree("data/features", ignore_errors=True)
     Path("data/features").mkdir(exist_ok=True)
     _cached_signals.clear()

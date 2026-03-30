@@ -5,10 +5,37 @@ from datetime import datetime, timezone
 
 import duckdb
 import pandas as pd
+import pytest
 
 import scripts.bootstrap_warehouse as bootstrap_script
 import scripts.sync_warehouse as sync_script
 import src.data_sources.warehouse as warehouse
+
+
+def _seed_market_status(*, provider: str = "OPENAPI") -> None:
+    warehouse.ensure_warehouse_schema()
+    warehouse.record_ingest_run(
+        dataset="market_prices",
+        reason="test_seed",
+        provider=provider,
+        requested_start="20240101",
+        requested_end="20240131",
+        status="LIVE",
+        coverage_complete=True,
+        failed_days=[],
+        failed_codes={},
+        delta_keys=["1001"],
+        row_count=1,
+        summary={"status": "LIVE"},
+    )
+    warehouse.update_ingest_watermark(
+        dataset="market_prices",
+        watermark_key="20240131",
+        status="LIVE",
+        coverage_complete=True,
+        provider=provider,
+        details={"reason": "test_seed"},
+    )
 
 
 def test_ensure_warehouse_schema_is_idempotent():
@@ -32,6 +59,47 @@ def test_ensure_warehouse_schema_is_idempotent():
         "ingest_runs",
         "ingest_watermarks",
     }.issubset(tables)
+
+
+def test_read_dataset_status_skips_schema_write_when_read_schema_ready(monkeypatch):
+    _seed_market_status()
+    state = {"calls": 0}
+
+    def _unexpected_schema_write():
+        state["calls"] += 1
+        raise AssertionError("read path should not attempt schema writes once the warehouse is ready")
+
+    monkeypatch.setattr(warehouse, "ensure_warehouse_schema", _unexpected_schema_write)
+
+    status = warehouse.read_dataset_status("market_prices")
+
+    assert status["provider"] == "OPENAPI"
+    assert status["status"] == "LIVE"
+    assert state["calls"] == 0
+
+
+def test_get_dataset_artifact_key_survives_external_read_only_connection():
+    _seed_market_status()
+
+    external_ro = duckdb.connect(str(warehouse.WAREHOUSE_PATH), read_only=True)
+    try:
+        artifact_key = warehouse.get_dataset_artifact_key("market_prices")
+    finally:
+        external_ro.close()
+
+    assert artifact_key[2:] == ("20240131", "LIVE", "20240131")
+
+
+def test_ensure_warehouse_schema_normalizes_connection_conflict():
+    bootstrap = duckdb.connect(str(warehouse.WAREHOUSE_PATH))
+    bootstrap.close()
+
+    external_ro = duckdb.connect(str(warehouse.WAREHOUSE_PATH), read_only=True)
+    try:
+        with pytest.raises(RuntimeError, match="Cannot acquire write lock on warehouse.duckdb"):
+            warehouse.ensure_warehouse_schema()
+    finally:
+        external_ro.close()
 
 
 def test_warehouse_upserts_are_idempotent():

@@ -2,7 +2,7 @@
   "codes": {
     "1001": {
       "alias_history": [],
-      "last_synced_at": "2026-03-30T04:10:21Z",
+      "last_synced_at": "2026-03-30T04:19:59Z",
       "official_name": "코스피"
     },
     "1155": {
@@ -70,5 +70,5 @@
     }
   },
   "schema_version": 1,
-  "updated_at": "2026-03-30T04:10:21Z"
+  "updated_at": "2026-03-30T04:19:59Z"
 }

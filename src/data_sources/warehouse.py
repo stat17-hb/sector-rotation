@@ -98,6 +98,11 @@ def _invalidate_ro_cache() -> None:
     _ro_cache.invalidate()
 
 
+def close_cached_read_only_connection() -> None:
+    """Release the cached read-only DuckDB connection, if one exists."""
+    _invalidate_ro_cache()
+
+
 class _WritingConn:
     """Proxy for a write DuckDB connection that invalidates the RO cache on close."""
 
@@ -132,7 +137,7 @@ def _connect(*, read_only: bool = False) -> duckdb.DuckDBPyConnection | _Writing
         _invalidate_ro_cache()
     try:
         raw = duckdb.connect(str(WAREHOUSE_PATH), read_only=read_only)
-    except duckdb.IOException as exc:
+    except (duckdb.IOException, duckdb.ConnectionException) as exc:
         if not read_only:
             raise RuntimeError(
                 "Cannot acquire write lock on warehouse.duckdb. "
@@ -159,6 +164,16 @@ def _default_macro_export_path(market: str) -> Path:
     return DEFAULT_MACRO_EXPORT_PATH_US if _normalize_market_id(market) == "US" else DEFAULT_MACRO_EXPORT_PATH
 
 
+_READ_SCHEMA_REQUIREMENTS: dict[str, frozenset[str]] = {
+    "dim_index": frozenset({"market", "index_code", "index_name"}),
+    "fact_krx_index_daily": frozenset({"market", "trade_date", "index_code", "close"}),
+    "dim_macro_series": frozenset({"market", "series_alias"}),
+    "fact_macro_monthly": frozenset({"market", "period_month", "series_alias"}),
+    "ingest_runs": frozenset({"market", "dataset", "created_at"}),
+    "ingest_watermarks": frozenset({"market", "dataset", "watermark_key"}),
+}
+
+
 def _table_exists(con: duckdb.DuckDBPyConnection, table_name: str) -> bool:
     row = con.execute(
         """
@@ -182,6 +197,26 @@ def _table_columns(con: duckdb.DuckDBPyConnection, table_name: str) -> set[str]:
 
 def _drop_table_if_exists(con: duckdb.DuckDBPyConnection, table_name: str) -> None:
     con.execute(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def _warehouse_schema_ready_for_reads() -> bool:
+    """Return True when the existing warehouse schema satisfies read paths."""
+    if not warehouse_exists():
+        return False
+
+    con: _NoopCloseConn | None = None
+    try:
+        con = _connect_ro()
+        for table_name, required_columns in _READ_SCHEMA_REQUIREMENTS.items():
+            available_columns = _table_columns(con, table_name)
+            if not required_columns.issubset(available_columns):
+                return False
+        return True
+    except duckdb.Error:
+        return False
+    finally:
+        if con is not None:
+            con.close()
 
 
 def _migrate_table_with_market(
@@ -420,8 +455,19 @@ def _ensure_schema_best_effort() -> None:
     """
     try:
         ensure_warehouse_schema()
-    except RuntimeError:
+    except (RuntimeError, duckdb.ConnectionException, duckdb.IOException):
         pass
+
+
+def _ensure_schema_for_readers() -> None:
+    """Ensure read paths only attempt schema writes when migration is needed."""
+    if not warehouse_exists():
+        return
+    if _warehouse_schema_ready_for_reads():
+        return
+
+    close_cached_read_only_connection()
+    _ensure_schema_best_effort()
 
 
 def warehouse_exists() -> bool:
@@ -564,7 +610,7 @@ def read_market_prices(
     if not warehouse_exists() or not index_codes:
         return pd.DataFrame()
 
-    _ensure_schema_best_effort()
+    _ensure_schema_for_readers()
     normalized_market = _normalize_market_id(market)
     codes_frame = pd.DataFrame({"index_code": [str(code) for code in index_codes]})
     start_date = _normalize_market_date(start)
@@ -608,7 +654,7 @@ def get_market_latest_dates(index_codes: list[str], *, market: str = "KR") -> di
     if not warehouse_exists() or not index_codes:
         return {}
 
-    _ensure_schema_best_effort()
+    _ensure_schema_for_readers()
     normalized_market = _normalize_market_id(market)
     codes_frame = pd.DataFrame({"index_code": [str(code) for code in index_codes]})
     con = _connect_ro()
@@ -833,7 +879,7 @@ def read_macro_data(
     if not warehouse_exists() or not series_aliases:
         return pd.DataFrame()
 
-    _ensure_schema_best_effort()
+    _ensure_schema_for_readers()
     normalized_market = _normalize_market_id(market)
     alias_frame = pd.DataFrame({"series_alias": [str(alias) for alias in series_aliases]})
     start_date = pd.Period(str(start_ym)[:6], freq="M").to_timestamp(how="end").strftime("%Y-%m-%d")
@@ -888,7 +934,7 @@ def get_macro_latest_periods(series_aliases: list[str], *, market: str = "KR") -
     if not warehouse_exists() or not series_aliases:
         return {}
 
-    _ensure_schema_best_effort()
+    _ensure_schema_for_readers()
     normalized_market = _normalize_market_id(market)
     alias_frame = pd.DataFrame({"series_alias": [str(alias) for alias in series_aliases]})
     con = _connect_ro()
@@ -1098,7 +1144,7 @@ def read_dataset_status(dataset: WarehouseDataset, *, market: str = "KR") -> dic
     if not warehouse_exists():
         return {}
 
-    _ensure_schema_best_effort()
+    _ensure_schema_for_readers()
     normalized_market = _normalize_market_id(market)
     con = _connect_ro()
     try:
@@ -1228,7 +1274,7 @@ def probe_dataset_mode(dataset: WarehouseDataset, *, market: str = "KR") -> str:
 def market_row_count(*, market: str = "KR") -> int:
     if not warehouse_exists():
         return 0
-    _ensure_schema_best_effort()
+    _ensure_schema_for_readers()
     normalized_market = _normalize_market_id(market)
     con = _connect_ro()
     try:
@@ -1245,7 +1291,7 @@ def market_row_count(*, market: str = "KR") -> int:
 def macro_row_count(*, market: str = "KR") -> int:
     if not warehouse_exists():
         return 0
-    _ensure_schema_best_effort()
+    _ensure_schema_for_readers()
     normalized_market = _normalize_market_id(market)
     con = _connect_ro()
     try:
