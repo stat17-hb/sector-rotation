@@ -1,3 +1,45 @@
+# 2026-03-30 - US Macro Cache-Hit Write Lock Fix
+
+Status: Completed
+Owner: Codex + User
+
+## Execution Checklist
+- [x] Trace the reported Streamlit stack into the US macro cache path
+- [x] Confirm `sync_provider_macro()` opened a write connection before cache completeness checks
+- [x] Reorder the macro sync flow so cache-hit requests remain read-only
+- [x] Explicitly release cached read-only DuckDB handles before the first live-write step
+- [x] Add a regression test proving cached FRED loads avoid both dimension upserts and live fetches
+- [x] Run focused verification and record results
+
+## Review
+- Root cause: `sync_provider_macro()` called `upsert_macro_dimension()` before checking whether warehouse macro rows already covered the requested period, so a simple US app page load could open a DuckDB write connection even on a cache hit.
+- Failure mode: Streamlit had already opened the cached read-only warehouse handle earlier in the same request, then the unconditional macro dimension upsert attempted a write connection and failed with `Can't open a connection to same database file with a different configuration than existing connections`.
+- Intended fix: keep the macro cache-hit fast path fully read-only, and only close the cached read-only handle plus open a write connection once a live refresh is actually needed.
+- Code changes: `src/data_sources/macro_sync.py` now performs cache completeness checks before `upsert_macro_dimension()`, then calls `close_cached_read_only_connection()` immediately before the first write step. Added FRED regression coverage in `tests/test_fred.py`.
+- Verification: `python -m py_compile src/data_sources/macro_sync.py tests/test_fred.py src/data_sources/warehouse.py src/data_sources/yfinance_sectors.py`; `pytest tests/test_fred.py tests/test_yfinance_sectors.py tests/test_warehouse_multimarket.py tests/test_warehouse_cli.py -q` -> `20 passed`; targeted runtime check with seeded US macro rows returned `CACHED` from `load_fred_macro(...)`.
+- Residual note: pytest still emits the known Windows temp-directory cleanup `PermissionError` at interpreter shutdown, but the test suite itself passed.
+
+# 2026-03-30 - US Sector Rotation Stale Cache Fix
+
+Status: Completed
+Owner: Codex + User
+
+## Execution Checklist
+- [x] Reproduce the US latest-date mismatch between requested market end and warehouse coverage
+- [x] Tighten shared market coverage validation so cached data must also reach the requested end date
+- [x] Add a US loader diagnostic log when stale cache misses the requested end date
+- [x] Add regression tests for shared warehouse coverage and US stale-cache refresh behavior
+- [x] Run focused verification and record results
+- [x] Verify the local US warehouse reflects the corrected stale-cache detection behavior
+
+## Review
+- Root cause: `is_market_coverage_complete()` treated a cache as complete when all requested codes shared the same benchmark date set, even if that shared set ended before the requested `end` date.
+- Failure mode: the US loader saw aligned but stale warehouse rows through `2026-03-20` and returned `CACHED` for a request whose computed market end was `2026-03-27`, so `yfinance` live refresh never ran.
+- Intended fix: require the benchmark series to reach the requested end date before shared cache coverage is considered complete, then let the existing US live-refresh path run when the cache is stale.
+- Code changes: `src/data_sources/warehouse.py` now requires the benchmark latest date to reach the requested `end` before returning complete coverage. `src/data_sources/yfinance_sectors.py` now logs when a cached US benchmark trail ends before the requested end date and then falls through to the existing live refresh path. Added regression coverage in `tests/test_warehouse_multimarket.py` and `tests/test_yfinance_sectors.py`.
+- Verification: `python -m py_compile src/data_sources/warehouse.py src/data_sources/yfinance_sectors.py tests/test_warehouse_multimarket.py tests/test_yfinance_sectors.py`; `pytest tests/test_yfinance_sectors.py tests/test_warehouse_multimarket.py tests/test_warehouse_cli.py -q` -> `16 passed`; `python -c "from src.data_sources.warehouse import is_market_coverage_complete, get_market_latest_dates, read_dataset_status; ..."` -> `coverage_complete False` while local latest US dates remained `20260320` and the stored ingest watermark remained `20260320`.
+- Residual note: an active `python -m streamlit run app.py` process is currently using the live app. The code changes are in place and the stale warehouse is now correctly recognized as incomplete, but no separate CLI write refresh was forced against the live warehouse from another process.
+
 # 2026-03-30 - DuckDB Recompute Crash Fix
 
 Status: Completed

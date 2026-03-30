@@ -10,6 +10,7 @@ import pandas as pd
 
 from src.contracts.validators import normalize_then_validate
 from src.data_sources.warehouse import (
+    close_cached_read_only_connection,
     export_macro_parquet,
     get_dataset_artifact_key,
     get_macro_latest_periods,
@@ -142,7 +143,6 @@ def sync_provider_macro(
 
     normalized_start = _normalize_month_token(start_ym)
     normalized_end = _normalize_month_token(end_ym)
-    upsert_macro_dimension(_series_dimension_rows(provider, active_config), market=market)
 
     cached = _warehouse_provider_frame(
         provider,
@@ -175,6 +175,8 @@ def sync_provider_macro(
         return "CACHED", validated, summary
 
     latest_periods = {} if force else get_macro_latest_periods(aliases, market=market)
+    close_cached_read_only_connection()
+    upsert_macro_dimension(_series_dimension_rows(provider, active_config), market=market)
     delta_aliases: list[str] = []
     failed_aliases: dict[str, str] = {}
 
@@ -250,20 +252,34 @@ def sync_provider_macro(
             summary=summary,
             market=market,
         )
+        # Always update the watermark after a successful ingest so it never
+        # stalls.  When not all series reach normalized_end (e.g. leading_index
+        # lags 2 months), use the minimum latest period actually present as the
+        # watermark key — coverage IS complete through that minimum period.
         if coverage_complete:
-            update_ingest_watermark(
-                dataset="macro_data",
-                watermark_key=normalized_end,
-                status=status,
-                coverage_complete=True,
-                provider=provider,
-                details={
-                    "reason": reason,
-                    "delta_aliases": delta_aliases,
-                    "failed_aliases": failed_aliases,
-                },
-                market=market,
-            )
+            _watermark_key = normalized_end
+            _wm_complete = True
+        else:
+            actual_latest = get_macro_latest_periods(aliases, market=market)
+            if actual_latest:
+                _watermark_key = min(actual_latest.values())
+                _wm_complete = True  # all series have data through this minimum
+            else:
+                _watermark_key = normalized_end
+                _wm_complete = False
+        update_ingest_watermark(
+            dataset="macro_data",
+            watermark_key=_watermark_key,
+            status=status,
+            coverage_complete=_wm_complete,
+            provider=provider,
+            details={
+                "reason": reason,
+                "delta_aliases": delta_aliases,
+                "failed_aliases": failed_aliases,
+            },
+            market=market,
+        )
         return status, validated, summary
 
     summary = {

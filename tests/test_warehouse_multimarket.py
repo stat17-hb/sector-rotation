@@ -78,6 +78,40 @@ def test_market_and_macro_rows_are_scoped_by_market():
     assert warehouse.read_macro_data(series_aliases=["leading_index"], start_ym="202401", end_ym="202401", market="US")["series_id"].iloc[0] == "US_SERIES"
 
 
+def test_market_coverage_requires_requested_end_date():
+    market_us = pd.DataFrame(
+        {
+            "index_code": ["SPY", "XLK", "SPY", "XLK"],
+            "index_name": ["S&P 500", "Technology", "S&P 500", "Technology"],
+            "close": [500.0, 200.0, 501.0, 201.0],
+        },
+        index=pd.DatetimeIndex(["2024-01-02", "2024-01-02", "2024-01-03", "2024-01-03"]),
+    )
+    warehouse.upsert_index_dimension(
+        [
+            {"index_code": "SPY", "index_name": "S&P 500", "family": "ETF", "is_benchmark": True, "is_active": True, "export_sector": False},
+            {"index_code": "XLK", "index_name": "Technology", "family": "ETF", "is_benchmark": False, "is_active": True, "export_sector": False},
+        ],
+        market="US",
+    )
+    warehouse.upsert_market_prices(market_us, provider="YFINANCE", market="US")
+
+    assert warehouse.is_market_coverage_complete(
+        ["SPY", "XLK"],
+        "20240102",
+        "20240103",
+        benchmark_code="SPY",
+        market="US",
+    ) is True
+    assert warehouse.is_market_coverage_complete(
+        ["SPY", "XLK"],
+        "20240102",
+        "20240105",
+        benchmark_code="SPY",
+        market="US",
+    ) is False
+
+
 def test_legacy_schema_migrates_to_market_aware_tables(tmp_path):
     con = duckdb.connect(str(warehouse.WAREHOUSE_PATH))
     try:

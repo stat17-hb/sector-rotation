@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 import pandas as pd
 
 import src.data_sources.fred as fred
-from src.data_sources.warehouse import read_macro_data
+import src.data_sources.macro_sync as macro_sync
+from src.data_sources.warehouse import read_macro_data, upsert_macro_dimension, upsert_macro_series_frame
 
 
 def _make_observations(values: list[tuple[str, str]]) -> dict[str, object]:
@@ -79,3 +80,92 @@ def test_load_fred_macro_persists_market_scoped_rows(monkeypatch):
         market="US",
     )
     assert sorted(stored["series_alias"].astype(str).unique()) == ["cpi_mom", "leading_index"]
+
+
+def test_load_fred_macro_uses_cached_rows_without_write(monkeypatch):
+    now = datetime.now(timezone.utc)
+    upsert_macro_dimension(
+        [
+            {
+                "series_alias": "leading_index",
+                "provider": "FRED",
+                "provider_series_id": "USALOLITONOSTSAM",
+                "enabled": True,
+                "label": "",
+                "unit": "",
+            }
+        ],
+        market="US",
+    )
+    upsert_macro_series_frame(
+        series_alias="leading_index",
+        provider="FRED",
+        provider_series_id="USALOLITONOSTSAM",
+        frame=pd.DataFrame(
+            {
+                "series_id": ["USALOLITONOSTSAM"],
+                "value": [1.0],
+                "source": ["FRED"],
+                "fetched_at": [now],
+                "is_provisional": [False],
+            },
+            index=pd.PeriodIndex(["2024-01"], freq="M"),
+        ),
+        market="US",
+    )
+
+    read_macro_data(
+        series_aliases=["leading_index"],
+        start_ym="202401",
+        end_ym="202401",
+        market="US",
+    )
+
+    monkeypatch.setattr(
+        macro_sync,
+        "upsert_macro_dimension",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cache hit should not open a write path")),
+    )
+    monkeypatch.setattr(
+        fred,
+        "fetch_fred_series",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("cache hit should not trigger live fetch")),
+    )
+
+    cached_status, cached_result = fred.load_fred_macro(
+        "202401",
+        "202401",
+        series_config={
+            "leading_index": {"series_id": "USALOLITONOSTSAM", "transform": "none", "enabled": True},
+        },
+        market="US",
+    )
+
+    assert cached_status == "CACHED"
+    assert list(cached_result["series_id"].astype(str)) == ["USALOLITONOSTSAM"]
+
+
+def test_load_fred_macro_persists_market_scoped_rows_after_fetch(monkeypatch):
+    now = datetime.now(timezone.utc)
+    cached_frame = pd.DataFrame(
+        {
+            "series_id": ["USALOLITONOSTSAM"],
+            "value": [1.0],
+            "source": ["FRED"],
+            "fetched_at": [now],
+            "is_provisional": [False],
+        },
+        index=pd.PeriodIndex(["2024-01"], freq="M"),
+    )
+    monkeypatch.setattr(fred, "fetch_fred_series", lambda *args, **kwargs: cached_frame)
+    status, frame = fred.load_fred_macro(
+        "202401",
+        "202401",
+        series_config={
+            "leading_index": {"series_id": "USALOLITONOSTSAM", "transform": "none", "enabled": True},
+        },
+        market="US",
+    )
+
+    assert status == "LIVE"
+    assert list(frame["series_id"].astype(str)) == ["USALOLITONOSTSAM"]

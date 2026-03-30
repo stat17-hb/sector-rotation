@@ -704,6 +704,15 @@ def is_market_coverage_complete(
     expected_dates = pd.Index(benchmark.index.unique()).sort_values()
     if expected_dates.empty:
         return False
+    requested_end_digits = "".join(ch for ch in str(end or "") if ch.isdigit())
+    if len(requested_end_digits) != 8:
+        return False
+    requested_end = pd.Timestamp(
+        f"{requested_end_digits[:4]}-{requested_end_digits[4:6]}-{requested_end_digits[6:]}"
+    ).normalize()
+    latest_benchmark_date = pd.Timestamp(expected_dates.max()).normalize()
+    if latest_benchmark_date < requested_end:
+        return False
 
     for code in [str(code) for code in index_codes]:
         code_dates = pd.Index(frame[frame["index_code"].astype(str) == code].index.unique())

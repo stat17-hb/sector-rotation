@@ -177,15 +177,30 @@ def load_sector_prices(tickers: list[str], start: str, end: str) -> LoaderResult
     if not normalized:
         return ("SAMPLE", pd.DataFrame())
 
+    coverage_code = "SPY" if "SPY" in normalized else normalized[0]
     cached = read_market_prices(normalized, start, end, market=MARKET_ID)
-    if not cached.empty and is_market_coverage_complete(
-        normalized,
-        start,
-        end,
-        benchmark_code="SPY" if "SPY" in normalized else normalized[0],
-        market=MARKET_ID,
-    ):
-        return ("CACHED", normalize_then_validate(cached, "sector_prices"))
+    if not cached.empty:
+        coverage_complete = is_market_coverage_complete(
+            normalized,
+            start,
+            end,
+            benchmark_code=coverage_code,
+            market=MARKET_ID,
+        )
+        if coverage_complete:
+            return ("CACHED", normalize_then_validate(cached, "sector_prices"))
+
+        requested_end = pd.Timestamp(_normalize_market_date(end))
+        benchmark_cached = cached[cached["index_code"].astype(str) == coverage_code]
+        if not benchmark_cached.empty:
+            benchmark_latest = pd.Timestamp(benchmark_cached.index.max()).normalize()
+            if benchmark_latest < requested_end:
+                logger.info(
+                    "US market cache stale for %s: latest benchmark date %s is before requested end %s; refreshing via yfinance.",
+                    coverage_code,
+                    benchmark_latest.strftime("%Y-%m-%d"),
+                    requested_end.strftime("%Y-%m-%d"),
+                )
 
     try:
         live = normalize_then_validate(fetch_sector_prices(normalized, start, end), "sector_prices")
@@ -196,7 +211,7 @@ def load_sector_prices(tickers: list[str], start: str, end: str) -> LoaderResult
             normalized,
             start,
             end,
-            benchmark_code="SPY" if "SPY" in normalized else normalized[0],
+            benchmark_code=coverage_code,
             market=MARKET_ID,
         )
         update_ingest_watermark(

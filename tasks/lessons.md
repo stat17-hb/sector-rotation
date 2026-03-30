@@ -47,3 +47,8 @@
 - Rule: Before any warehouse bootstrap/backfill/sync that writes to DuckDB, check for repo-local `python -m streamlit run app.py` or other writer processes and stop them first; otherwise treat file-lock errors as environment/process conflicts before changing code.
 - Pattern: `git push` to GitHub failed because a regenerated `data/warehouse.duckdb` blob in the latest commit exceeded the 100 MB file limit.
 - Rule: Before committing or pushing, inspect staged/generated artifacts for size-sensitive paths (`data/`, `backups/`, `logs/`) and keep local DuckDB files untracked via `.gitignore` plus `git rm --cached` when they were already tracked.
+
+## 2026-03-30
+- Pattern: Streamlit app load hit a DuckDB write-lock error in US macro loading because `sync_provider_macro()` always called `upsert_macro_dimension()` before checking whether cached warehouse macro data already satisfied the request.
+- Rule: In warehouse-backed sync paths, never open a write connection on a cache-hit fast path; perform completeness checks using read-only calls first and only switch to write mode after a live refresh is actually required.
+- Rule: When fixing same-process DuckDB lock issues, add a regression test that proves the cached read path avoids both live fetches and dimension upserts.
