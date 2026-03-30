@@ -3,6 +3,8 @@ RSI alerts and FX shock downgrade scoring.
 """
 from __future__ import annotations
 
+import dataclasses
+
 from src.signals.matrix import SectorSignal
 
 
@@ -35,26 +37,7 @@ def apply_rsi_alerts(
             if "Oversold" not in alerts:
                 alerts.append("Oversold")
 
-    return SectorSignal(
-        index_code=signal.index_code,
-        sector_name=signal.sector_name,
-        macro_regime=signal.macro_regime,
-        macro_fit=signal.macro_fit,
-        rs=signal.rs,
-        rs_ma=signal.rs_ma,
-        rs_strong=signal.rs_strong,
-        trend_ok=signal.trend_ok,
-        momentum_strong=signal.momentum_strong,
-        rsi_d=signal.rsi_d,
-        rsi_w=signal.rsi_w,
-        action=signal.action,
-        alerts=alerts,
-        returns=signal.returns,
-        volatility_20d=signal.volatility_20d,
-        mdd_3m=signal.mdd_3m,
-        asof_date=signal.asof_date,
-        is_provisional=signal.is_provisional,
-    )
+    return dataclasses.replace(signal, alerts=alerts)
 
 
 def apply_fx_shock_filter(
@@ -92,25 +75,6 @@ def apply_fx_shock_filter(
         alerts = list(signal.alerts)
         if "FX Shock" not in alerts:
             alerts.append("FX Shock")
-        return SectorSignal(
-            index_code=signal.index_code,
-            sector_name=signal.sector_name,
-            macro_regime=signal.macro_regime,
-            macro_fit=signal.macro_fit,
-            rs=signal.rs,
-            rs_ma=signal.rs_ma,
-            rs_strong=signal.rs_strong,
-            trend_ok=signal.trend_ok,
-            momentum_strong=signal.momentum_strong,
-            rsi_d=signal.rsi_d,
-            rsi_w=signal.rsi_w,
-            action="Watch",
-            alerts=alerts,
-            returns=signal.returns,
-            volatility_20d=signal.volatility_20d,
-            mdd_3m=signal.mdd_3m,
-            asof_date=signal.asof_date,
-            is_provisional=signal.is_provisional,
-        )
+        return dataclasses.replace(signal, action="Watch", alerts=alerts)
 
     return signal

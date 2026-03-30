@@ -16,6 +16,25 @@ Owner: Codex + User
 - Completed with commit `507e23b` and a successful `git push origin main:main` on 2026-03-08.
 - The repo now stops tracking `data/warehouse.duckdb` and all tracked `__pycache__` artifacts; local generated parquet changes remain only in the working tree.
 
+# 2026-03-08 - Railway Deployment Risk Review
+
+Status: Completed
+Owner: Codex + User
+
+## Execution Checklist
+- [x] Inspect Railway-specific config and runtime entrypoints
+- [x] Trace local DuckDB/data/log paths used at runtime
+- [x] Check whether deploy now depends on files no longer tracked in git
+- [x] Cross-check Railway filesystem/persistence constraints against current app behavior
+- [x] Document concrete Railway risks and mitigations
+
+## Review
+- Focus: whether the recent GitHub large-file fix creates deployment regressions or reveals pre-existing Railway runtime issues.
+- `railway.toml` already binds Streamlit correctly to Railway `PORT`, so the recent Git fix does not create a new entrypoint problem.
+- The repository no longer ships `data/warehouse.duckdb`, while runtime paths remain hardcoded to `data/warehouse.duckdb` and `data/curated/*.parquet`; this means Railway deploys will cold-start without the DuckDB warehouse unless a volume is mounted at the app's `data/` path.
+- Market data has a curated parquet fallback, but macro data is warehouse-first and will refetch or drop to `SAMPLE` on cold deploy if API keys/fetches fail; the committed `macro_monthly.parquet` does not currently restore macro cache on an empty warehouse.
+- Railway volumes are the correct persistence primitive for this app because the service writes local DuckDB/parquet state under relative `data/` paths. Deployment docs should be updated to require mounting a volume where `./data` resolves (for Nixpacks-style `/app/data`).
+
 # 2026-03-08 - Stock-dashboard Palette Migration
 
 Status: In progress
@@ -26,13 +45,13 @@ Owner: Codex + User
 - [x] 기준선 파일 확정: `app.py`, `src/ui/styles.py`, `src/ui/components.py`, `.streamlit/config.toml`, `tests/test_ui_theme.py`, `tests/test_ui_components.py`, `tests/test_ui_contrast.py`
 - [x] 토큰 파일 생성 방향 확정: Python dict 기반 중앙 모듈 `config/theme.py`
 - [x] `config/theme.py` 생성 및 `stock-dashboard` 구조(`ui/chart/dataframe/signal/navigation`) 이식
-- [ ] `.streamlit/config.toml`을 새 다크 기본 팔레트로 갱신
-- [ ] `src/ui/styles.py`를 `config.theme` 기반 호환 계층으로 리팩터링
-- [ ] `src/ui/components.py` 하드코딩 색상을 중앙 토큰으로 교체
-- [ ] `app.py` 테마 상태 관리를 `config.theme` helper로 이관
-- [ ] 테스트 갱신: `tests/test_ui_theme.py`, `tests/test_ui_contrast.py`, `tests/test_ui_components.py`
-- [ ] 잔여 하드코딩 색상 grep 점검 (`app.py`, `src/ui`)
-- [ ] 검증: `pytest -q tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_ui_components.py`
+- [x] `.streamlit/config.toml`을 새 다크 기본 팔레트로 갱신
+- [x] `src/ui/styles.py`를 `config.theme` 기반 호환 계층으로 리팩터링
+- [x] `src/ui/components.py` 하드코딩 색상을 중앙 토큰으로 교체
+- [x] `app.py` 테마 상태 관리를 `config.theme` helper로 이관
+- [x] 테스트 갱신: `tests/test_ui_theme.py`, `tests/test_ui_contrast.py`, `tests/test_ui_components.py`
+- [x] 잔여 하드코딩 색상 grep 점검 (`app.py`, `src/ui`) — #000 그라데이션 1곳만 남음(의도적)
+- [x] 검증: `pytest -q tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_ui_components.py` — 58 passed
 - [ ] 수동 점검: `streamlit run app.py`에서 dark/light 일관성 확인
 
 ## Review
@@ -2283,3 +2302,84 @@ Review:
 - Targeted theme verification: `58 passed in 11.10s` via `pytest -q tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_ui_components.py`.
 - Headless Streamlit startup verification: `python -m streamlit run app.py --server.headless true --server.port 8516` reached startup banner; stderr remained empty.
 - Manual in-browser dark/light inspection was not performed in this environment.
+
+## 63) INVESTMENT STRATEGY MMF asset-class investigation (2026-03-08)
+
+Pre-Implementation Check-in:
+- 2026-03-08: Investigate whether MMF cash-equivalent positions are being counted as equity in the `INVESTMENT STRATEGY` stock-weight summary.
+- Scope: trace the render/data path for the strategy view, inspect asset-class classification rules against local data, reproduce the displayed stock weight, and fix the classification only if the code is wrong.
+
+Execution Checklist:
+- [ ] Locate the `INVESTMENT STRATEGY` render path in code or local DuckDB data.
+- [ ] Identify the asset-class classification logic used for stock/cash weight aggregation.
+- [ ] Verify how MMF rows are classified in current local data and whether that drives the reported 84% stock weight.
+- [ ] Patch the classification logic and add a regression test if MMF is misclassified.
+- [ ] Run focused verification and record the result below.
+
+Review:
+- Pending.
+
+## 64) Sector Rotation structural improvement roadmap (2026-03-17)
+
+Status: Completed
+Owner: Codex + User
+
+## Execution Checklist
+- [x] Phase 0: append-only task tracking, CI workflow, BOM normalization, artifact tracking cleanup
+- [x] Phase 1: split `app.py` orchestration into `src/dashboard/`
+- [x] Phase 2: add shared data-source utilities and unify macro/market `as_of`
+- [x] Phase 3: split UI responsibilities across `src/ui` modules and keep compatibility exports
+- [x] Phase 4: update README/deploy docs and archive workflow guidance
+- [x] Verification: targeted pytest, full `pytest -q`, headless Streamlit smoke
+
+## Review
+- Added `src/dashboard/{analysis,data,metrics,state,tabs,types}.py` and reduced `app.py` to a 601-line orchestration entrypoint while keeping compatibility exports used by existing tests.
+- Split UI implementation into `src/ui/{base,figures,panels,tables}.py` and moved the heavy style implementation behind the compatibility wrapper `src/ui/styles.py -> src/ui/css.py`.
+- Added shared data-source helper `src/data_sources/common.py` and rewired ECOS/KOSIS secret loading + retry logic to use it.
+- Added CI workflow `.github/workflows/tests.yml` for `compileall`, `pytest -q`, and headless Streamlit smoke.
+- Removed tracked `data/curated/*.parquet` artifacts from git index; `git ls-files data/curated/*.parquet` now returns empty.
+- Added direct tests for new dashboard modules: `tests/test_dashboard_analysis.py`, `tests/test_dashboard_state.py`.
+- Verification:
+- `python -m compileall app.py src/dashboard src/ui src/data_sources`
+- `pytest -q tests/test_app_transforms.py tests/test_ui_components.py tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_ecos_kosis_api_handling.py tests/test_cache_keys.py tests/test_preflight.py` -> `99 passed`
+- `pytest -q tests/test_signal_pipeline_integration.py tests/test_integration.py` -> `31 passed`
+- `pytest -q tests/test_dashboard_analysis.py tests/test_dashboard_state.py` -> `7 passed`
+- `pytest -q` -> `205 passed in 20.95s`
+- `python -m streamlit run app.py --server.headless true --server.port 8523` reached startup banner with empty stderr.
+
+## 65) KR + US single-dashboard market expansion (2026-03-18)
+
+Pre-Implementation Check-in:
+- 2026-03-18: Implement market-aware KR/US support in the existing sector rotation dashboard without changing market-agnostic analytics modules.
+- Scope: add US config/registry, yfinance/FRED data sources, market-aware warehouse migration, dashboard market toggle, CLI/docs updates, and regression/integration tests.
+
+Execution Checklist:
+- [x] Add US config files and a market registry as the single source of truth for KR/US metadata
+- [x] Add US market price loader (`yfinance`) and US macro loader (`FRED`) with existing LoaderResult/DataFrame contracts
+- [x] Extend macro series helpers and macro sync to support FRED
+- [x] Migrate warehouse schema/helpers to support market-scoped price, macro, ingest run, and watermark data
+- [x] Make calendar and preflight market-aware
+- [x] Wire market selection, market-aware config loading, cache keys, and benchmark labels through app/dashboard state
+- [x] Replace hardcoded KR-specific UI copy with market-profile-driven labels where required for KR/US toggle support
+- [x] Extend bootstrap/sync scripts and deployment/runtime docs for `--market KR|US` and `FRED_API_KEY`
+- [x] Add US and multi-market tests while preserving KR regressions
+- [x] Run verification, record results, and note any residual risks
+
+Review:
+- Added market registry/config: `config/markets.py`, `config/sector_map_us.yml`, `config/macro_series_us.yml`, `config/settings_us.yml`.
+- Added US data sources: `src/data_sources/yfinance_sectors.py`, `src/data_sources/fred.py`.
+- Extended shared loaders: `src/data_sources/warehouse.py` now stores price, macro, ingest runs, and watermarks by `market`; `src/data_sources/macro_sync.py` and `src/macro/series_utils.py` now support `FRED`.
+- Wired market-aware runtime: `app.py`, `src/dashboard/data.py`, `src/dashboard/state.py`, `src/dashboard/types.py`, `src/dashboard/analysis.py`, `src/dashboard/tabs.py`, `src/transforms/calendar.py`, `src/data_sources/preflight.py`, `src/ui/panels.py`.
+- Extended CLI/docs/deps: `scripts/bootstrap_warehouse.py`, `scripts/sync_warehouse.py`, `scripts/validate_sector_mapping_us.py`, `requirements.txt`, `README.md`, `docs/railway-deploy.md`.
+- Added tests: `tests/test_market_registry.py`, `tests/test_fred.py`, `tests/test_yfinance_sectors.py`, `tests/test_warehouse_multimarket.py`, `tests/test_us_signal_pipeline.py`; updated `tests/conftest.py`.
+- Verification:
+- `python -m py_compile src/data_sources/warehouse.py src/data_sources/macro_sync.py src/data_sources/fred.py src/data_sources/yfinance_sectors.py`
+- `python -m py_compile app.py src/dashboard/data.py src/dashboard/tabs.py src/dashboard/state.py src/dashboard/analysis.py src/dashboard/types.py`
+- `python -m py_compile scripts/bootstrap_warehouse.py scripts/sync_warehouse.py scripts/validate_sector_mapping_us.py`
+- `python -m py_compile tests/test_market_registry.py tests/test_fred.py tests/test_yfinance_sectors.py tests/test_warehouse_multimarket.py tests/test_us_signal_pipeline.py`
+- `pytest -q tests/test_market_registry.py tests/test_fred.py tests/test_yfinance_sectors.py tests/test_warehouse_multimarket.py tests/test_us_signal_pipeline.py tests/test_dashboard_analysis.py tests/test_dashboard_state.py tests/test_cache_keys.py tests/test_preflight.py` -> `26 passed in 3.08s`
+- `pytest -q tests/test_app_transforms.py tests/test_signal_pipeline_integration.py tests/test_data_status.py tests/test_dashboard_analysis.py tests/test_dashboard_state.py tests/test_warehouse_multimarket.py tests/test_market_registry.py tests/test_fred.py tests/test_yfinance_sectors.py tests/test_us_signal_pipeline.py` -> `54 passed in 9.95s`
+- `pytest -q` -> `215 passed in 25.67s`
+- `python -m streamlit run app.py --server.headless true --server.port 8524` stayed running until timeout and was then stopped manually, indicating successful headless startup.
+- Residual risks / follow-ups:
+- Sidebar and explanatory copy still contain some legacy KR-specific strings in portions of `src/dashboard/tabs.py`; the core market toggle, benchmark labels, provider dispatch, and signal pipeline are already market-aware, but a second pass on presentation copy would improve polish.

@@ -1,0 +1,50 @@
+benchmark:
+  code: "SPY"
+  name: "S&P 500"
+
+regimes:
+  Recovery:
+    description: "Growth Up, Inflation Down"
+    sectors:
+      - code: "XLK"
+        name: "Technology"
+        export_sector: false
+      - code: "XLY"
+        name: "Consumer Discretionary"
+        export_sector: false
+      - code: "XLC"
+        name: "Communication Services"
+        export_sector: false
+  Expansion:
+    description: "Growth Up, Inflation Up"
+    sectors:
+      - code: "XLI"
+        name: "Industrials"
+        export_sector: true
+      - code: "XLF"
+        name: "Financials"
+        export_sector: false
+      - code: "XLRE"
+        name: "Real Estate"
+        export_sector: false
+  Slowdown:
+    description: "Growth Down, Inflation Up"
+    sectors:
+      - code: "XLE"
+        name: "Energy"
+        export_sector: true
+      - code: "XLB"
+        name: "Materials"
+        export_sector: true
+  Contraction:
+    description: "Growth Down, Inflation Down"
+    sectors:
+      - code: "XLP"
+        name: "Consumer Staples"
+        export_sector: false
+      - code: "XLU"
+        name: "Utilities"
+        export_sector: false
+      - code: "XLV"
+        name: "Health Care"
+        export_sector: false

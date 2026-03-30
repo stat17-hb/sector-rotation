@@ -1,4 +1,4 @@
-﻿"""
+"""
 KRX index price data loader.
 
 Wraps pykrx with chunked fetching, retry/backoff, and LIVE/CACHED/SAMPLE fallback.

@@ -8,15 +8,13 @@ KOSIS data for recent 3 months is marked is_provisional=True.
 from __future__ import annotations
 
 import logging
-import os
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal
 
 import pandas as pd
-import requests
 
+from src.data_sources.common import load_secret_or_env, request_json_with_retry
 from src.data_sources.macro_sync import sync_provider_macro
 
 logger = logging.getLogger(__name__)
@@ -27,23 +25,13 @@ LoaderResult = tuple[DataStatus, pd.DataFrame]
 CURATED_DIR = Path("data/curated")
 KOSIS_BASE_URL = "https://kosis.kr/openapi/Param/statisticsParameterData.do"
 
-REQUEST_TIMEOUT = 10
-MAX_RETRIES = 3
-BACKOFF_BASE = 2
 PROVISIONAL_MONTHS = 3  # most recent N months are marked provisional
 REQUEST_VARIABLE_ERROR_CODES = {"20", "21"}
 
 
 def _get_api_key() -> str:
     """Get KOSIS API key from Streamlit secrets or environment variable."""
-    try:
-        import streamlit as st  # type: ignore[import]
-        key = st.secrets.get("KOSIS_API_KEY", "")
-        if key:
-            return key
-    except Exception:
-        pass
-    return os.environ.get("KOSIS_API_KEY", "")
+    return load_secret_or_env("KOSIS_API_KEY")
 
 
 def _get_with_retry(url: str, params: dict | None = None) -> object:
@@ -52,27 +40,7 @@ def _get_with_retry(url: str, params: dict | None = None) -> object:
     Policy (R11): timeout=10s, retries=3, backoff 2/4/8s.
     Re-raises last exception on final failure.
     """
-    last_exc: Exception | None = None
-    for attempt in range(MAX_RETRIES):
-        try:
-            resp = requests.get(url, params=params, timeout=REQUEST_TIMEOUT)
-            resp.raise_for_status()
-            return resp.json()
-        except (requests.Timeout, requests.ConnectionError) as exc:
-            last_exc = exc
-            logger.warning("KOSIS HTTP attempt %d/%d failed: %s", attempt + 1, MAX_RETRIES, exc)
-            if attempt < MAX_RETRIES - 1:
-                time.sleep(BACKOFF_BASE ** (attempt + 1))
-        except requests.HTTPError as exc:
-            if exc.response is not None and exc.response.status_code in {429, 503}:
-                last_exc = exc
-                if attempt < MAX_RETRIES - 1:
-                    time.sleep(BACKOFF_BASE ** (attempt + 1))
-            else:
-                raise
-
-    assert last_exc is not None
-    raise last_exc
+    return request_json_with_retry(url, params=params, client_name="KOSIS")
 
 
 def _is_provisional(period: pd.Period) -> bool:
@@ -308,7 +276,14 @@ def load_kosis_macro(
                 "org_id": "101",
                 "tbl_id": "DT_1J22003",
                 "item_id": "T",
-                "obj_params": {"objL1": "T10"},
+                "obj_params": {"objL1": "T10"},  # 전년동월비(%)
+                "enabled": True,
+            },
+            "cpi_mom": {
+                "org_id": "101",
+                "tbl_id": "DT_1J22003",
+                "item_id": "T",
+                "obj_params": {"objL1": "T20"},  # 전월비(%)
                 "enabled": True,
             },
             "leading_index": {

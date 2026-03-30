@@ -24,7 +24,7 @@ from src.data_sources.warehouse import (
 
 logger = logging.getLogger(__name__)
 
-MacroProvider = Literal["ECOS", "KOSIS"]
+MacroProvider = Literal["ECOS", "KOSIS", "FRED"]
 FetchFn = Callable[[str, dict[str, Any], str, str], pd.DataFrame]
 
 
@@ -44,6 +44,9 @@ def _provider_series_id(provider: MacroProvider, cfg: dict[str, Any]) -> str:
         normalized = [str(value).strip() for value in item_codes if str(value).strip()]
         series_key = "/".join(normalized)
         return f"{cfg['stat_code']}/{series_key}"
+
+    if provider == "FRED":
+        return str(cfg["series_id"]).strip()
 
     obj_params = cfg.get("obj_params") or {}
     obj_l1 = obj_params.get("objL1") if isinstance(obj_params, dict) else None
@@ -83,11 +86,13 @@ def _warehouse_provider_frame(
     series_aliases: list[str],
     start_ym: str,
     end_ym: str,
+    market: str,
 ) -> pd.DataFrame:
     frame = read_macro_data(
         series_aliases=series_aliases,
         start_ym=start_ym,
         end_ym=end_ym,
+        market=market,
     )
     if frame.empty:
         return pd.DataFrame()
@@ -97,12 +102,12 @@ def _warehouse_provider_frame(
     return filtered.drop(columns=["series_alias"], errors="ignore")
 
 
-def get_macro_artifact_key() -> tuple[int, int, str, str, str]:
-    return get_dataset_artifact_key("macro_data")
+def get_macro_artifact_key(*, market: str = "KR") -> tuple[int, int, str, str, str]:
+    return get_dataset_artifact_key("macro_data", market=market)
 
 
-def probe_macro_status() -> str:
-    return probe_dataset_mode("macro_data")
+def probe_macro_status(*, market: str = "KR") -> str:
+    return probe_dataset_mode("macro_data", market=market)
 
 
 def sync_provider_macro(
@@ -114,6 +119,7 @@ def sync_provider_macro(
     fetch_fn: FetchFn,
     reason: str,
     force: bool = False,
+    market: str = "KR",
 ) -> tuple[str, pd.DataFrame, dict[str, Any]]:
     active_config = _active_series_config(series_config)
     aliases = sorted(active_config)
@@ -136,13 +142,14 @@ def sync_provider_macro(
 
     normalized_start = _normalize_month_token(start_ym)
     normalized_end = _normalize_month_token(end_ym)
-    upsert_macro_dimension(_series_dimension_rows(provider, active_config))
+    upsert_macro_dimension(_series_dimension_rows(provider, active_config), market=market)
 
     cached = _warehouse_provider_frame(
         provider,
         series_aliases=aliases,
         start_ym=normalized_start,
         end_ym=normalized_end,
+        market=market,
     )
     if (
         not force
@@ -151,6 +158,7 @@ def sync_provider_macro(
             series_aliases=aliases,
             start_ym=normalized_start,
             end_ym=normalized_end,
+            market=market,
         )
     ):
         validated = normalize_then_validate(cached, "macro_monthly")
@@ -166,15 +174,20 @@ def sync_provider_macro(
         }
         return "CACHED", validated, summary
 
-    latest_periods = {} if force else get_macro_latest_periods(aliases)
+    latest_periods = {} if force else get_macro_latest_periods(aliases, market=market)
     delta_aliases: list[str] = []
     failed_aliases: dict[str, str] = {}
+
+    _TRANSFORM_LOOKBACK = {"pct_change_12m": 14}
+    _DEFAULT_LOOKBACK = 6
 
     for alias, cfg in active_config.items():
         fetch_start = normalized_start
         last_period = latest_periods.get(alias, "")
         if last_period:
-            fetch_start = max(normalized_start, _shift_months(last_period, -6))
+            transform = cfg.get("transform", "none")
+            lookback = _TRANSFORM_LOOKBACK.get(transform, _DEFAULT_LOOKBACK)
+            fetch_start = max(normalized_start, _shift_months(last_period, -lookback))
 
         try:
             frame = fetch_fn(alias, cfg, fetch_start, normalized_end)
@@ -186,6 +199,7 @@ def sync_provider_macro(
                 provider=provider,
                 provider_series_id=provider_series_id,
                 frame=frame,
+                market=market,
             )
             delta_aliases.append(alias)
         except Exception as exc:
@@ -197,16 +211,18 @@ def sync_provider_macro(
         series_aliases=aliases,
         start_ym=normalized_start,
         end_ym=normalized_end,
+        market=market,
     )
     coverage_complete = is_macro_coverage_complete(
         series_aliases=aliases,
         start_ym=normalized_start,
         end_ym=normalized_end,
+        market=market,
     )
 
     if not final_frame.empty:
         validated = normalize_then_validate(final_frame, "macro_monthly")
-        export_macro_parquet()
+        export_macro_parquet(market=market)
         status = "LIVE" if delta_aliases else "CACHED"
         summary = {
             "provider": provider,
@@ -232,6 +248,7 @@ def sync_provider_macro(
             delta_keys=delta_aliases,
             row_count=int(len(validated)),
             summary=summary,
+            market=market,
         )
         if coverage_complete:
             update_ingest_watermark(
@@ -245,6 +262,7 @@ def sync_provider_macro(
                     "delta_aliases": delta_aliases,
                     "failed_aliases": failed_aliases,
                 },
+                market=market,
             )
         return status, validated, summary
 
@@ -272,6 +290,7 @@ def sync_provider_macro(
         delta_keys=delta_aliases,
         row_count=0,
         summary=summary,
+        market=market,
     )
     sample = pd.DataFrame(
         columns=["series_id", "value", "source", "fetched_at", "is_provisional"]
@@ -287,12 +306,15 @@ def sync_macro_warehouse(
     macro_series_cfg: dict[str, Any],
     reason: str,
     force: bool = False,
+    market: str = "KR",
 ) -> tuple[str, pd.DataFrame, dict[str, Any]]:
     from src.data_sources.ecos import fetch_series
+    from src.data_sources.fred import fetch_fred_series
     from src.data_sources.kosis import fetch_kosis_series
 
     ecos_cfg = _active_series_config((macro_series_cfg or {}).get("ecos"))
     kosis_cfg = _active_series_config((macro_series_cfg or {}).get("kosis"))
+    fred_cfg = _active_series_config((macro_series_cfg or {}).get("fred"))
 
     def _fetch_ecos(alias: str, cfg: dict[str, Any], provider_start: str, provider_end: str) -> pd.DataFrame:
         _ = alias
@@ -316,39 +338,82 @@ def sync_macro_warehouse(
             obj_params=cfg.get("obj_params"),
         )
 
-    ecos_status, ecos_frame, ecos_summary = sync_provider_macro(
-        provider="ECOS",
-        start_ym=start_ym,
-        end_ym=end_ym,
-        series_config=ecos_cfg,
-        fetch_fn=_fetch_ecos,
-        reason=reason,
-        force=force,
-    )
-    kosis_status, kosis_frame, kosis_summary = sync_provider_macro(
-        provider="KOSIS",
-        start_ym=start_ym,
-        end_ym=end_ym,
-        series_config=kosis_cfg,
-        fetch_fn=_fetch_kosis,
-        reason=reason,
-        force=force,
-    )
+    def _fetch_fred(alias: str, cfg: dict[str, Any], provider_start: str, provider_end: str) -> pd.DataFrame:
+        _ = alias
+        return fetch_fred_series(
+            cfg["series_id"],
+            provider_start,
+            provider_end,
+            transform=str(cfg.get("transform", "none")),
+        )
+
+    provider_results: dict[str, tuple[str, pd.DataFrame, dict[str, Any]]] = {}
+    if ecos_cfg:
+        provider_results["ECOS"] = sync_provider_macro(
+            provider="ECOS",
+            start_ym=start_ym,
+            end_ym=end_ym,
+            series_config=ecos_cfg,
+            fetch_fn=_fetch_ecos,
+            reason=reason,
+            force=force,
+            market=market,
+        )
+    if kosis_cfg:
+        provider_results["KOSIS"] = sync_provider_macro(
+            provider="KOSIS",
+            start_ym=start_ym,
+            end_ym=end_ym,
+            series_config=kosis_cfg,
+            fetch_fn=_fetch_kosis,
+            reason=reason,
+            force=force,
+            market=market,
+        )
+    if fred_cfg:
+        provider_results["FRED"] = sync_provider_macro(
+            provider="FRED",
+            start_ym=start_ym,
+            end_ym=end_ym,
+            series_config=fred_cfg,
+            fetch_fn=_fetch_fred,
+            reason=reason,
+            force=force,
+            market=market,
+        )
+
+    if not provider_results:
+        empty = pd.DataFrame()
+        return (
+            "LIVE",
+            empty,
+            {
+                "status": "LIVE",
+                "coverage_complete": True,
+                "providers": {},
+                "rows": 0,
+                "start": _normalize_month_token(start_ym),
+                "end": _normalize_month_token(end_ym),
+                "reason": reason,
+            },
+        )
 
     def _worst(left: str, right: str) -> str:
         order = {"LIVE": 0, "CACHED": 1, "SAMPLE": 2}
         return left if order.get(left, 2) >= order.get(right, 2) else right
 
-    status = _worst(ecos_status, kosis_status)
-    frames = [frame for frame in (ecos_frame, kosis_frame) if not frame.empty]
+    statuses = [payload[0] for payload in provider_results.values()]
+    status = statuses[0]
+    for value in statuses[1:]:
+        status = _worst(status, value)
+
+    frames = [payload[1] for payload in provider_results.values() if not payload[1].empty]
     combined = pd.concat(frames).sort_index() if frames else pd.DataFrame()
+    provider_summaries = {name: payload[2] for name, payload in provider_results.items()}
     summary = {
         "status": status,
-        "coverage_complete": bool(ecos_summary.get("coverage_complete")) and bool(kosis_summary.get("coverage_complete")),
-        "providers": {
-            "ECOS": ecos_summary,
-            "KOSIS": kosis_summary,
-        },
+        "coverage_complete": all(bool(item.get("coverage_complete")) for item in provider_summaries.values()),
+        "providers": provider_summaries,
         "rows": int(len(combined)) if not combined.empty else 0,
         "start": _normalize_month_token(start_ym),
         "end": _normalize_month_token(end_ym),

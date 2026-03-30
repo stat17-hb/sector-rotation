@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
@@ -24,23 +25,30 @@ def _rsi_ta(close: pd.Series, period: int) -> pd.Series:
 
 
 def _rsi_manual(close: pd.Series, period: int) -> pd.Series:
-    """Compute RSI using Wilder's smoothing method (pure pandas)."""
-    delta = close.diff()
-    gain = delta.clip(lower=0.0)
-    loss = (-delta).clip(lower=0.0)
+    """Compute RSI using Wilder's smoothing method (pure numpy to avoid pandas CoW issues)."""
+    if len(close) <= period:
+        return pd.Series(np.nan, index=close.index)
 
-    # Initial average gain/loss via simple mean for the first period
-    avg_gain = gain.rolling(window=period, min_periods=period).mean()
-    avg_loss = loss.rolling(window=period, min_periods=period).mean()
+    delta = close.diff().to_numpy(dtype=float)
+    gain = np.where(delta > 0, delta, 0.0)
+    loss = np.where(delta < 0, -delta, 0.0)
+
+    avg_gain = np.full(len(close), np.nan)
+    avg_loss = np.full(len(close), np.nan)
+
+    # Seed: simple mean of first `period` changes (indices 1..period inclusive)
+    avg_gain[period] = gain[1 : period + 1].mean()
+    avg_loss[period] = loss[1 : period + 1].mean()
 
     # Wilder's smoothing for subsequent periods
-    for i in range(period, len(close)):
-        avg_gain.iloc[i] = (avg_gain.iloc[i - 1] * (period - 1) + gain.iloc[i]) / period
-        avg_loss.iloc[i] = (avg_loss.iloc[i - 1] * (period - 1) + loss.iloc[i]) / period
+    for i in range(period + 1, len(close)):
+        avg_gain[i] = (avg_gain[i - 1] * (period - 1) + gain[i]) / period
+        avg_loss[i] = (avg_loss[i - 1] * (period - 1) + loss[i]) / period
 
-    rs = avg_gain / avg_loss.replace(0, float("nan"))
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rs = np.where(avg_loss == 0, np.nan, avg_gain / avg_loss)
     rsi = 100.0 - (100.0 / (1.0 + rs))
-    return rsi.clip(0, 100)
+    return pd.Series(np.clip(rsi, 0, 100), index=close.index)
 
 
 def compute_rsi(close: pd.Series, period: int = 14) -> pd.Series:

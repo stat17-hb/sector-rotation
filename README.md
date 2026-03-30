@@ -1,6 +1,6 @@
-# Korea Sector Rotation Dashboard
+# KR + US Sector Rotation Dashboard
 
-한국 주식시장 섹터 로테이션 분석을 위한 Streamlit 대시보드
+한국/미국 주식시장 섹터 로테이션 분석을 위한 Streamlit 대시보드
 
 ---
 
@@ -11,9 +11,10 @@
 **주요 기능**
 
 - 4단계 경기 국면 분류 (Recovery / Expansion / Slowdown / Contraction)
-- KRX 섹터 지수 가격 데이터 자동 수집 (pykrx)
-- 한국은행 ECOS API — 기준금리, 국고채 3년물, USD/KRW
-- 통계청 KOSIS API — CPI YoY, 경기선행지수
+- KR 시장: KRX 섹터 지수 가격 데이터 자동 수집 (KRX OpenAPI / pykrx)
+- KR 시장: ECOS / KOSIS 매크로 데이터
+- US 시장: SPY + Sector SPDR ETF 11개 가격 데이터 (yfinance)
+- US 시장: FRED 매크로 데이터
 - 섹터별 상대강도(RS), RSI, 이동평균 모멘텀 지표
 - 매크로 국면 × 모멘텀 상태 → 투자 신호 매트릭스
 - API 미연결 시 샘플 데이터 폴백 및 경고 배너
@@ -37,12 +38,14 @@
 sector-rotation/
 ├── app.py                      # Streamlit SPA 진입점
 ├── requirements.txt
+├── requirements-dev.txt        # 개발/테스트 의존성
 ├── environment.yml             # conda 환경 정의
 ├── config/
 │   ├── settings.yml            # 알고리즘 파라미터 (RS 기간, RSI 설정 등)
 │   ├── sector_map.yml          # 국면 → KRX 섹터 코드 매핑
 │   └── macro_series.yml        # ECOS/KOSIS 시리즈 ID 및 레이블
 ├── src/
+│   ├── dashboard/              # app 조립, 상태, 데이터 번들, 탭 렌더링
 │   ├── contracts/              # DataFrame 스키마 검증
 │   ├── data_sources/           # KRX, ECOS, KOSIS 데이터 수집
 │   ├── transforms/             # 영업일 계산, 리샘플링
@@ -78,6 +81,12 @@ conda activate sector-rotation
 pip install -r requirements.txt
 ```
 
+**개발/테스트까지 설치**
+
+```bash
+pip install -r requirements-dev.txt
+```
+
 ### 2. API 키 설정
 
 ECOS(한국은행)와 KOSIS(통계청) API를 사용하려면 키가 필요합니다.
@@ -94,7 +103,14 @@ KOSIS_API_KEY = "your_kosis_key_here"
 
 > API 키 없이 실행하면 샘플 데이터로 동작하며, 대시보드 상단에 경고 배너가 표시됩니다.
 
-### 3. 실행
+### 3. 로컬 데이터 저장 모델
+
+- 권위 저장소는 `data/warehouse.duckdb`입니다.
+- `data/curated/*.parquet`는 호환/캐시 산출물이며 Git tracked artifact로 관리하지 않습니다.
+- warehouse가 비어 있으면 bootstrap/sync 경로가 다시 채웁니다.
+- Railway 같은 배포 환경에서는 `data/` 경로에 persistent volume이 있어야 cold start 이후에도 캐시가 유지됩니다.
+
+### 4. 실행
 
 **Windows (conda 환경 자동 활성화)**
 
@@ -149,7 +165,14 @@ KOSIS API (통계청) ────────┘
 ## 테스트
 
 ```bash
-pytest tests/ -v
+pytest -q
+```
+
+추가 검증:
+
+```bash
+python -m compileall app.py src scripts tests
+python -m streamlit run app.py --server.headless true --server.port 8511
 ```
 
 ---

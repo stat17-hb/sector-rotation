@@ -1,4 +1,4 @@
-﻿# ECOS Open API series (Bank of Korea)
+# ECOS Open API series (Bank of Korea)
 ecos:
   base_rate:
     enabled: true
@@ -33,19 +33,19 @@ kosis:
   cpi_yoy:
     enabled: true
     org_id: "101"
-    tbl_id: "DT_1J22003"
-    item_id: "T"
+    tbl_id: "DT_1J22042"
+    item_id: "T03"
     obj_params:
-      objL1: "ALL"
+      objL1: "0"            # 총지수
     label: "CPI YoY"
     unit: "%"
   cpi_mom:
     enabled: true
     org_id: "101"
-    tbl_id: "DT_1J22003"
-    item_id: "T"
+    tbl_id: "DT_1J22042"
+    item_id: "T02"
     obj_params:
-      objL1: "ALL"
+      objL1: "0"            # 총지수
     label: "CPI MoM"
     unit: "%"
   export_growth:

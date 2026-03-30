@@ -52,6 +52,19 @@ def build_enabled_kosis_config(raw_cfg: Mapping | None) -> dict[str, dict]:
     return result
 
 
+def build_enabled_fred_config(raw_cfg: Mapping | None) -> dict[str, dict]:
+    """Build FRED loader config, excluding disabled entries."""
+    result: dict[str, dict] = {}
+    for alias, cfg in (raw_cfg or {}).items():
+        if not _is_enabled(cfg):
+            continue
+        result[str(alias)] = {
+            "series_id": cfg["series_id"],
+            "transform": str(cfg.get("transform", "none")),
+        }
+    return result
+
+
 def _extract_kosis_series(macro_df: pd.DataFrame, cfg: Mapping | None) -> pd.Series:
     if not _is_enabled(cfg):
         return pd.Series(dtype=float)
@@ -59,6 +72,18 @@ def _extract_kosis_series(macro_df: pd.DataFrame, cfg: Mapping | None) -> pd.Ser
     _l1 = _obj.get("objL1") if isinstance(_obj, dict) else None
     expected = f"{cfg['org_id']}/{cfg['tbl_id']}/{cfg['item_id']}" + (f"/{_l1}" if _l1 else "")
     mask = macro_df["series_id"].astype(str) == expected
+    if not mask.any():
+        return pd.Series(dtype=float)
+    values = macro_df.loc[mask, "value"].copy().sort_index()
+    if values.index.has_duplicates:
+        values = values.groupby(level=0).last()
+    return values.astype("float64")
+
+
+def _extract_alias_series(macro_df: pd.DataFrame, alias: str) -> pd.Series:
+    if "series_alias" not in macro_df.columns:
+        return pd.Series(dtype=float)
+    mask = macro_df["series_alias"].astype(str) == str(alias)
     if not mask.any():
         return pd.Series(dtype=float)
     values = macro_df.loc[mask, "value"].copy().sort_index()
@@ -96,6 +121,21 @@ def _extract_ecos_series(macro_df: pd.DataFrame, cfg: Mapping | None) -> pd.Seri
     return values.astype("float64")
 
 
+def _extract_fred_series(macro_df: pd.DataFrame, cfg: Mapping | None) -> pd.Series:
+    if not _is_enabled(cfg):
+        return pd.Series(dtype=float)
+    expected = str(cfg.get("series_id", "")).strip()
+    if not expected:
+        return pd.Series(dtype=float)
+    mask = macro_df["series_id"].astype(str) == expected
+    if not mask.any():
+        return pd.Series(dtype=float)
+    values = macro_df.loc[mask, "value"].copy().sort_index()
+    if values.index.has_duplicates:
+        values = values.groupby(level=0).last()
+    return values.astype("float64")
+
+
 def extract_macro_series(
     macro_df: pd.DataFrame,
     macro_series_cfg: Mapping,
@@ -107,6 +147,10 @@ def extract_macro_series(
     if "series_id" not in macro_df.columns or "value" not in macro_df.columns:
         return pd.Series(dtype=float)
 
+    alias_series = _extract_alias_series(macro_df, alias)
+    if not alias_series.empty:
+        return alias_series
+
     kosis_cfg = (macro_series_cfg.get("kosis", {}) if macro_series_cfg else {}).get(alias)
     kosis_series = _extract_kosis_series(macro_df, kosis_cfg)
     if not kosis_series.empty:
@@ -116,6 +160,11 @@ def extract_macro_series(
     ecos_series = _extract_ecos_series(macro_df, ecos_cfg)
     if not ecos_series.empty:
         return ecos_series
+
+    fred_cfg = (macro_series_cfg.get("fred", {}) if macro_series_cfg else {}).get(alias)
+    fred_series = _extract_fred_series(macro_df, fred_cfg)
+    if not fred_series.empty:
+        return fred_series
 
     return pd.Series(dtype=float)
 
@@ -128,4 +177,3 @@ def to_plotly_time_index(df: pd.DataFrame) -> pd.DataFrame:
     if isinstance(out.index, pd.PeriodIndex):
         out.index = out.index.to_timestamp(how="end")
     return out
-

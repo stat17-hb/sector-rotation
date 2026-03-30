@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import threading
 from typing import Any, Literal
 
 import duckdb
@@ -20,114 +21,407 @@ WarehouseDataset = Literal["market_prices", "macro_data"]
 WAREHOUSE_PATH = Path("data/warehouse.duckdb")
 DEFAULT_PRICE_EXPORT_PATH = Path("data/curated/sector_prices.parquet")
 DEFAULT_MACRO_EXPORT_PATH = Path("data/curated/macro_monthly.parquet")
+DEFAULT_PRICE_EXPORT_PATH_US = Path("data/curated/sector_prices_us.parquet")
+DEFAULT_MACRO_EXPORT_PATH_US = Path("data/curated/macro_monthly_us.parquet")
+
+# ---------------------------------------------------------------------------
+# Read-only connection cache
+# ---------------------------------------------------------------------------
+# Reusing a single read-only connection across multiple reads in one page load
+# avoids the 100-500 ms overhead of opening the file 11 times per request.
+# The cache is keyed by the warehouse file's mtime so it auto-refreshes after
+# a write operation (bootstrap / sync / upsert) changes the file.
+
+class _CachedROConn:
+    """Thread-safe cached read-only DuckDB connection.
+
+    Callers receive a thin wrapper whose ``close()`` is a no-op so that
+    existing ``try/finally: con.close()`` patterns stay unchanged but the
+    underlying connection remains open and reusable.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._conn: duckdb.DuckDBPyConnection | None = None
+        self._mtime: float = 0.0
+
+    def get(self) -> "_NoopCloseConn":
+        with self._lock:
+            current_mtime = WAREHOUSE_PATH.stat().st_mtime if WAREHOUSE_PATH.exists() else 0.0
+            if self._conn is None or self._mtime != current_mtime:
+                if self._conn is not None:
+                    try:
+                        self._conn.close()
+                    except Exception:
+                        pass
+                self._conn = duckdb.connect(str(WAREHOUSE_PATH), read_only=True)
+                self._mtime = current_mtime
+        return _NoopCloseConn(self._conn)
+
+    def invalidate(self) -> None:
+        """Close cached connection so next read reopens it (call before/after writes)."""
+        with self._lock:
+            if self._conn is not None:
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = None
+            self._mtime = 0.0
+
+
+class _NoopCloseConn:
+    """Proxy to a DuckDB connection whose close() is intentionally a no-op."""
+
+    __slots__ = ("_conn",)
+
+    def __init__(self, conn: duckdb.DuckDBPyConnection) -> None:
+        self._conn = conn
+
+    def __getattr__(self, name: str):  # type: ignore[override]
+        return getattr(self._conn, name)
+
+    def close(self) -> None:  # intentional no-op — connection is reused
+        pass
+
+
+_ro_cache = _CachedROConn()
+
+
+def _connect_ro() -> _NoopCloseConn:
+    """Return a cached read-only connection (refreshes automatically after writes)."""
+    return _ro_cache.get()
+
+
+def _invalidate_ro_cache() -> None:
+    """Invalidate the read-only cache; call after any write operation."""
+    _ro_cache.invalidate()
+
+
+class _WritingConn:
+    """Proxy for a write DuckDB connection that invalidates the RO cache on close."""
+
+    __slots__ = ("_conn",)
+
+    def __init__(self, conn: duckdb.DuckDBPyConnection) -> None:
+        self._conn = conn
+
+    def __getattr__(self, name: str):  # type: ignore[override]
+        return getattr(self._conn, name)
+
+    def close(self) -> None:
+        try:
+            self._conn.close()
+        finally:
+            _invalidate_ro_cache()
 
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _connect(*, read_only: bool = False) -> duckdb.DuckDBPyConnection:
+def _connect(*, read_only: bool = False) -> duckdb.DuckDBPyConnection | _WritingConn:
+    """Open a warehouse connection.
+
+    Write connections (read_only=False) return a _WritingConn that invalidates
+    the read-only cache on close so the next read always sees fresh data.
+    """
+    WAREHOUSE_PATH.parent.mkdir(parents=True, exist_ok=True)
     if not read_only:
-        WAREHOUSE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    return duckdb.connect(str(WAREHOUSE_PATH), read_only=read_only)
+        # Close any open RO connection before acquiring a write lock
+        _invalidate_ro_cache()
+    try:
+        raw = duckdb.connect(str(WAREHOUSE_PATH), read_only=read_only)
+    except duckdb.IOException as exc:
+        if not read_only:
+            raise RuntimeError(
+                "Cannot acquire write lock on warehouse.duckdb. "
+                "Stop 'streamlit run' (or any other process holding the file) "
+                "before running bootstrap/sync scripts. "
+                f"Underlying error: {exc}"
+            ) from exc
+        raise
+    if read_only:
+        return raw
+    return _WritingConn(raw)
+
+
+def _normalize_market_id(market: str | None) -> str:
+    normalized = str(market or "KR").strip().upper()
+    return normalized or "KR"
+
+
+def _default_market_export_path(market: str) -> Path:
+    return DEFAULT_PRICE_EXPORT_PATH_US if _normalize_market_id(market) == "US" else DEFAULT_PRICE_EXPORT_PATH
+
+
+def _default_macro_export_path(market: str) -> Path:
+    return DEFAULT_MACRO_EXPORT_PATH_US if _normalize_market_id(market) == "US" else DEFAULT_MACRO_EXPORT_PATH
+
+
+def _table_exists(con: duckdb.DuckDBPyConnection, table_name: str) -> bool:
+    row = con.execute(
+        """
+        SELECT COUNT(*)
+        FROM information_schema.tables
+        WHERE table_schema = 'main' AND table_name = ?
+        """,
+        [table_name],
+    ).fetchone()
+    return bool(row and int(row[0]) > 0)
+
+
+def _table_columns(con: duckdb.DuckDBPyConnection, table_name: str) -> set[str]:
+    if not _table_exists(con, table_name):
+        return set()
+    return {
+        str(row[1]).strip()
+        for row in con.execute(f"PRAGMA table_info('{table_name}')").fetchall()
+    }
+
+
+def _drop_table_if_exists(con: duckdb.DuckDBPyConnection, table_name: str) -> None:
+    con.execute(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def _migrate_table_with_market(
+    con: duckdb.DuckDBPyConnection,
+    *,
+    table_name: str,
+    create_sql: str,
+    insert_sql: str,
+) -> None:
+    if not _table_exists(con, table_name):
+        con.execute(create_sql)
+        return
+    if "market" in _table_columns(con, table_name):
+        return
+
+    backup_name = f"{table_name}__legacy_kr"
+    _drop_table_if_exists(con, backup_name)
+    con.execute(f"ALTER TABLE {table_name} RENAME TO {backup_name}")
+    con.execute(create_sql)
+    con.execute(insert_sql.format(legacy_table=backup_name))
+    _drop_table_if_exists(con, backup_name)
 
 
 def ensure_warehouse_schema(connection: duckdb.DuckDBPyConnection | None = None) -> None:
     owns_connection = connection is None
     con = connection or _connect()
     try:
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS dim_index (
-                index_code VARCHAR PRIMARY KEY,
-                index_name VARCHAR,
-                family VARCHAR,
-                is_benchmark BOOLEAN NOT NULL DEFAULT FALSE,
-                is_active BOOLEAN NOT NULL DEFAULT TRUE,
-                export_sector BOOLEAN,
-                updated_at TIMESTAMPTZ NOT NULL
-            )
-            """
+        _migrate_table_with_market(
+            con,
+            table_name="dim_index",
+            create_sql="""
+                CREATE TABLE IF NOT EXISTS dim_index (
+                    market VARCHAR NOT NULL,
+                    index_code VARCHAR NOT NULL,
+                    index_name VARCHAR,
+                    family VARCHAR,
+                    is_benchmark BOOLEAN NOT NULL DEFAULT FALSE,
+                    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                    export_sector BOOLEAN,
+                    updated_at TIMESTAMPTZ NOT NULL,
+                    PRIMARY KEY (market, index_code)
+                )
+            """,
+            insert_sql="""
+                INSERT INTO dim_index
+                SELECT
+                    'KR' AS market,
+                    index_code,
+                    index_name,
+                    family,
+                    is_benchmark,
+                    is_active,
+                    export_sector,
+                    updated_at
+                FROM {legacy_table}
+            """,
         )
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS fact_krx_index_daily (
-                trade_date DATE NOT NULL,
-                index_code VARCHAR NOT NULL,
-                close DOUBLE NOT NULL,
-                provider VARCHAR NOT NULL,
-                loaded_at TIMESTAMPTZ NOT NULL,
-                PRIMARY KEY (trade_date, index_code)
-            )
-            """
+        _migrate_table_with_market(
+            con,
+            table_name="fact_krx_index_daily",
+            create_sql="""
+                CREATE TABLE IF NOT EXISTS fact_krx_index_daily (
+                    market VARCHAR NOT NULL,
+                    trade_date DATE NOT NULL,
+                    index_code VARCHAR NOT NULL,
+                    close DOUBLE NOT NULL,
+                    provider VARCHAR NOT NULL,
+                    loaded_at TIMESTAMPTZ NOT NULL,
+                    PRIMARY KEY (market, trade_date, index_code)
+                )
+            """,
+            insert_sql="""
+                INSERT INTO fact_krx_index_daily
+                SELECT
+                    'KR' AS market,
+                    trade_date,
+                    index_code,
+                    close,
+                    provider,
+                    loaded_at
+                FROM {legacy_table}
+            """,
         )
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS dim_macro_series (
-                series_alias VARCHAR PRIMARY KEY,
-                provider VARCHAR NOT NULL,
-                provider_series_id VARCHAR NOT NULL,
-                enabled BOOLEAN NOT NULL,
-                label VARCHAR,
-                unit VARCHAR,
-                updated_at TIMESTAMPTZ NOT NULL
-            )
-            """
+        _migrate_table_with_market(
+            con,
+            table_name="dim_macro_series",
+            create_sql="""
+                CREATE TABLE IF NOT EXISTS dim_macro_series (
+                    market VARCHAR NOT NULL,
+                    series_alias VARCHAR NOT NULL,
+                    provider VARCHAR NOT NULL,
+                    provider_series_id VARCHAR NOT NULL,
+                    enabled BOOLEAN NOT NULL,
+                    label VARCHAR,
+                    unit VARCHAR,
+                    updated_at TIMESTAMPTZ NOT NULL,
+                    PRIMARY KEY (market, series_alias)
+                )
+            """,
+            insert_sql="""
+                INSERT INTO dim_macro_series
+                SELECT
+                    'KR' AS market,
+                    series_alias,
+                    provider,
+                    provider_series_id,
+                    enabled,
+                    label,
+                    unit,
+                    updated_at
+                FROM {legacy_table}
+            """,
         )
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS fact_macro_monthly (
-                period_month DATE NOT NULL,
-                series_alias VARCHAR NOT NULL,
-                provider VARCHAR NOT NULL,
-                provider_series_id VARCHAR NOT NULL,
-                value DOUBLE,
-                is_provisional BOOLEAN NOT NULL,
-                fetched_at TIMESTAMPTZ NOT NULL,
-                PRIMARY KEY (period_month, series_alias)
-            )
-            """
+        _migrate_table_with_market(
+            con,
+            table_name="fact_macro_monthly",
+            create_sql="""
+                CREATE TABLE IF NOT EXISTS fact_macro_monthly (
+                    market VARCHAR NOT NULL,
+                    period_month DATE NOT NULL,
+                    series_alias VARCHAR NOT NULL,
+                    provider VARCHAR NOT NULL,
+                    provider_series_id VARCHAR NOT NULL,
+                    value DOUBLE,
+                    is_provisional BOOLEAN NOT NULL,
+                    fetched_at TIMESTAMPTZ NOT NULL,
+                    PRIMARY KEY (market, period_month, series_alias)
+                )
+            """,
+            insert_sql="""
+                INSERT INTO fact_macro_monthly
+                SELECT
+                    'KR' AS market,
+                    period_month,
+                    series_alias,
+                    provider,
+                    provider_series_id,
+                    value,
+                    is_provisional,
+                    fetched_at
+                FROM {legacy_table}
+            """,
         )
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS ingest_runs (
-                run_id VARCHAR PRIMARY KEY,
-                dataset VARCHAR NOT NULL,
-                reason VARCHAR NOT NULL,
-                provider VARCHAR NOT NULL,
-                requested_start VARCHAR NOT NULL,
-                requested_end VARCHAR NOT NULL,
-                status VARCHAR NOT NULL,
-                coverage_complete BOOLEAN NOT NULL,
-                failed_days_json VARCHAR NOT NULL,
-                failed_codes_json VARCHAR NOT NULL,
-                delta_keys_json VARCHAR NOT NULL,
-                row_count BIGINT NOT NULL,
-                aborted BOOLEAN NOT NULL,
-                abort_reason VARCHAR NOT NULL,
-                predicted_requests INTEGER NOT NULL,
-                processed_requests INTEGER NOT NULL,
-                summary_json VARCHAR NOT NULL,
-                created_at TIMESTAMPTZ NOT NULL
-            )
-            """
+        _migrate_table_with_market(
+            con,
+            table_name="ingest_runs",
+            create_sql="""
+                CREATE TABLE IF NOT EXISTS ingest_runs (
+                    run_id VARCHAR PRIMARY KEY,
+                    market VARCHAR NOT NULL,
+                    dataset VARCHAR NOT NULL,
+                    reason VARCHAR NOT NULL,
+                    provider VARCHAR NOT NULL,
+                    requested_start VARCHAR NOT NULL,
+                    requested_end VARCHAR NOT NULL,
+                    status VARCHAR NOT NULL,
+                    coverage_complete BOOLEAN NOT NULL,
+                    failed_days_json VARCHAR NOT NULL,
+                    failed_codes_json VARCHAR NOT NULL,
+                    delta_keys_json VARCHAR NOT NULL,
+                    row_count BIGINT NOT NULL,
+                    aborted BOOLEAN NOT NULL,
+                    abort_reason VARCHAR NOT NULL,
+                    predicted_requests INTEGER NOT NULL,
+                    processed_requests INTEGER NOT NULL,
+                    summary_json VARCHAR NOT NULL,
+                    created_at TIMESTAMPTZ NOT NULL
+                )
+            """,
+            insert_sql="""
+                INSERT INTO ingest_runs
+                SELECT
+                    run_id,
+                    'KR' AS market,
+                    dataset,
+                    reason,
+                    provider,
+                    requested_start,
+                    requested_end,
+                    status,
+                    coverage_complete,
+                    failed_days_json,
+                    failed_codes_json,
+                    delta_keys_json,
+                    row_count,
+                    aborted,
+                    abort_reason,
+                    predicted_requests,
+                    processed_requests,
+                    summary_json,
+                    created_at
+                FROM {legacy_table}
+            """,
         )
-        con.execute(
-            """
-            CREATE TABLE IF NOT EXISTS ingest_watermarks (
-                dataset VARCHAR PRIMARY KEY,
-                watermark_key VARCHAR NOT NULL,
-                coverage_complete BOOLEAN NOT NULL,
-                status VARCHAR NOT NULL,
-                provider VARCHAR NOT NULL,
-                details_json VARCHAR NOT NULL,
-                updated_at TIMESTAMPTZ NOT NULL
-            )
-            """
+        _migrate_table_with_market(
+            con,
+            table_name="ingest_watermarks",
+            create_sql="""
+                CREATE TABLE IF NOT EXISTS ingest_watermarks (
+                    dataset VARCHAR NOT NULL,
+                    market VARCHAR NOT NULL,
+                    watermark_key VARCHAR NOT NULL,
+                    coverage_complete BOOLEAN NOT NULL,
+                    status VARCHAR NOT NULL,
+                    provider VARCHAR NOT NULL,
+                    details_json VARCHAR NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL,
+                    PRIMARY KEY (dataset, market)
+                )
+            """,
+            insert_sql="""
+                INSERT INTO ingest_watermarks
+                SELECT
+                    dataset,
+                    'KR' AS market,
+                    watermark_key,
+                    coverage_complete,
+                    status,
+                    provider,
+                    details_json,
+                    updated_at
+                FROM {legacy_table}
+            """,
         )
     finally:
         if owns_connection:
             con.close()
+
+
+def _ensure_schema_best_effort() -> None:
+    """Try to ensure schema but silently continue if write lock is unavailable.
+
+    Read-only callers should use this instead of ``ensure_warehouse_schema``
+    so that concurrent readers (e.g. two Streamlit processes) don't crash when
+    one already holds the DuckDB write lock.
+    """
+    try:
+        ensure_warehouse_schema()
+    except RuntimeError:
+        pass
 
 
 def warehouse_exists() -> bool:
@@ -162,14 +456,16 @@ def _register_frame(
     con.register(view_name, frame)
 
 
-def upsert_index_dimension(rows: list[dict[str, Any]]) -> None:
+def upsert_index_dimension(rows: list[dict[str, Any]], *, market: str = "KR") -> None:
     if not rows:
         return
 
+    normalized_market = _normalize_market_id(market)
     now = _utc_now()
     frame = pd.DataFrame(rows).copy()
     if frame.empty:
         return
+    frame["market"] = normalized_market
     frame["updated_at"] = now
     frame["index_code"] = frame["index_code"].astype(str)
     if "index_name" not in frame.columns:
@@ -195,6 +491,7 @@ def upsert_index_dimension(rows: list[dict[str, Any]]) -> None:
             """
             INSERT INTO dim_index AS dim
             SELECT
+                market,
                 index_code,
                 index_name,
                 family,
@@ -203,7 +500,7 @@ def upsert_index_dimension(rows: list[dict[str, Any]]) -> None:
                 export_sector,
                 updated_at
             FROM dim_index_upsert
-            ON CONFLICT (index_code) DO UPDATE SET
+            ON CONFLICT (market, index_code) DO UPDATE SET
                 index_name = excluded.index_name,
                 family = excluded.family,
                 is_benchmark = excluded.is_benchmark,
@@ -216,20 +513,22 @@ def upsert_index_dimension(rows: list[dict[str, Any]]) -> None:
         con.close()
 
 
-def upsert_market_prices(frame: pd.DataFrame, *, provider: str) -> None:
+def upsert_market_prices(frame: pd.DataFrame, *, provider: str, market: str = "KR") -> None:
     if frame.empty:
         return
 
+    normalized_market = _normalize_market_id(market)
     normalized = frame.copy()
     normalized.index = pd.DatetimeIndex(normalized.index)
     normalized = normalized.sort_index()
+    normalized["market"] = normalized_market
     normalized["index_code"] = normalized["index_code"].astype(str)
     normalized["close"] = normalized["close"].astype(float)
     normalized["trade_date"] = normalized.index.normalize()
     normalized["provider"] = str(provider or "").strip().upper() or "UNKNOWN"
     normalized["loaded_at"] = _utc_now()
 
-    payload = normalized[["trade_date", "index_code", "close", "provider", "loaded_at"]]
+    payload = normalized[["market", "trade_date", "index_code", "close", "provider", "loaded_at"]]
     con = _connect()
     try:
         ensure_warehouse_schema(con)
@@ -238,13 +537,14 @@ def upsert_market_prices(frame: pd.DataFrame, *, provider: str) -> None:
             """
             INSERT INTO fact_krx_index_daily AS fact
             SELECT
+                market,
                 CAST(trade_date AS DATE) AS trade_date,
                 index_code,
                 close,
                 provider,
                 loaded_at
             FROM market_prices_upsert
-            ON CONFLICT (trade_date, index_code) DO UPDATE SET
+            ON CONFLICT (market, trade_date, index_code) DO UPDATE SET
                 close = excluded.close,
                 provider = excluded.provider,
                 loaded_at = excluded.loaded_at
@@ -258,14 +558,18 @@ def read_market_prices(
     index_codes: list[str],
     start: str,
     end: str,
+    *,
+    market: str = "KR",
 ) -> pd.DataFrame:
     if not warehouse_exists() or not index_codes:
         return pd.DataFrame()
 
+    _ensure_schema_best_effort()
+    normalized_market = _normalize_market_id(market)
     codes_frame = pd.DataFrame({"index_code": [str(code) for code in index_codes]})
     start_date = _normalize_market_date(start)
     end_date = _normalize_market_date(end)
-    con = _connect(read_only=True)
+    con = _connect_ro()
     try:
         _register_frame(con, "requested_codes", codes_frame)
         result = con.execute(
@@ -279,11 +583,13 @@ def read_market_prices(
             INNER JOIN requested_codes AS req
                 ON req.index_code = fact.index_code
             LEFT JOIN dim_index AS dim
-                ON dim.index_code = fact.index_code
-            WHERE fact.trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+                ON dim.market = fact.market
+               AND dim.index_code = fact.index_code
+            WHERE fact.market = ?
+              AND fact.trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
             ORDER BY fact.trade_date, fact.index_code
             """,
-            [start_date, end_date],
+            [normalized_market, start_date, end_date],
         ).fetchdf()
     finally:
         con.close()
@@ -298,12 +604,14 @@ def read_market_prices(
     )
 
 
-def get_market_latest_dates(index_codes: list[str]) -> dict[str, str]:
+def get_market_latest_dates(index_codes: list[str], *, market: str = "KR") -> dict[str, str]:
     if not warehouse_exists() or not index_codes:
         return {}
 
+    _ensure_schema_best_effort()
+    normalized_market = _normalize_market_id(market)
     codes_frame = pd.DataFrame({"index_code": [str(code) for code in index_codes]})
-    con = _connect(read_only=True)
+    con = _connect_ro()
     try:
         _register_frame(con, "latest_price_codes", codes_frame)
         result = con.execute(
@@ -314,8 +622,11 @@ def get_market_latest_dates(index_codes: list[str]) -> dict[str, str]:
             FROM fact_krx_index_daily AS fact
             INNER JOIN latest_price_codes AS req
                 ON req.index_code = fact.index_code
+            WHERE fact.market = ?
             GROUP BY fact.index_code
             """
+            ,
+            [normalized_market],
         ).fetchdf()
     finally:
         con.close()
@@ -335,8 +646,9 @@ def is_market_coverage_complete(
     end: str,
     *,
     benchmark_code: str,
+    market: str = "KR",
 ) -> bool:
-    frame = read_market_prices(index_codes, start, end)
+    frame = read_market_prices(index_codes, start, end, market=market)
     if frame.empty:
         return False
 
@@ -356,12 +668,13 @@ def is_market_coverage_complete(
     return True
 
 
-def export_market_parquet(path: Path | None = None) -> Path | None:
-    export_path = path or DEFAULT_PRICE_EXPORT_PATH
+def export_market_parquet(path: Path | None = None, *, market: str = "KR") -> Path | None:
+    export_path = path or _default_market_export_path(market)
     if not warehouse_exists():
         return None
 
-    con = _connect(read_only=True)
+    normalized_market = _normalize_market_id(market)
+    con = _connect_ro()
     try:
         result = con.execute(
             """
@@ -372,9 +685,13 @@ def export_market_parquet(path: Path | None = None) -> Path | None:
                 fact.close
             FROM fact_krx_index_daily AS fact
             LEFT JOIN dim_index AS dim
-                ON dim.index_code = fact.index_code
+                ON dim.market = fact.market
+               AND dim.index_code = fact.index_code
+            WHERE fact.market = ?
             ORDER BY fact.trade_date, fact.index_code
             """
+            ,
+            [normalized_market],
         ).fetchdf()
     finally:
         con.close()
@@ -389,14 +706,16 @@ def export_market_parquet(path: Path | None = None) -> Path | None:
     return export_path
 
 
-def upsert_macro_dimension(rows: list[dict[str, Any]]) -> None:
+def upsert_macro_dimension(rows: list[dict[str, Any]], *, market: str = "KR") -> None:
     if not rows:
         return
 
+    normalized_market = _normalize_market_id(market)
     now = _utc_now()
     frame = pd.DataFrame(rows).copy()
     if frame.empty:
         return
+    frame["market"] = normalized_market
     frame["updated_at"] = now
     frame["series_alias"] = frame["series_alias"].astype(str)
     frame["provider"] = frame["provider"].astype(str)
@@ -415,6 +734,7 @@ def upsert_macro_dimension(rows: list[dict[str, Any]]) -> None:
             """
             INSERT INTO dim_macro_series AS dim
             SELECT
+                market,
                 series_alias,
                 provider,
                 provider_series_id,
@@ -423,7 +743,7 @@ def upsert_macro_dimension(rows: list[dict[str, Any]]) -> None:
                 unit,
                 updated_at
             FROM dim_macro_upsert
-            ON CONFLICT (series_alias) DO UPDATE SET
+            ON CONFLICT (market, series_alias) DO UPDATE SET
                 provider = excluded.provider,
                 provider_series_id = excluded.provider_series_id,
                 enabled = excluded.enabled,
@@ -442,15 +762,18 @@ def upsert_macro_series_frame(
     provider: str,
     provider_series_id: str,
     frame: pd.DataFrame,
+    market: str = "KR",
 ) -> None:
     if frame.empty:
         return
 
+    normalized_market = _normalize_market_id(market)
     normalized = frame.copy()
     if isinstance(normalized.index, pd.PeriodIndex):
         normalized["period_month"] = normalized.index.to_timestamp(how="end").normalize()
     else:
         normalized["period_month"] = pd.to_datetime(normalized.index).to_period("M").to_timestamp(how="end").normalize()
+    normalized["market"] = normalized_market
     normalized["series_alias"] = str(series_alias)
     normalized["provider"] = str(provider).strip().upper()
     normalized["provider_series_id"] = str(provider_series_id)
@@ -460,6 +783,7 @@ def upsert_macro_series_frame(
 
     payload = normalized[
         [
+            "market",
             "period_month",
             "series_alias",
             "provider",
@@ -478,6 +802,7 @@ def upsert_macro_series_frame(
             """
             INSERT INTO fact_macro_monthly AS fact
             SELECT
+                market,
                 CAST(period_month AS DATE) AS period_month,
                 series_alias,
                 provider,
@@ -486,7 +811,7 @@ def upsert_macro_series_frame(
                 is_provisional,
                 fetched_at
             FROM macro_series_upsert
-            ON CONFLICT (period_month, series_alias) DO UPDATE SET
+            ON CONFLICT (market, period_month, series_alias) DO UPDATE SET
                 provider = excluded.provider,
                 provider_series_id = excluded.provider_series_id,
                 value = excluded.value,
@@ -503,15 +828,18 @@ def read_macro_data(
     series_aliases: list[str],
     start_ym: str,
     end_ym: str,
+    market: str = "KR",
 ) -> pd.DataFrame:
     if not warehouse_exists() or not series_aliases:
         return pd.DataFrame()
 
+    _ensure_schema_best_effort()
+    normalized_market = _normalize_market_id(market)
     alias_frame = pd.DataFrame({"series_alias": [str(alias) for alias in series_aliases]})
     start_date = pd.Period(str(start_ym)[:6], freq="M").to_timestamp(how="end").strftime("%Y-%m-%d")
     end_date = pd.Period(str(end_ym)[:6], freq="M").to_timestamp(how="end").strftime("%Y-%m-%d")
 
-    con = _connect(read_only=True)
+    con = _connect_ro()
     try:
         _register_frame(con, "requested_aliases", alias_frame)
         result = con.execute(
@@ -527,10 +855,11 @@ def read_macro_data(
             FROM fact_macro_monthly AS fact
             INNER JOIN requested_aliases AS req
                 ON req.series_alias = fact.series_alias
-            WHERE fact.period_month BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+            WHERE fact.market = ?
+              AND fact.period_month BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
             ORDER BY fact.period_month, fact.series_alias
             """,
-            [start_date, end_date],
+            [normalized_market, start_date, end_date],
         ).fetchdf()
     finally:
         con.close()
@@ -555,12 +884,14 @@ def read_macro_data(
     )
 
 
-def get_macro_latest_periods(series_aliases: list[str]) -> dict[str, str]:
+def get_macro_latest_periods(series_aliases: list[str], *, market: str = "KR") -> dict[str, str]:
     if not warehouse_exists() or not series_aliases:
         return {}
 
+    _ensure_schema_best_effort()
+    normalized_market = _normalize_market_id(market)
     alias_frame = pd.DataFrame({"series_alias": [str(alias) for alias in series_aliases]})
-    con = _connect(read_only=True)
+    con = _connect_ro()
     try:
         _register_frame(con, "latest_macro_aliases", alias_frame)
         result = con.execute(
@@ -571,8 +902,11 @@ def get_macro_latest_periods(series_aliases: list[str]) -> dict[str, str]:
             FROM fact_macro_monthly AS fact
             INNER JOIN latest_macro_aliases AS req
                 ON req.series_alias = fact.series_alias
+            WHERE fact.market = ?
             GROUP BY fact.series_alias
             """
+            ,
+            [normalized_market],
         ).fetchdf()
     finally:
         con.close()
@@ -591,8 +925,9 @@ def is_macro_coverage_complete(
     series_aliases: list[str],
     start_ym: str,
     end_ym: str,
+    market: str = "KR",
 ) -> bool:
-    frame = read_macro_data(series_aliases=series_aliases, start_ym=start_ym, end_ym=end_ym)
+    frame = read_macro_data(series_aliases=series_aliases, start_ym=start_ym, end_ym=end_ym, market=market)
     if frame.empty:
         return False
 
@@ -609,12 +944,13 @@ def is_macro_coverage_complete(
     return True
 
 
-def export_macro_parquet(path: Path | None = None) -> Path | None:
-    export_path = path or DEFAULT_MACRO_EXPORT_PATH
+def export_macro_parquet(path: Path | None = None, *, market: str = "KR") -> Path | None:
+    export_path = path or _default_macro_export_path(market)
     if not warehouse_exists():
         return None
 
-    con = _connect(read_only=True)
+    normalized_market = _normalize_market_id(market)
+    con = _connect_ro()
     try:
         result = con.execute(
             """
@@ -626,8 +962,11 @@ def export_macro_parquet(path: Path | None = None) -> Path | None:
                 fetched_at,
                 is_provisional
             FROM fact_macro_monthly
+            WHERE market = ?
             ORDER BY period_month, provider_series_id
             """
+            ,
+            [normalized_market],
         ).fetchdf()
     finally:
         con.close()
@@ -636,16 +975,17 @@ def export_macro_parquet(path: Path | None = None) -> Path | None:
         return None
     export_path.parent.mkdir(parents=True, exist_ok=True)
     result["period_month"] = pd.to_datetime(result["period_month"])
+    period_idx = pd.PeriodIndex(result["period_month"], freq="M")
     frame = pd.DataFrame(
         {
-            "series_id": result["provider_series_id"].astype("object"),
-            "value": result["value"].astype("float64"),
-            "source": result["provider"].astype("object"),
-            "fetched_at": pd.to_datetime(result["fetched_at"], utc=True),
-            "is_provisional": result["is_provisional"].astype("bool"),
+            "series_id": result["provider_series_id"].values,
+            "value": result["value"].values,
+            "source": result["provider"].values,
+            "fetched_at": pd.to_datetime(result["fetched_at"], utc=True).values,
+            "is_provisional": result["is_provisional"].values,
         },
-        index=pd.PeriodIndex(result["period_month"], freq="M"),
-    )
+        index=period_idx,
+    ).astype({"series_id": "object", "value": "float64", "source": "object", "is_provisional": "bool"})
     frame.to_parquet(export_path)
     return export_path
 
@@ -668,12 +1008,15 @@ def record_ingest_run(
     predicted_requests: int = 0,
     processed_requests: int = 0,
     summary: dict[str, Any] | None = None,
+    market: str = "KR",
 ) -> None:
+    normalized_market = _normalize_market_id(market)
     now = _utc_now()
     frame = pd.DataFrame(
         [
             {
-                "run_id": f"{dataset}:{reason}:{now.isoformat()}",
+                "run_id": f"{normalized_market}:{dataset}:{reason}:{now.isoformat()}",
+                "market": normalized_market,
                 "dataset": dataset,
                 "reason": reason,
                 "provider": str(provider).strip().upper(),
@@ -712,11 +1055,14 @@ def update_ingest_watermark(
     coverage_complete: bool,
     provider: str,
     details: dict[str, Any] | None = None,
+    market: str = "KR",
 ) -> None:
+    normalized_market = _normalize_market_id(market)
     frame = pd.DataFrame(
         [
             {
                 "dataset": dataset,
+                "market": normalized_market,
                 "watermark_key": str(watermark_key or ""),
                 "coverage_complete": bool(coverage_complete),
                 "status": str(status).strip().upper(),
@@ -735,7 +1081,7 @@ def update_ingest_watermark(
             """
             INSERT INTO ingest_watermarks AS target
             SELECT * FROM ingest_watermark_upsert
-            ON CONFLICT (dataset) DO UPDATE SET
+            ON CONFLICT (dataset, market) DO UPDATE SET
                 watermark_key = excluded.watermark_key,
                 coverage_complete = excluded.coverage_complete,
                 status = excluded.status,
@@ -748,11 +1094,13 @@ def update_ingest_watermark(
         con.close()
 
 
-def read_dataset_status(dataset: WarehouseDataset) -> dict[str, Any]:
+def read_dataset_status(dataset: WarehouseDataset, *, market: str = "KR") -> dict[str, Any]:
     if not warehouse_exists():
         return {}
 
-    con = _connect(read_only=True)
+    _ensure_schema_best_effort()
+    normalized_market = _normalize_market_id(market)
+    con = _connect_ro()
     try:
         run_row = con.execute(
             """
@@ -772,11 +1120,11 @@ def read_dataset_status(dataset: WarehouseDataset) -> dict[str, Any]:
                 processed_requests,
                 created_at
             FROM ingest_runs
-            WHERE dataset = ?
+            WHERE dataset = ? AND market = ?
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            [dataset],
+            [dataset, normalized_market],
         ).fetchone()
         watermark_row = con.execute(
             """
@@ -788,9 +1136,9 @@ def read_dataset_status(dataset: WarehouseDataset) -> dict[str, Any]:
                 details_json,
                 updated_at
             FROM ingest_watermarks
-            WHERE dataset = ?
+            WHERE dataset = ? AND market = ?
             """,
-            [dataset],
+            [dataset, normalized_market],
         ).fetchone()
     finally:
         con.close()
@@ -836,11 +1184,15 @@ def read_dataset_status(dataset: WarehouseDataset) -> dict[str, Any]:
     return result
 
 
-def get_dataset_artifact_key(dataset: WarehouseDataset) -> tuple[int, int, str, str, str]:
+def get_dataset_artifact_key(
+    dataset: WarehouseDataset,
+    *,
+    market: str = "KR",
+) -> tuple[int, int, str, str, str]:
     if not warehouse_exists():
         return (0, 0, "", "", "")
     stat = WAREHOUSE_PATH.stat()
-    status = read_dataset_status(dataset)
+    status = read_dataset_status(dataset, market=market)
     return (
         int(stat.st_mtime_ns),
         int(stat.st_size),
@@ -850,36 +1202,58 @@ def get_dataset_artifact_key(dataset: WarehouseDataset) -> tuple[int, int, str, 
     )
 
 
-def probe_dataset_mode(dataset: WarehouseDataset) -> str:
+def probe_dataset_mode(dataset: WarehouseDataset, *, market: str = "KR") -> str:
     if not warehouse_exists():
         return "SAMPLE"
 
-    con = _connect(read_only=True)
+    normalized_market = _normalize_market_id(market)
+    con = _connect_ro()
     try:
-        if dataset == "market_prices":
-            count = int(con.execute("SELECT COUNT(*) FROM fact_krx_index_daily").fetchone()[0])
-        else:
-            count = int(con.execute("SELECT COUNT(*) FROM fact_macro_monthly").fetchone()[0])
+        table = "fact_krx_index_daily" if dataset == "market_prices" else "fact_macro_monthly"
+        if not _table_exists(con, table):
+            return "SAMPLE"
+        count = int(
+            con.execute(
+                f"SELECT COUNT(*) FROM {table} WHERE market = ?",
+                [normalized_market],
+            ).fetchone()[0]
+        )
+    except Exception:
+        return "SAMPLE"
     finally:
         con.close()
     return "CACHED" if count > 0 else "SAMPLE"
 
 
-def market_row_count() -> int:
+def market_row_count(*, market: str = "KR") -> int:
     if not warehouse_exists():
         return 0
-    con = _connect(read_only=True)
+    _ensure_schema_best_effort()
+    normalized_market = _normalize_market_id(market)
+    con = _connect_ro()
     try:
-        return int(con.execute("SELECT COUNT(*) FROM fact_krx_index_daily").fetchone()[0])
+        return int(
+            con.execute(
+                "SELECT COUNT(*) FROM fact_krx_index_daily WHERE market = ?",
+                [normalized_market],
+            ).fetchone()[0]
+        )
     finally:
         con.close()
 
 
-def macro_row_count() -> int:
+def macro_row_count(*, market: str = "KR") -> int:
     if not warehouse_exists():
         return 0
-    con = _connect(read_only=True)
+    _ensure_schema_best_effort()
+    normalized_market = _normalize_market_id(market)
+    con = _connect_ro()
     try:
-        return int(con.execute("SELECT COUNT(*) FROM fact_macro_monthly").fetchone()[0])
+        return int(
+            con.execute(
+                "SELECT COUNT(*) FROM fact_macro_monthly WHERE market = ?",
+                [normalized_market],
+            ).fetchone()[0]
+        )
     finally:
         con.close()

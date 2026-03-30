@@ -6,14 +6,15 @@ from datetime import date, datetime, timedelta
 import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-import yaml
 import pandas as pd
 
+from config.markets import load_market_configs
 from src.data_sources.krx_indices import warm_sector_price_cache
 from src.data_sources.macro_sync import sync_macro_warehouse
 from src.data_sources.warehouse import (
@@ -26,12 +27,8 @@ from src.data_sources.warehouse import (
 from src.transforms.calendar import get_last_business_day
 
 
-def _load_configs() -> tuple[dict, dict]:
-    with open(ROOT / "config" / "sector_map.yml", encoding="utf-8") as fh:
-        sector_map = yaml.safe_load(fh) or {}
-    with open(ROOT / "config" / "macro_series.yml", encoding="utf-8") as fh:
-        macro_series_cfg = yaml.safe_load(fh) or {}
-    return sector_map, macro_series_cfg
+def _load_configs(market: str) -> tuple[dict, dict, dict, object]:
+    return load_market_configs(market)
 
 
 def _all_sector_codes(sector_map: dict) -> list[str]:
@@ -49,6 +46,7 @@ def _all_sector_codes(sector_map: dict) -> list[str]:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--market", choices=["KR", "US"], default="KR")
     parser.add_argument("--prices-years", type=int, default=5)
     parser.add_argument("--macro-years", type=int, default=10)
     parser.add_argument("--as-of", default="", help="End date in YYYYMMDD or YYYY-MM-DD")
@@ -59,8 +57,11 @@ def _last_complete_month(as_of, *, lag_months: int = 2) -> str:
     return (pd.Period(as_of.strftime("%Y%m"), freq="M") - max(1, int(lag_months))).strftime("%Y%m")
 
 
-def _resolve_market_sync_start(index_codes: list[str], fallback_start: date) -> date:
-    latest_dates = get_market_latest_dates(index_codes)
+def _resolve_market_sync_start(index_codes: list[str], fallback_start: date, *, market: str) -> date:
+    try:
+        latest_dates = get_market_latest_dates(index_codes, market=market)
+    except TypeError:
+        latest_dates = get_market_latest_dates(index_codes)
     if not latest_dates:
         return fallback_start
 
@@ -74,8 +75,11 @@ def _resolve_market_sync_start(index_codes: list[str], fallback_start: date) -> 
     return min(parsed_dates) + timedelta(days=1)
 
 
-def _resolve_existing_market_end(index_codes: list[str]) -> date | None:
-    latest_dates = get_market_latest_dates(index_codes)
+def _resolve_existing_market_end(index_codes: list[str], *, market: str) -> date | None:
+    try:
+        latest_dates = get_market_latest_dates(index_codes, market=market)
+    except TypeError:
+        latest_dates = get_market_latest_dates(index_codes)
     parsed_dates = [
         datetime.strptime(str(value), "%Y%m%d").date()
         for value in latest_dates.values()
@@ -88,16 +92,27 @@ def _resolve_existing_market_end(index_codes: list[str]) -> date | None:
 
 def main() -> int:
     args = _parse_args()
-    sector_map, macro_series_cfg = _load_configs()
-    benchmark_code = str(sector_map.get("benchmark", {}).get("code", "1001"))
+    market_id = str(getattr(args, "market", "KR") or "KR").strip().upper()
+    try:
+        loaded = _load_configs(market_id)
+    except TypeError:
+        loaded = _load_configs()
+    if len(loaded) == 4:
+        settings, sector_map, macro_series_cfg, market_profile = loaded
+    else:
+        sector_map, macro_series_cfg = loaded
+        settings = {"benchmark_code": str(sector_map.get("benchmark", {}).get("code", "1001"))}
+        market_profile = SimpleNamespace(benchmark_code=settings["benchmark_code"])
+    benchmark_code = str(settings.get("benchmark_code", getattr(market_profile, "benchmark_code", "1001")))
     if args.as_of:
         digits = "".join(ch for ch in str(args.as_of) if ch.isdigit())
         end_date = datetime.strptime(digits, "%Y%m%d").date()
     else:
-        end_date = get_last_business_day(provider="OPENAPI", benchmark_code=benchmark_code)
+        calendar_provider = "YFINANCE" if market_id == "US" else "OPENAPI"
+        end_date = get_last_business_day(provider=calendar_provider, benchmark_code=benchmark_code)
 
     codes = _all_sector_codes(sector_map)
-    existing_market_end = _resolve_existing_market_end(codes)
+    existing_market_end = _resolve_existing_market_end(codes, market=market_id)
     if existing_market_end is not None and existing_market_end > end_date:
         end_date = existing_market_end
 
@@ -105,15 +120,24 @@ def main() -> int:
     macro_end = _last_complete_month(end_date)
     macro_start = (end_date - timedelta(days=365 * int(args.macro_years))).strftime("%Y%m")
 
-    market_sync_start = _resolve_market_sync_start(codes, market_window_start)
+    market_sync_start = _resolve_market_sync_start(codes, market_window_start, market=market_id)
     if market_sync_start <= end_date:
-        (market_status, _market_delta_frame), market_summary = warm_sector_price_cache(
-            codes,
-            market_sync_start.strftime("%Y%m%d"),
-            end_date.strftime("%Y%m%d"),
-            reason="sync_warehouse",
-            force=False,
-        )
+        if market_id == "US":
+            from src.data_sources.yfinance_sectors import run_manual_price_refresh
+
+            (market_status, _market_delta_frame), market_summary = run_manual_price_refresh(
+                codes,
+                market_sync_start.strftime("%Y%m%d"),
+                end_date.strftime("%Y%m%d"),
+            )
+        else:
+            (market_status, _market_delta_frame), market_summary = warm_sector_price_cache(
+                codes,
+                market_sync_start.strftime("%Y%m%d"),
+                end_date.strftime("%Y%m%d"),
+                reason="sync_warehouse",
+                force=False,
+            )
     else:
         market_status = "CACHED"
         market_summary = {
@@ -124,13 +148,14 @@ def main() -> int:
             "delta_codes": [],
             "failed_days": [],
             "failed_codes": {},
-            "provider": "OPENAPI",
+            "provider": "YFINANCE" if market_id == "US" else "OPENAPI",
             "reason": "sync_warehouse",
         }
     market_frame = read_market_prices(
         codes,
         market_window_start.strftime("%Y%m%d"),
         end_date.strftime("%Y%m%d"),
+        market=market_id,
     )
     macro_status, macro_frame, macro_summary = sync_macro_warehouse(
         start_ym=macro_start,
@@ -138,6 +163,7 @@ def main() -> int:
         macro_series_cfg=macro_series_cfg,
         reason="sync_warehouse",
         force=False,
+        market=market_id,
     )
 
     success = (
@@ -153,15 +179,15 @@ def main() -> int:
             "status": market_status,
             "rows": int(len(market_frame)),
             "summary": market_summary,
-            "warehouse_rows": market_row_count(),
-            "warehouse_status": read_dataset_status("market_prices"),
+            "warehouse_rows": market_row_count(market=market_id),
+            "warehouse_status": read_dataset_status("market_prices", market=market_id),
         },
         "macro": {
             "status": macro_status,
             "rows": int(len(macro_frame)),
             "summary": macro_summary,
-            "warehouse_rows": macro_row_count(),
-            "warehouse_status": read_dataset_status("macro_data"),
+            "warehouse_rows": macro_row_count(market=market_id),
+            "warehouse_status": read_dataset_status("macro_data", market=market_id),
         },
     }
     print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))

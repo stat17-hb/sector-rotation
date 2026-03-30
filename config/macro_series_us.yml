@@ -1,0 +1,43 @@
+fred:
+  leading_index:
+    enabled: true
+    series_id: "USALOLITONOSTSAM"
+    transform: "none"
+    label: "OECD CLI"
+    unit: "index"
+  cpi_yoy:
+    enabled: true
+    series_id: "CPIAUCSL"
+    transform: "pct_change_12m"
+    label: "CPI YoY"
+    unit: "%"
+  cpi_mom:
+    enabled: true
+    series_id: "CPIAUCSL"
+    transform: "pct_change_1m"
+    label: "CPI MoM"
+    unit: "%"
+  fed_funds:
+    enabled: true
+    series_id: "FEDFUNDS"
+    transform: "none"
+    label: "Fed Funds Rate"
+    unit: "%"
+  treasury_10y:
+    enabled: true
+    series_id: "GS10"
+    transform: "none"
+    label: "10Y Treasury"
+    unit: "%"
+  treasury_2y:
+    enabled: true
+    series_id: "GS2"
+    transform: "none"
+    label: "2Y Treasury"
+    unit: "%"
+  dxy:
+    enabled: true
+    series_id: "DTWEXBGS"
+    transform: "none"
+    label: "Trade-Weighted Dollar Index"
+    unit: "index"

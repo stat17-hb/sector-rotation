@@ -7,14 +7,15 @@ import json
 from pathlib import Path
 import sys
 import time
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import pandas as pd
-import yaml
 
+from config.markets import load_market_configs
 from src.data_sources.krx_indices import warm_sector_price_cache
 from src.data_sources.macro_sync import sync_macro_warehouse
 from src.data_sources.warehouse import (
@@ -27,12 +28,8 @@ from src.data_sources.warehouse import (
 from src.transforms.calendar import get_last_business_day
 
 
-def _load_configs() -> tuple[dict, dict]:
-    with open(ROOT / "config" / "sector_map.yml", encoding="utf-8") as fh:
-        sector_map = yaml.safe_load(fh) or {}
-    with open(ROOT / "config" / "macro_series.yml", encoding="utf-8") as fh:
-        macro_series_cfg = yaml.safe_load(fh) or {}
-    return sector_map, macro_series_cfg
+def _load_configs(market: str) -> tuple[dict, dict, dict, object]:
+    return load_market_configs(market)
 
 
 def _all_sector_codes(sector_map: dict) -> list[str]:
@@ -50,6 +47,7 @@ def _all_sector_codes(sector_map: dict) -> list[str]:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--market", choices=["KR", "US"], default="KR")
     parser.add_argument("--prices-years", type=int, default=5)
     parser.add_argument("--macro-years", type=int, default=10)
     parser.add_argument("--market-chunk-months", type=int, default=1)
@@ -159,34 +157,72 @@ def _bootstrap_market(
 
 def main() -> int:
     args = _parse_args()
-    sector_map, macro_series_cfg = _load_configs()
-    benchmark_code = str(sector_map.get("benchmark", {}).get("code", "1001"))
+    market_id = str(getattr(args, "market", "KR") or "KR").strip().upper()
+    try:
+        loaded = _load_configs(market_id)
+    except TypeError:
+        loaded = _load_configs()
+    if len(loaded) == 4:
+        settings, sector_map, macro_series_cfg, market_profile = loaded
+    else:
+        sector_map, macro_series_cfg = loaded
+        settings = {"benchmark_code": str(sector_map.get("benchmark", {}).get("code", "1001"))}
+        market_profile = SimpleNamespace(benchmark_code=settings["benchmark_code"])
+    benchmark_code = str(settings.get("benchmark_code", getattr(market_profile, "benchmark_code", "1001")))
     if args.as_of:
         digits = "".join(ch for ch in str(args.as_of) if ch.isdigit())
         end_date = datetime.strptime(digits, "%Y%m%d").date()
     else:
-        end_date = get_last_business_day(provider="OPENAPI", benchmark_code=benchmark_code)
+        calendar_provider = "YFINANCE" if market_id == "US" else "OPENAPI"
+        end_date = get_last_business_day(provider=calendar_provider, benchmark_code=benchmark_code)
 
     market_start = end_date - timedelta(days=365 * int(args.prices_years))
     macro_end = _last_complete_month(end_date)
     macro_start = (end_date - timedelta(days=365 * int(args.macro_years))).strftime("%Y%m")
 
     codes = _all_sector_codes(sector_map)
-    market_status, market_frame, market_summary = _bootstrap_market(
-        codes,
-        start_date=market_start,
-        end_date=end_date,
-        benchmark_code=benchmark_code,
-        chunk_months=int(getattr(args, "market_chunk_months", 6)),
-        chunk_retries=int(getattr(args, "market_chunk_retries", 3)),
-        chunk_retry_sleep_sec=float(getattr(args, "market_chunk_retry_sleep_sec", 5.0)),
-    )
+    if market_id == "US":
+        from src.data_sources.yfinance_sectors import load_sector_prices
+
+        market_status, market_frame = load_sector_prices(
+            codes,
+            market_start.strftime("%Y%m%d"),
+            end_date.strftime("%Y%m%d"),
+        )
+        market_summary = {
+            "status": market_status,
+            "coverage_complete": bool(
+                not market_frame.empty
+                and is_market_coverage_complete(
+                    codes,
+                    market_start.strftime("%Y%m%d"),
+                    end_date.strftime("%Y%m%d"),
+                    benchmark_code=benchmark_code,
+                    market=market_id,
+                )
+            ),
+            "start": market_start.strftime("%Y%m%d"),
+            "end": end_date.strftime("%Y%m%d"),
+            "rows": int(len(market_frame)),
+            "provider": "YFINANCE",
+        }
+    else:
+        market_status, market_frame, market_summary = _bootstrap_market(
+            codes,
+            start_date=market_start,
+            end_date=end_date,
+            benchmark_code=benchmark_code,
+            chunk_months=int(getattr(args, "market_chunk_months", 6)),
+            chunk_retries=int(getattr(args, "market_chunk_retries", 3)),
+            chunk_retry_sleep_sec=float(getattr(args, "market_chunk_retry_sleep_sec", 5.0)),
+        )
     macro_status, macro_frame, macro_summary = sync_macro_warehouse(
         start_ym=macro_start,
         end_ym=macro_end,
         macro_series_cfg=macro_series_cfg,
         reason="bootstrap_warehouse",
         force=True,
+        market=market_id,
     )
 
     success = (
@@ -204,15 +240,15 @@ def main() -> int:
             "status": market_status,
             "rows": int(len(market_frame)),
             "summary": market_summary,
-            "warehouse_rows": market_row_count(),
-            "warehouse_status": read_dataset_status("market_prices"),
+            "warehouse_rows": market_row_count(market=market_id),
+            "warehouse_status": read_dataset_status("market_prices", market=market_id),
         },
         "macro": {
             "status": macro_status,
             "rows": int(len(macro_frame)),
             "summary": macro_summary,
-            "warehouse_rows": macro_row_count(),
-            "warehouse_status": read_dataset_status("macro_data"),
+            "warehouse_rows": macro_row_count(market=market_id),
+            "warehouse_status": read_dataset_status("macro_data", market=market_id),
         },
     }
     print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))

@@ -7,16 +7,14 @@ Public loaders return LoaderResult = tuple[DataStatus, pd.DataFrame].
 from __future__ import annotations
 
 import logging
-import os
-import time
 import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterable, Literal
 
 import pandas as pd
-import requests
 
+from src.data_sources.common import load_secret_or_env, request_json_with_retry
 from src.data_sources.macro_sync import sync_provider_macro
 
 logger = logging.getLogger(__name__)
@@ -27,9 +25,6 @@ LoaderResult = tuple[DataStatus, pd.DataFrame]
 CURATED_DIR = Path("data/curated")
 ECOS_BASE_URL = "https://ecos.bok.or.kr/api"
 
-REQUEST_TIMEOUT = 10
-MAX_RETRIES = 3
-BACKOFF_BASE = 2
 MAX_ITEM_CODES = 3
 VALID_CYCLES = {"A", "Q", "M", "D"}
 ECOS_PAGE_SIZE = 1000
@@ -100,14 +95,7 @@ def _time_to_month_period(time_str: str, cycle: str) -> pd.Period | None:
 
 def _get_api_key() -> str:
     """Get ECOS API key from Streamlit secrets or environment variable."""
-    try:
-        import streamlit as st  # type: ignore[import]
-        key = st.secrets.get("ECOS_API_KEY", "")
-        if key:
-            return key
-    except Exception:
-        pass
-    return os.environ.get("ECOS_API_KEY", "")
+    return load_secret_or_env("ECOS_API_KEY")
 
 
 def _get_with_retry(url: str) -> dict:
@@ -117,32 +105,14 @@ def _get_with_retry(url: str) -> dict:
     Re-raises last exception on final failure.
     Does not retry 4xx client errors (except 429).
     """
-    last_exc: Exception | None = None
-    for attempt in range(MAX_RETRIES):
-        try:
-            resp = requests.get(url, timeout=REQUEST_TIMEOUT)
-            resp.raise_for_status()
-            try:
-                return resp.json()
-            except ValueError as exc:
-                text_preview = (resp.text or "")[:200]
-                raise ValueError(f"ECOS returned non-JSON response: {text_preview!r}") from exc
-        except (requests.Timeout, requests.ConnectionError) as exc:
-            last_exc = exc
-            logger.warning("ECOS HTTP attempt %d/%d failed: %s", attempt + 1, MAX_RETRIES, exc)
-            if attempt < MAX_RETRIES - 1:
-                time.sleep(BACKOFF_BASE ** (attempt + 1))
-        except requests.HTTPError as exc:
-            if exc.response is not None and exc.response.status_code in {429, 503}:
-                last_exc = exc
-                logger.warning("ECOS rate limit/503 attempt %d/%d: %s", attempt + 1, MAX_RETRIES, exc)
-                if attempt < MAX_RETRIES - 1:
-                    time.sleep(BACKOFF_BASE ** (attempt + 1))
-            else:
-                raise  # 4xx client errors: don't retry
-
-    assert last_exc is not None
-    raise last_exc
+    data = request_json_with_retry(
+        url,
+        client_name="ECOS",
+        non_json_prefix="ECOS returned non-JSON response",
+    )
+    if not isinstance(data, dict):
+        raise ValueError(f"ECOS returned unexpected payload type: {type(data).__name__}")
+    return data
 
 
 def _normalize_item_codes(

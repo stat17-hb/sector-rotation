@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 OPENAPI_LOOKBACK_WEEKDAYS = 10
 PYKRX_LOOKBACK_DAYS = 14
+YFINANCE_LOOKBACK_DAYS = 14
 
 
 def _resolve_calendar_provider(provider: str | None = None) -> str:
@@ -85,6 +86,26 @@ def _get_last_business_day_pykrx(ref: date, benchmark_code: str) -> date:
     return df.index[-1].date()
 
 
+def _get_last_business_day_yfinance(ref: date, benchmark_code: str) -> date:
+    """Fetch recent ETF history via yfinance and return the latest trading day."""
+    start = (ref - timedelta(days=YFINANCE_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
+    end = (ref + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    import yfinance as yf  # type: ignore[import]
+
+    df = yf.download(
+        tickers=str(benchmark_code).strip() or "SPY",
+        start=start,
+        end=end,
+        progress=False,
+        auto_adjust=False,
+        threads=False,
+    )
+    if df is None or df.empty:
+        raise ValueError("Empty OHLCV response from yfinance")
+    return df.index[-1].date()
+
+
 def _weekend_only_fallback(ref: date) -> date:
     """Return the previous weekday without KRX holiday awareness."""
     d = ref
@@ -95,6 +116,14 @@ def _weekend_only_fallback(ref: date) -> date:
     return ref - timedelta(days=1)
 
 
+def _is_us_calendar_lookup(provider: str | None, benchmark_code: str) -> bool:
+    provider_token = str(provider or "").strip().upper()
+    if provider_token in {"YFINANCE", "US"}:
+        return True
+    code = str(benchmark_code or "").strip().upper()
+    return bool(code and not code.isdigit())
+
+
 def get_last_business_day(
     as_of: date | None = None,
     provider: str | None = None,
@@ -103,11 +132,22 @@ def get_last_business_day(
     """Return the last KRX trading day on or before *as_of*.
 
     Priority:
-      1. OPENAPI daily snapshot probe when provider resolves to OPENAPI
-      2. pykrx benchmark OHLCV lookup
-      3. Weekend-only subtraction (no KRX holiday awareness)
+      1. Yfinance probe for US ETF benchmarks
+      2. OPENAPI daily snapshot probe when provider resolves to OPENAPI
+      3. pykrx benchmark OHLCV lookup
+      4. Weekend-only subtraction
     """
     ref = as_of or date.today()
+    if _is_us_calendar_lookup(provider, benchmark_code):
+        try:
+            return _get_last_business_day_yfinance(ref, benchmark_code)
+        except Exception as exc:
+            logger.warning(
+                "US market calendar lookup failed (%s); using weekend-only fallback.",
+                exc,
+            )
+            return _weekend_only_fallback(ref)
+
     resolved_provider = _resolve_calendar_provider(provider)
     errors: list[str] = []
 
