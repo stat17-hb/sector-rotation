@@ -1,10 +1,10 @@
 fred:
   leading_index:
     enabled: true
-    series_id: "USALOLITONOSTSAM"
-    transform: "none"
-    label: "OECD CLI"
-    unit: "index"
+    series_id: "INDPRO"
+    transform: "pct_change_12m"
+    label: "Industrial Production YoY"
+    unit: "%"
   cpi_yoy:
     enabled: true
     series_id: "CPIAUCSL"

@@ -15,6 +15,9 @@ SESSION_DEFAULTS: dict[str, Any] = {
     "price_years": 3,
     "filter_action_global": "",
     "filter_regime_only_global": False,
+    "position_mode": "all",
+    "show_alerted_only": False,
+    "held_sectors": [],
     "selected_sector": "",
     "selected_month": "",
     "selected_cycle_phase": "ALL",
@@ -55,6 +58,12 @@ def ensure_session_defaults(
         session_state["filter_action_global"] = all_action_option
     if "filter_regime_only_global" not in session_state:
         session_state["filter_regime_only_global"] = False
+    if "position_mode" not in session_state:
+        session_state["position_mode"] = "all"
+    if "show_alerted_only" not in session_state:
+        session_state["show_alerted_only"] = False
+    if "held_sectors" not in session_state or not isinstance(session_state.get("held_sectors"), list):
+        session_state["held_sectors"] = []
     if "selected_sector" not in session_state:
         session_state["selected_sector"] = ""
     if "selected_month" not in session_state:
@@ -82,6 +91,7 @@ def apply_market_selection(
         return False
 
     session_state["market_id"] = normalized
+    session_state["held_sectors"] = []
     session_state["selected_sector"] = ""
     session_state["selected_month"] = ""
     session_state["selected_cycle_phase"] = "ALL"
@@ -114,6 +124,22 @@ def normalize_session_state(
         session_state["filter_action_global"] = all_action_option
     elif "filter_action_global" not in session_state:
         session_state["filter_action_global"] = all_action_option
+
+    position_mode = str(session_state.get("position_mode", "all")).strip().lower()
+    if position_mode not in {"all", "held", "new"}:
+        position_mode = "all"
+    session_state["position_mode"] = position_mode
+
+    held_sectors = session_state.get("held_sectors", [])
+    if not isinstance(held_sectors, list):
+        held_sectors = []
+    session_state["held_sectors"] = [
+        str(item).strip()
+        for item in held_sectors
+        if str(item).strip()
+    ]
+
+    session_state["show_alerted_only"] = bool(session_state.get("show_alerted_only", False))
 
     normalized_range_preset = normalize_range_preset(session_state.get("selected_range_preset"))
     if session_state.get("selected_range_preset") != normalized_range_preset:

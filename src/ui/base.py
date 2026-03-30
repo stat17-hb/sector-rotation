@@ -36,6 +36,39 @@ ACTION_PRIORITY: dict[str, int] = {
     "N/A": 4,
 }
 
+POSITION_MODE_OPTIONS: tuple[str, ...] = ("all", "held", "new")
+POSITION_MODE_LABELS: dict[str, str] = {
+    "all": "All sectors",
+    "held": "Held positions",
+    "new": "New ideas",
+}
+
+HELD_DECISION_LABELS: dict[str, str] = {
+    "Strong Buy": "Add candidate",
+    "Watch": "Hold / monitor",
+    "Hold": "Reduce / rotate",
+    "Avoid": "Sell / exit review",
+    "N/A": "Data check",
+}
+
+NEW_DECISION_LABELS: dict[str, str] = {
+    "Strong Buy": "New buy candidate",
+    "Watch": "Watchlist",
+    "Hold": "Not a fresh buy",
+    "Avoid": "Avoid",
+    "N/A": "Data check",
+}
+
+HELD_ACTION_PRIORITY: dict[str, int] = {
+    "Strong Buy": 0,
+    "Avoid": 1,
+    "Hold": 2,
+    "Watch": 3,
+    "N/A": 4,
+}
+
+NEW_ACTION_PRIORITY: dict[str, int] = dict(ACTION_PRIORITY)
+
 REGIME_SUBLABELS: dict[str, str] = {
     "Recovery": "Early-cycle rebound",
     "Expansion": "Risk-on growth phase",
@@ -127,6 +160,18 @@ def format_heatmap_palette_label(palette: str) -> str:
     """Return the user-facing label for a heatmap palette preset."""
     normalized = normalize_heatmap_palette(palette)
     return HEATMAP_PALETTE_LABELS.get(normalized, normalized)
+
+
+def normalize_position_mode(value: str | None) -> str:
+    """Map unknown position filters back to the all-sectors default."""
+    normalized = str(value or "all").strip().lower()
+    return normalized if normalized in POSITION_MODE_OPTIONS else "all"
+
+
+def format_position_mode_label(value: str) -> str:
+    """Return the user-facing label for a position-mode key."""
+    normalized = normalize_position_mode(value)
+    return POSITION_MODE_LABELS.get(normalized, normalized)
 
 
 def normalize_range_preset(preset: str | None) -> str:
@@ -248,6 +293,134 @@ def _action_tone(action: str) -> str:
     return "info"
 
 
+def is_signal_held(signal, held_sectors: Sequence[str] | None = None) -> bool:
+    """Return True when the signal belongs to the user's held-sector list."""
+    held = {
+        str(item).strip()
+        for item in (held_sectors or [])
+        if str(item).strip()
+    }
+    sector_name = str(getattr(signal, "sector_name", "")).strip()
+    return bool(sector_name) and sector_name in held
+
+
+def describe_signal_decision(signal, held_sectors: Sequence[str] | None = None) -> dict[str, object]:
+    """Return reusable decision-copy fields for one signal."""
+    held = is_signal_held(signal, held_sectors)
+    action = str(getattr(signal, "action", "N/A"))
+    decision_labels = HELD_DECISION_LABELS if held else NEW_DECISION_LABELS
+    decision = decision_labels.get(action, "Data check")
+
+    rs_div = _rs_divergence_pct(signal)
+    ret_3m = _pct_value(getattr(signal, "returns", {}).get("3M"))
+    volatility = _pct_value(getattr(signal, "volatility_20d", None))
+    alerts = [str(item).strip() for item in getattr(signal, "alerts", []) if str(item).strip()]
+
+    positive_parts: list[str] = []
+    if bool(getattr(signal, "macro_fit", False)):
+        positive_parts.append("Regime fit")
+    if rs_div is not None:
+        positive_parts.append(f"RS {rs_div:+.1f}% vs trend")
+    if bool(getattr(signal, "trend_ok", False)):
+        positive_parts.append("Trend intact")
+    if ret_3m is not None:
+        positive_parts.append(f"3M {ret_3m:+.1f}%")
+    reason = " | ".join(positive_parts[:3]) if positive_parts else "Need more confirming strength"
+
+    risk_parts: list[str] = []
+    if not bool(getattr(signal, "macro_fit", False)):
+        risk_parts.append("Regime mismatch")
+    if rs_div is not None and rs_div < 0:
+        risk_parts.append(f"RS {rs_div:+.1f}% below trend")
+    if not bool(getattr(signal, "trend_ok", False)):
+        risk_parts.append("Trend weakened")
+    if volatility is not None and volatility >= 25.0:
+        risk_parts.append(f"20D vol {volatility:.1f}%")
+    risk_parts.extend(alerts[:2])
+    deduped_risks: list[str] = []
+    for item in risk_parts:
+        if item and item not in deduped_risks:
+            deduped_risks.append(item)
+    risk = " | ".join(deduped_risks[:3]) if deduped_risks else "No major risk flags"
+
+    if action == "N/A":
+        invalidation = "Wait for benchmark and sector price coverage."
+    elif bool(getattr(signal, "macro_fit", False)) and bool(getattr(signal, "trend_ok", False)):
+        invalidation = "Invalidate if regime fit breaks or RS falls below trend."
+    elif bool(getattr(signal, "macro_fit", False)):
+        invalidation = "Invalidate if RS remains below trend through the next review."
+    elif held:
+        invalidation = "Invalidate if regime mismatch persists and stronger rotations appear."
+    else:
+        invalidation = "Promote only after regime fit and RS trend both improve."
+
+    rs_trend = "Above trend" if rs_div is not None and rs_div >= 0 else "Below trend" if rs_div is not None else "N/A"
+    return_3m = f"{ret_3m:+.1f}%" if ret_3m is not None else "N/A"
+    volatility_20d = f"{volatility:.1f}%" if volatility is not None else "N/A"
+    alerts_text = ", ".join(alerts) if alerts else "None"
+    regime_fit = "Fit" if bool(getattr(signal, "macro_fit", False)) else "Mismatch"
+    conclusion = (
+        f"{decision} | Regime: {regime_fit} | RS trend: {rs_trend} | "
+        f"3M: {return_3m} | Volatility: {volatility_20d} | Alerts: {alerts_text}"
+    )
+
+    return {
+        "held": held,
+        "decision": decision,
+        "reason": reason,
+        "risk": risk,
+        "invalidation": invalidation,
+        "regime_fit": regime_fit,
+        "rs_trend": rs_trend,
+        "return_3m": return_3m,
+        "volatility_20d": volatility_20d,
+        "alerts_text": alerts_text,
+        "conclusion": conclusion,
+    }
+
+
+def filter_signals_for_display(
+    signals: Sequence,
+    *,
+    filter_action: str | None = None,
+    filter_regime_only: bool = False,
+    current_regime: str | None = None,
+    held_sectors: Sequence[str] | None = None,
+    position_mode: str | None = None,
+    show_alerted_only: bool = False,
+) -> list:
+    """Apply the dashboard's user-controlled filters to a signal sequence."""
+    filtered = list(signals)
+    if filter_regime_only and current_regime:
+        filtered = [signal for signal in filtered if getattr(signal, "macro_regime", None) == current_regime]
+    if filter_action and not _is_all_action_filter(filter_action):
+        filtered = [signal for signal in filtered if getattr(signal, "action", None) == filter_action]
+
+    normalized_position_mode = normalize_position_mode(position_mode)
+    if normalized_position_mode == "held":
+        filtered = [signal for signal in filtered if is_signal_held(signal, held_sectors)]
+    elif normalized_position_mode == "new":
+        filtered = [signal for signal in filtered if not is_signal_held(signal, held_sectors)]
+
+    if show_alerted_only:
+        filtered = [signal for signal in filtered if bool(getattr(signal, "alerts", []))]
+
+    return filtered
+
+
+def signal_display_sort_key(signal, held_sectors: Sequence[str] | None = None) -> tuple[object, ...]:
+    """Return a stable display-order key that prioritizes held sectors first."""
+    held = is_signal_held(signal, held_sectors)
+    priority_map = HELD_ACTION_PRIORITY if held else NEW_ACTION_PRIORITY
+    trailing_return = _safe_float(getattr(signal, "returns", {}).get("3M"))
+    return (
+        0 if held else 1,
+        priority_map.get(str(getattr(signal, "action", "N/A")), 99),
+        -(trailing_return if trailing_return is not None else -999.0),
+        str(getattr(signal, "sector_name", "")),
+    )
+
+
 __all__ = [
     "html",
     "math",
@@ -266,6 +439,12 @@ __all__ = [
     "LEGACY_ALL_ACTION_OPTIONS",
     "ACTION_LABELS",
     "ACTION_PRIORITY",
+    "POSITION_MODE_OPTIONS",
+    "POSITION_MODE_LABELS",
+    "HELD_DECISION_LABELS",
+    "NEW_DECISION_LABELS",
+    "HELD_ACTION_PRIORITY",
+    "NEW_ACTION_PRIORITY",
     "REGIME_SUBLABELS",
     "RANGE_PRESET_MONTHS",
     "RANGE_PRESET_LABELS",
@@ -277,8 +456,10 @@ __all__ = [
     "HEATMAP_PALETTE_LABELS",
     "format_action_label",
     "format_cycle_phase_label",
+    "format_position_mode_label",
     "format_range_preset_label",
     "format_heatmap_palette_label",
+    "normalize_position_mode",
     "normalize_range_preset",
     "normalize_heatmap_palette",
     "get_analysis_heatmap_colorscale",
@@ -290,4 +471,8 @@ __all__ = [
     "_rs_divergence_pct",
     "_status_tone",
     "_action_tone",
+    "is_signal_held",
+    "describe_signal_decision",
+    "filter_signals_for_display",
+    "signal_display_sort_key",
 ]

@@ -12,12 +12,14 @@ from src.dashboard.analysis import _extract_heatmap_selection
 from src.ui.components import (
     HEATMAP_PALETTE_OPTIONS,
     build_sector_strength_heatmap,
+    describe_signal_decision,
     format_cycle_phase_label,
     format_heatmap_palette_label,
     normalize_range_preset,
     render_action_summary,
     render_cycle_timeline_panel,
     render_decision_hero,
+    render_investor_decision_boards,
     render_panel_header,
     render_returns_heatmap,
     render_rs_momentum_bar,
@@ -25,6 +27,7 @@ from src.ui.components import (
     render_sector_detail_panel,
     render_signal_table,
     render_status_card_row,
+    render_top_bar_filters,
     render_top_picks_table,
 )
 
@@ -174,6 +177,7 @@ def render_analysis_canvas(
     analysis_min_date: date,
     build_sector_detail_figure,
     resolve_range_from_preset,
+    signal_lookup: dict[str, Any] | None = None,
 ) -> None:
     with st.container(border=True):
         render_panel_header(
@@ -306,6 +310,12 @@ def render_analysis_canvas(
 
     with st.container(border=True):
         detail_badge = selected_sector or "No selection"
+        detail_summary = None
+        if signal_lookup and selected_sector in signal_lookup:
+            detail_summary = describe_signal_decision(
+                signal_lookup[selected_sector],
+                st.session_state.get("held_sectors", []),
+            )
         render_panel_header(
             eyebrow="Linked detail",
             title="Selected sector detail tracking",
@@ -317,6 +327,7 @@ def render_analysis_canvas(
             detail_figure=detail_figure,
             selected_sector=selected_sector,
             selected_range_preset=normalize_range_preset(st.session_state.get("selected_range_preset", "1Y")),
+            detail_summary=detail_summary,
         )
         if chosen_sector and chosen_sector != selected_sector:
             st.session_state["selected_sector"] = chosen_sector
@@ -331,6 +342,56 @@ def render_analysis_canvas(
             st.session_state["analysis_start_date"] = preset_start
             st.session_state["analysis_end_date"] = preset_end
             st.rerun()
+
+
+def render_decision_first_sections(
+    *,
+    current_regime: str,
+    regime_is_confirmed: bool,
+    growth_val: float | None,
+    inflation_val: float | None,
+    fx_change: float | None,
+    fx_label: str,
+    is_provisional: bool,
+    theme_mode: str,
+    price_status: str,
+    macro_status: str,
+    yield_curve_status: str | None,
+    signals: list[Any],
+    held_sector_options: list[str],
+    action_options: list[str],
+    is_mobile_client: bool,
+    analysis_canvas_kwargs: dict[str, Any],
+) -> tuple[list[str], str, bool, str, bool]:
+    """Render the decision-first main-page stack and return the active filters."""
+    render_decision_hero(
+        regime=current_regime,
+        regime_is_confirmed=regime_is_confirmed,
+        growth_val=growth_val,
+        inflation_val=inflation_val,
+        fx_change=fx_change,
+        fx_label=fx_label,
+        is_provisional=is_provisional,
+        theme_mode=theme_mode,
+    )
+    render_status_card_row(
+        current_regime=current_regime,
+        regime_is_confirmed=regime_is_confirmed,
+        price_status=price_status,
+        macro_status=macro_status,
+        yield_curve_status=yield_curve_status,
+    )
+    held_sectors = render_investor_decision_boards(
+        signals=signals,
+        held_sector_options=held_sector_options,
+    )
+    filter_action, filter_regime_only, position_mode, show_alerted_only = render_top_bar_filters(
+        current_regime=current_regime,
+        action_options=action_options,
+        is_mobile=is_mobile_client,
+    )
+    render_analysis_canvas(**analysis_canvas_kwargs)
+    return held_sectors, filter_action, filter_regime_only, position_mode, show_alerted_only
 
 
 def render_summary_tab(
@@ -383,7 +444,11 @@ def render_summary_tab(
                 description="The highest-ranked sectors after the active filters.",
                 badge=f"{min(5, len(top_pick_signals))} shown",
             )
-            render_top_picks_table(top_pick_signals, limit=5)
+            render_top_picks_table(
+                top_pick_signals,
+                held_sectors=st.session_state.get("held_sectors", []),
+                limit=5,
+            )
 
         st.divider()
         st.subheader("액션 분포")
@@ -513,6 +578,9 @@ def render_all_signals_tab(
     filter_action_global: str,
     filter_regime_only_global: bool,
     current_regime: str,
+    held_sectors: list[str],
+    position_mode: str,
+    show_alerted_only: bool,
     theme_mode: str,
     settings: dict[str, Any],
     fx_label: str,
@@ -563,6 +631,9 @@ def render_all_signals_tab(
             filter_action=filter_action_global,
             filter_regime_only=filter_regime_only_global,
             current_regime=current_regime,
+            held_sectors=held_sectors,
+            position_mode=position_mode,
+            show_alerted_only=show_alerted_only,
             theme_mode=theme_mode,
         )
 
@@ -585,6 +656,9 @@ def render_dashboard_tabs(
     signals: list[Any],
     filter_action_global: str,
     filter_regime_only_global: bool,
+    held_sectors: list[str],
+    position_mode: str,
+    show_alerted_only: bool,
     settings: dict[str, Any],
     is_mobile_client: bool,
 ) -> None:
@@ -621,6 +695,9 @@ def render_dashboard_tabs(
         filter_action_global=filter_action_global,
         filter_regime_only_global=filter_regime_only_global,
         current_regime=current_regime,
+        held_sectors=held_sectors,
+        position_mode=position_mode,
+        show_alerted_only=show_alerted_only,
         theme_mode=theme_mode,
         settings=settings,
         fx_label=fx_label,

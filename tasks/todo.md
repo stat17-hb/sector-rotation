@@ -1,3 +1,31 @@
+# 2026-03-30 - Practical Investing UX/UI Decision-First Refresh
+
+Status: Completed
+Owner: Codex + User
+
+## Execution Checklist
+- [x] Add held/new position session state and reusable decision-description helpers
+- [x] Move quick filters and decision boards above the analysis canvas in the main app flow
+- [x] Split the decision summary into held-position management and new-buy discovery boards
+- [x] Add held/new/manual watch controls plus alerted-only filtering in the main canvas
+- [x] Upgrade top-pick reasoning to show decision, positive evidence, risks, and invalidation cues
+- [x] Add a one-line investment conclusion above the linked sector detail chart
+- [x] Reduce non-blocking status banners to compact informational strips
+- [x] Expand signal table columns to include Held, Decision, Reason, and Invalidation
+- [x] Add/refresh regression tests for render order, held-vs-new decisions, and explanation fields
+- [x] Run focused verification and record results
+
+## Review
+- Main layout now renders in decision-first order via `render_decision_first_sections(...)`: macro hero, status cards, held/new decision boards, quick filters, then the linked analysis canvas.
+- Session state now tracks `held_sectors`, `position_mode`, and `show_alerted_only`, and market switches reset held-sector context to avoid KR/US crossover.
+- Decision copy is centralized in `src/ui/base.py` so top-pick boards, the linked detail panel, and the full signal table all use the same held-aware `Decision`, `Reason`, `Risk`, and `Invalidation` language.
+- The linked detail panel now shows a practical-investing conclusion above the chart with regime fit, RS trend, trailing return, volatility, and warnings.
+- Dashboard status rendering now keeps `error` banners prominent while `warning`/`info` states fall back to the compact status strip.
+- Verification:
+  `python -m py_compile app.py src/dashboard/tabs.py src/dashboard/state.py src/dashboard/data.py src/ui/base.py src/ui/panels.py src/ui/tables.py tests/test_dashboard_state.py tests/test_ui_components.py tests/test_dashboard_tabs.py`
+  `pytest -q tests/test_dashboard_state.py tests/test_dashboard_tabs.py tests/test_ui_components.py tests/test_ui_contrast.py tests/test_data_status.py` -> `64 passed`
+- Verification note: the local `python -m streamlit run app.py` process holding `warehouse.duckdb` was stopped before pytest so the app-import UI tests could run cleanly.
+
 # 2026-03-30 - US Macro Cache-Hit Write Lock Fix
 
 Status: Completed

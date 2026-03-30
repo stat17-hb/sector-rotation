@@ -11,6 +11,7 @@ from src.ui.components import (
     HEATMAP_PALETTE_OPTIONS,
     build_sector_detail_figure,
     build_sector_strength_heatmap,
+    describe_signal_decision,
     format_heatmap_palette_label,
     get_analysis_heatmap_colorscale,
     infer_range_preset,
@@ -284,11 +285,15 @@ def test_render_top_bar_filters_returns_selected_state(monkeypatch):
         lambda _label, key: session_state.__setitem__(key, True),
     )
     monkeypatch.setattr(
+        "src.ui.components.st.segmented_control",
+        lambda _label, options, default, format_func, selection_mode, key, width: session_state.__setitem__(key, options[1]),
+    )
+    monkeypatch.setattr(
         "src.ui.components.st.markdown",
         lambda text, **_: markdown_calls.append(text),
     )
 
-    action, regime_only = render_top_bar_filters(
+    action, regime_only, position_mode, alerted_only = render_top_bar_filters(
         current_regime="Recovery",
         action_options=[ALL_ACTION_OPTION, "Strong Buy", "Watch"],
         is_mobile=False,
@@ -296,6 +301,8 @@ def test_render_top_bar_filters_returns_selected_state(monkeypatch):
 
     assert action == "Strong Buy"
     assert regime_only is True
+    assert position_mode == "held"
+    assert alerted_only is True
     assert any("command-bar" in call for call in markdown_calls)
     assert any("top-bar-summary" in call for call in markdown_calls)
     assert any("Recovery" in call for call in markdown_calls)
@@ -341,6 +348,20 @@ def test_render_status_card_row_renders_card_markup(monkeypatch):
     assert "Inverted" in markdown_calls[0]
 
 
+def test_describe_signal_decision_changes_by_held_state():
+    signal = _signal("A", "Strong Buy", 1.10, 1.00, alerts=["Overheat"])
+
+    held_view = describe_signal_decision(signal, ["Sector A"])
+    new_view = describe_signal_decision(signal, [])
+
+    assert held_view["held"] is True
+    assert held_view["decision"] == "Add candidate"
+    assert "Regime fit" in held_view["reason"]
+    assert held_view["alerts_text"] == "Overheat"
+    assert new_view["held"] is False
+    assert new_view["decision"] == "New buy candidate"
+
+
 def test_render_top_picks_table_uses_native_dataframe_and_limit(monkeypatch):
     dataframe_calls: list[tuple[pd.DataFrame, dict]] = []
     caption_calls: list[str] = []
@@ -357,12 +378,22 @@ def test_render_top_picks_table_uses_native_dataframe_and_limit(monkeypatch):
         for idx in range(6)
     ]
 
-    render_top_picks_table(signals, limit=5)
+    render_top_picks_table(signals, held_sectors=["Sector 0"], limit=5)
 
     assert len(dataframe_calls) == 1
     df, kwargs = dataframe_calls[0]
     assert kwargs.get("width") == "stretch"
-    assert list(df.columns) == ["Rank", "Sector", "Action", "Why", "RS Gap", "1M", "3M", "Alerts"]
+    assert list(df.columns) == [
+        "Rank",
+        "Sector",
+        "Decision",
+        "Reason",
+        "Risk",
+        "Invalidation",
+        "3M",
+        "Alerts",
+        "Held",
+    ]
     assert len(df) == 5
     assert "column_config" in kwargs
     assert any("Showing top 5 of 6" in text for text in caption_calls)
@@ -390,6 +421,9 @@ def test_render_signal_table_uses_native_dataframe_and_applies_filters(monkeypat
         filter_action="Watch",
         filter_regime_only=True,
         current_regime="Recovery",
+        held_sectors=["Sector A"],
+        position_mode="held",
+        show_alerted_only=False,
     )
 
     assert not info_calls
@@ -398,12 +432,18 @@ def test_render_signal_table_uses_native_dataframe_and_applies_filters(monkeypat
     assert kwargs.get("width") == "stretch"
     assert len(df) == 1
     assert df.iloc[0]["Action"] == "[~] Watch"
+    assert bool(df.iloc[0]["Held"]) is True
+    assert df.iloc[0]["Decision"] == "Hold / monitor"
     assert bool(df.iloc[0]["In Regime"]) is True
     assert "column_config" in kwargs
     assert set(kwargs["column_config"]) == {
         "Sector",
+        "Held",
+        "Decision",
         "In Regime",
         "Action",
+        "Reason",
+        "Invalidation",
         "RSI",
         "1M",
         "3M",

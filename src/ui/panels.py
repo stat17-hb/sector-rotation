@@ -226,15 +226,17 @@ def render_top_bar_filters(
     action_options: Sequence[str],
     filter_action_key: str = "filter_action_global",
     filter_regime_key: str = "filter_regime_only_global",
+    position_mode_key: str = "position_mode",
+    alerted_only_key: str = "show_alerted_only",
     is_mobile: bool = False,
-) -> tuple[str, bool]:
+) -> tuple[str, bool, str, bool]:
     """Render high-frequency filters in the main content area."""
     with st.container(border=True):
         st.markdown(
             (
                 '<div class="command-bar">'
                 '<div class="command-bar__eyebrow">Quick filters</div>'
-                '<div class="command-bar__title">Refine the signal board without leaving the main canvas.</div>'
+                '<div class="command-bar__title">Refine the live signal board before diving back into the analysis canvas.</div>'
                 "</div>"
             ),
             unsafe_allow_html=True,
@@ -250,8 +252,21 @@ def render_top_bar_filters(
                 "Current regime only",
                 key=filter_regime_key,
             )
+            st.segmented_control(
+                "Position scope",
+                options=list(POSITION_MODE_OPTIONS),
+                default=normalize_position_mode(str(st.session_state.get(position_mode_key, "all"))),
+                format_func=format_position_mode_label,
+                selection_mode="single",
+                key=position_mode_key,
+                width="stretch",
+            )
+            st.toggle(
+                "Alerted only",
+                key=alerted_only_key,
+            )
         else:
-            filter_col, toggle_col, summary_col = st.columns([1.6, 1.2, 2.4])
+            filter_col, toggle_col, mode_col, alerted_col, summary_col = st.columns([1.4, 1.0, 1.4, 1.0, 2.4])
             with filter_col:
                 st.selectbox(
                     "Action filter",
@@ -263,9 +278,26 @@ def render_top_bar_filters(
                     "Current regime only",
                     key=filter_regime_key,
                 )
+            with mode_col:
+                st.segmented_control(
+                    "Position scope",
+                    options=list(POSITION_MODE_OPTIONS),
+                    default=normalize_position_mode(str(st.session_state.get(position_mode_key, "all"))),
+                    format_func=format_position_mode_label,
+                    selection_mode="single",
+                    key=position_mode_key,
+                    width="stretch",
+                )
+            with alerted_col:
+                st.toggle(
+                    "Alerted only",
+                    key=alerted_only_key,
+                )
             with summary_col:
                 current_action = str(st.session_state.get(filter_action_key, action_options[0]))
                 regime_only = bool(st.session_state.get(filter_regime_key, False))
+                position_mode = normalize_position_mode(str(st.session_state.get(position_mode_key, "all")))
+                alerted_only = bool(st.session_state.get(alerted_only_key, False))
                 scope_label = "Matching current regime" if regime_only else "Full universe"
                 st.markdown(
                     (
@@ -276,6 +308,10 @@ def render_top_bar_filters(
                         f"<strong>{html.escape(current_action)}</strong></div>"
                         '<div class="top-bar-summary__item"><span>Scope</span>'
                         f"<strong>{html.escape(scope_label)}</strong></div>"
+                        '<div class="top-bar-summary__item"><span>Positions</span>'
+                        f"<strong>{html.escape(format_position_mode_label(position_mode))}</strong></div>"
+                        '<div class="top-bar-summary__item"><span>Alerts</span>'
+                        f"<strong>{'Only alerted' if alerted_only else 'All signals'}</strong></div>"
                         "</div>"
                     ),
                     unsafe_allow_html=True,
@@ -284,6 +320,8 @@ def render_top_bar_filters(
         if is_mobile:
             current_action = str(st.session_state.get(filter_action_key, action_options[0]))
             regime_only = bool(st.session_state.get(filter_regime_key, False))
+            position_mode = normalize_position_mode(str(st.session_state.get(position_mode_key, "all")))
+            alerted_only = bool(st.session_state.get(alerted_only_key, False))
             scope_label = "Matching current regime" if regime_only else "Full universe"
             st.markdown(
                 (
@@ -294,6 +332,10 @@ def render_top_bar_filters(
                     f"<strong>{html.escape(current_action)}</strong></div>"
                     '<div class="top-bar-summary__item"><span>Scope</span>'
                     f"<strong>{html.escape(scope_label)}</strong></div>"
+                    '<div class="top-bar-summary__item"><span>Positions</span>'
+                    f"<strong>{html.escape(format_position_mode_label(position_mode))}</strong></div>"
+                    '<div class="top-bar-summary__item"><span>Alerts</span>'
+                    f"<strong>{'Only alerted' if alerted_only else 'All signals'}</strong></div>"
                     "</div>"
                 ),
                 unsafe_allow_html=True,
@@ -302,6 +344,8 @@ def render_top_bar_filters(
     return (
         str(st.session_state.get(filter_action_key, action_options[0])),
         bool(st.session_state.get(filter_regime_key, False)),
+        normalize_position_mode(str(st.session_state.get(position_mode_key, "all"))),
+        bool(st.session_state.get(alerted_only_key, False)),
     )
 
 
@@ -440,12 +484,82 @@ def render_status_card_row(
 
     _render_cards_grid(cards, "status-card-grid")
 
+
+def render_investor_decision_boards(
+    *,
+    signals: Sequence,
+    held_sector_options: Sequence[str],
+    held_sectors_key: str = "held_sectors",
+    limit: int = 6,
+) -> list[str]:
+    """Render practical-investing decision boards for held positions and new ideas."""
+    from src.ui.tables import render_top_picks_table
+
+    raw_held = st.session_state.get(held_sectors_key, [])
+    valid_held = [
+        str(item)
+        for item in (raw_held if isinstance(raw_held, list) else [])
+        if str(item) in held_sector_options
+    ]
+    if valid_held != raw_held:
+        st.session_state[held_sectors_key] = valid_held
+
+    with st.container(border=True):
+        render_panel_header(
+            eyebrow="Decision boards",
+            title="Held-position management and new-buy discovery",
+            description="Declare your held sectors first so the dashboard can separate adds, trims, and fresh ideas.",
+            badge=f"{len(valid_held)} held",
+        )
+        selected_held = st.multiselect(
+            "Held sectors",
+            options=list(held_sector_options),
+            default=valid_held,
+            key=held_sectors_key,
+            placeholder="Select sectors you already hold",
+        )
+        st.caption("Held sectors personalize the recommendation language for position management versus fresh entries.")
+
+        held_col, new_col = st.columns(2, gap="large")
+        with held_col:
+            render_panel_header(
+                eyebrow="Held actions",
+                title="Position management",
+                description="Surface add candidates, holds, trims, and exit reviews for sectors already on the book.",
+                badge=f"{len(selected_held)} tracked",
+            )
+            render_top_picks_table(
+                signals,
+                held_sectors=selected_held,
+                position_mode="held",
+                limit=limit,
+                include_held=False,
+            )
+
+        with new_col:
+            render_panel_header(
+                eyebrow="New ideas",
+                title="Fresh-buy discovery",
+                description="Separate true new-buy candidates from watchlist names and avoid fresh entries that lack confirmation.",
+                badge="Opportunity set",
+            )
+            render_top_picks_table(
+                signals,
+                held_sectors=selected_held,
+                position_mode="new",
+                limit=limit,
+                include_held=False,
+            )
+
+    return [str(item) for item in selected_held if str(item).strip()]
+
 def render_sector_detail_panel(
     *,
     ranking_rows: Sequence[Mapping[str, object]],
     detail_figure: go.Figure,
     selected_sector: str,
     selected_range_preset: str,
+    detail_summary: Mapping[str, object] | None = None,
     preset_options: Sequence[str] = ("1Y", "3Y", "5Y", "ALL"),
 ) -> tuple[str, str]:
     """Render the linked sector ranking list and detail chart."""
@@ -499,6 +613,47 @@ def render_sector_detail_panel(
             label_visibility="collapsed",
             width="content",
         )
+        if detail_summary:
+            st.caption(str(detail_summary.get("conclusion", "")).strip())
+            summary_cards = [
+                _render_card_html(
+                    eyebrow="Decision",
+                    value=str(detail_summary.get("decision", "N/A")),
+                    detail="Held-aware practical action",
+                    tone="info",
+                ),
+                _render_card_html(
+                    eyebrow="Regime fit",
+                    value=str(detail_summary.get("regime_fit", "N/A")),
+                    detail="Macro alignment",
+                    tone="success" if str(detail_summary.get("regime_fit", "")).strip().lower() == "fit" else "warning",
+                ),
+                _render_card_html(
+                    eyebrow="RS trend",
+                    value=str(detail_summary.get("rs_trend", "N/A")),
+                    detail="Relative-strength context",
+                    tone="success" if "Above" in str(detail_summary.get("rs_trend", "")) else "warning",
+                ),
+                _render_card_html(
+                    eyebrow="3M return",
+                    value=str(detail_summary.get("return_3m", "N/A")),
+                    detail="Recent trailing return",
+                    tone="info",
+                ),
+                _render_card_html(
+                    eyebrow="20D vol",
+                    value=str(detail_summary.get("volatility_20d", "N/A")),
+                    detail="Short-term risk",
+                    tone="warning",
+                ),
+                _render_card_html(
+                    eyebrow="Warnings",
+                    value=str(detail_summary.get("alerts_text", "None")),
+                    detail="Active risk flags",
+                    tone="warning" if str(detail_summary.get("alerts_text", "None")) != "None" else "success",
+                ),
+            ]
+            _render_cards_grid(summary_cards, "status-card-grid")
         st.plotly_chart(detail_figure, width="stretch", config={"displayModeBar": False})
 
     return selected_sector_value, normalize_range_preset(str(preset_choice or normalized_preset))

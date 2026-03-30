@@ -365,7 +365,14 @@ def _show_notice_toast(notice: tuple[str, str] | None) -> None:
 
 
 def _render_dashboard_status_banner(banner: dict[str, object] | None) -> None:
-    """Render the single top-of-page system status strip."""
+    """Render blocking errors prominently and lower-priority states compactly."""
+    if not banner:
+        return
+
+    level = str(banner.get("level", "info")).strip().lower()
+    if level == "error":
+        _legacy_render_dashboard_status_banner(banner)
+        return
     render_status_strip(banner)
 
 

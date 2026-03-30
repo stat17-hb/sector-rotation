@@ -27,6 +27,9 @@ def test_ensure_session_defaults_populates_missing_keys():
     assert session["theme_mode"] == "dark"
     assert session["epsilon"] == 0.2
     assert session["price_years"] == 4
+    assert session["position_mode"] == "all"
+    assert session["show_alerted_only"] is False
+    assert session["held_sectors"] == []
     assert session["selected_cycle_phase"] == "ALL"
 
 
@@ -49,6 +52,7 @@ def test_normalize_session_state_repairs_legacy_values():
     assert session["theme_mode"] == "dark"
     assert session["filter_action_global"] == "전체"
     assert session["selected_range_preset"] == "ALL"
+    assert session["position_mode"] == "all"
 
 
 def test_apply_analysis_toolbar_selection_updates_state_when_values_change():
@@ -79,3 +83,19 @@ def test_apply_detail_selection_updates_preset_range():
     assert session["selected_range_preset"] == "ALL"
     assert session["analysis_start_date"] == date(2020, 1, 1)
     assert session["analysis_end_date"] == date(2024, 12, 31)
+
+
+def test_apply_market_selection_clears_held_sector_context():
+    session = {
+        "market_id": "KR",
+        "held_sectors": ["KRX Semiconductor"],
+        "selected_sector": "KRX Semiconductor",
+        "selected_month": "2025-01",
+    }
+
+    changed = state.apply_market_selection(session, market_id="US")
+
+    assert changed is True
+    assert session["market_id"] == "US"
+    assert session["held_sectors"] == []
+    assert session["selected_sector"] == ""

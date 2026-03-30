@@ -73,7 +73,7 @@ from src.dashboard.state import (
     parse_asof_default,
 )
 from src.dashboard.tabs import (
-    render_analysis_canvas,
+    render_decision_first_sections,
     render_dashboard_tabs,
     render_sidebar_controls,
 )
@@ -86,12 +86,13 @@ from src.data_sources.warehouse import (
 from src.ui.components import (
     ALL_ACTION_OPTION,
     HEATMAP_PALETTE_OPTIONS,
+    filter_signals_for_display,
     infer_range_preset,
     normalize_range_preset,
     render_analysis_toolbar,
     render_page_header,
-    render_top_bar_filters,
     resolve_range_from_preset,
+    signal_display_sort_key,
     build_sector_detail_figure,
 )
 from src.ui.data_status import (
@@ -380,7 +381,6 @@ dashboard_status_banner = resolve_dashboard_status_banner(
     preflight_status=preflight_status,
     price_warm_status=price_warm_status,
 )
-_render_dashboard_status_banner(dashboard_status_banner)
 
 current_regime = "Indeterminate"
 regime_is_confirmed = False
@@ -422,6 +422,7 @@ render_page_header(
         {"label": "Provider", "value": context.provider_effective, "tone": "info"},
     ],
 )
+_render_dashboard_status_banner(dashboard_status_banner)
 
 try:
     sector_prices_canvas = pd.DataFrame() if price_status == "BLOCKED" else _cached_analysis_sector_prices(
@@ -556,36 +557,54 @@ analysis_window = AnalysisWindow(
     selected_month=str(st.session_state.get("selected_month", "")),
 )
 
-render_analysis_canvas(
-    heatmap_return_display=heatmap_return_display,
-    heatmap_strength_display=heatmap_strength_display,
-    selected_cycle_phase=analysis_window.selected_cycle_phase,
-    theme_mode=context.theme_mode,
-    analysis_heatmap_palette=context.analysis_heatmap_palette,
-    visible_segments=visible_segments,
-    current_regime=current_regime,
-    analysis_prices_phase=analysis_prices_phase,
-    analysis_prices=analysis_prices,
-    sector_columns=sector_columns,
-    benchmark_label=benchmark_label,
-    analysis_max_date=analysis_max_date,
-    analysis_min_date=analysis_min_date,
-    build_sector_detail_figure=build_sector_detail_figure,
-    resolve_range_from_preset=resolve_range_from_preset,
-)
-
 is_mobile_client = _is_mobile_client()
-filter_action_global, filter_regime_only_global = render_top_bar_filters(
+signal_lookup = {str(signal.sector_name): signal for signal in signals}
+held_sector_options = sorted({str(signal.sector_name) for signal in signals if str(signal.sector_name).strip()})
+held_sectors, filter_action_global, filter_regime_only_global, position_mode, show_alerted_only = render_decision_first_sections(
     current_regime=current_regime,
+    regime_is_confirmed=regime_is_confirmed,
+    growth_val=growth_val,
+    inflation_val=inflation_val,
+    fx_change=fx_change,
+    fx_label=str(getattr(market_profile, "ui_labels", {}).get("fx_metric_label", "FX move")),
+    is_provisional=is_provisional,
+    theme_mode=context.theme_mode,
+    price_status=price_status,
+    macro_status=macro_status,
+    yield_curve_status=yield_curve_status,
+    signals=list(signals),
+    held_sector_options=held_sector_options,
     action_options=[ALL_ACTION_OPTION, "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
-    is_mobile=is_mobile_client,
+    is_mobile_client=is_mobile_client,
+    analysis_canvas_kwargs={
+        "heatmap_return_display": heatmap_return_display,
+        "heatmap_strength_display": heatmap_strength_display,
+        "selected_cycle_phase": analysis_window.selected_cycle_phase,
+        "theme_mode": context.theme_mode,
+        "analysis_heatmap_palette": context.analysis_heatmap_palette,
+        "visible_segments": visible_segments,
+        "current_regime": current_regime,
+        "analysis_prices_phase": analysis_prices_phase,
+        "analysis_prices": analysis_prices,
+        "sector_columns": sector_columns,
+        "benchmark_label": benchmark_label,
+        "analysis_max_date": analysis_max_date,
+        "analysis_min_date": analysis_min_date,
+        "build_sector_detail_figure": build_sector_detail_figure,
+        "resolve_range_from_preset": resolve_range_from_preset,
+        "signal_lookup": signal_lookup,
+    },
 )
-signals_filtered = list(signals)
-if filter_regime_only_global:
-    signals_filtered = [signal for signal in signals_filtered if signal.macro_regime == current_regime]
-if filter_action_global != ALL_ACTION_OPTION:
-    signals_filtered = [signal for signal in signals_filtered if signal.action == filter_action_global]
-top_pick_signals = sorted(signals_filtered, key=_top_pick_sort_key)
+signals_filtered = filter_signals_for_display(
+    list(signals),
+    filter_action=filter_action_global,
+    filter_regime_only=filter_regime_only_global,
+    current_regime=current_regime,
+    held_sectors=held_sectors,
+    position_mode=position_mode,
+    show_alerted_only=show_alerted_only,
+)
+top_pick_signals = sorted(signals_filtered, key=lambda signal: signal_display_sort_key(signal, held_sectors))
 
 bundle = DashboardDataBundle(
     signals=list(signals),
@@ -638,6 +657,9 @@ render_dashboard_tabs(
     signals=bundle.signals,
     filter_action_global=filter_action_global,
     filter_regime_only_global=filter_regime_only_global,
+    held_sectors=held_sectors,
+    position_mode=position_mode,
+    show_alerted_only=show_alerted_only,
     settings=settings,
     is_mobile_client=is_mobile_client,
 )
