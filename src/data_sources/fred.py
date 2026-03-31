@@ -133,7 +133,7 @@ def load_fred_macro(
 ) -> LoaderResult:
     if series_config is None:
         series_config = {
-            "leading_index": {"series_id": "USALOLITONOSTSAM", "transform": "none", "enabled": True},
+            "leading_index": {"series_id": "INDPRO", "transform": "pct_change_12m", "enabled": True},
             "cpi_yoy": {"series_id": "CPIAUCSL", "transform": "pct_change_12m", "enabled": True},
             "cpi_mom": {"series_id": "CPIAUCSL", "transform": "pct_change_1m", "enabled": True},
             "fed_funds": {"series_id": "FEDFUNDS", "transform": "none", "enabled": True},
