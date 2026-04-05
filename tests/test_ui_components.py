@@ -442,6 +442,7 @@ def test_render_signal_table_uses_native_dataframe_and_applies_filters(monkeypat
         "Decision",
         "In Regime",
         "Action",
+        "ETF",
         "Reason",
         "Invalidation",
         "RSI",

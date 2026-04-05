@@ -23,4 +23,4 @@ def test_load_market_configs_merges_us_overrides():
     assert settings["yield_curve_long"] == "treasury_10y"
     assert sector_map["benchmark"]["code"] == "SPY"
     assert "fred" in macro_series_cfg
-    assert macro_series_cfg["fred"]["leading_index"]["series_id"] == "USALOLITONOSTSAM"
+    assert macro_series_cfg["fred"]["leading_index"]["series_id"] == "INDPRO"
