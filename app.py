@@ -662,6 +662,7 @@ render_dashboard_tabs(
     show_alerted_only=show_alerted_only,
     settings=settings,
     is_mobile_client=is_mobile_client,
+    sector_map=sector_map,
 )
 
 st.divider()

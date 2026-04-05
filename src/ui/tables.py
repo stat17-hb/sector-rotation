@@ -78,6 +78,13 @@ def render_top_picks_table(
     if any(getattr(signal, "is_provisional", False) for signal in filtered):
         st.caption("* Includes sectors influenced by provisional macro data.")
 
+def _format_etfs(etfs: list) -> str:
+    """Format ETF list as 'NAME (CODE) / NAME (CODE)'."""
+    if not etfs:
+        return ""
+    return " / ".join(f"{e['name']} ({e['code']})" for e in etfs[:2])
+
+
 def render_signal_table(
     signals: Sequence,
     filter_action: str | None = None,
@@ -87,6 +94,7 @@ def render_signal_table(
     position_mode: str = "all",
     show_alerted_only: bool = False,
     theme_mode: str = "dark",
+    etf_map: dict | None = None,
 ) -> None:
     """Render the full signal table using Streamlit's native dataframe."""
     del theme_mode  # native dataframe rendering does not need a theme argument
@@ -115,23 +123,23 @@ def render_signal_table(
     for signal in filtered:
         thesis = describe_signal_decision(signal, held_sectors)
         alerts = thesis["alerts_text"]
-        rows.append(
-            {
-                "Sector": signal.sector_name + (" *" if signal.is_provisional else ""),
-                "Held": bool(thesis["held"]),
-                "Decision": thesis["decision"],
-                "In Regime": bool(signal.macro_fit),
-                "Action": format_action_label(signal.action),
-                "Reason": thesis["reason"],
-                "Invalidation": thesis["invalidation"],
-                "RSI": _safe_float(signal.rsi_d),
-                "1M": _pct_value(signal.returns.get("1M")),
-                "3M": _pct_value(signal.returns.get("3M")),
-                "Volatility": _pct_value(signal.volatility_20d),
-                "MDD (3M)": _pct_value(signal.mdd_3m),
-                "Alerts": alerts,
-            }
-        )
+        row: dict[str, object] = {
+            "Sector": signal.sector_name + (" *" if signal.is_provisional else ""),
+            "Held": bool(thesis["held"]),
+            "Decision": thesis["decision"],
+            "In Regime": bool(signal.macro_fit),
+            "Action": format_action_label(signal.action),
+            "ETF": _format_etfs((etf_map or {}).get(signal.index_code, [])),
+            "Reason": thesis["reason"],
+            "Invalidation": thesis["invalidation"],
+            "RSI": _safe_float(signal.rsi_d),
+            "1M": _pct_value(signal.returns.get("1M")),
+            "3M": _pct_value(signal.returns.get("3M")),
+            "Volatility": _pct_value(signal.volatility_20d),
+            "MDD (3M)": _pct_value(signal.mdd_3m),
+            "Alerts": alerts,
+        }
+        rows.append(row)
 
     df_display = pd.DataFrame(rows)
     height = min(760, 76 + len(df_display) * 35)
@@ -146,6 +154,7 @@ def render_signal_table(
             "Decision": st.column_config.TextColumn("Decision", width="medium"),
             "In Regime": st.column_config.CheckboxColumn("In Regime", width="small"),
             "Action": st.column_config.TextColumn("Action", width="small"),
+            "ETF": st.column_config.TextColumn("매수 ETF", width="medium"),
             "Reason": st.column_config.TextColumn("Reason", width="large"),
             "Invalidation": st.column_config.TextColumn("Invalidation", width="large"),
             "RSI": st.column_config.NumberColumn("RSI", format="%.1f"),

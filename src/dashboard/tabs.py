@@ -584,6 +584,7 @@ def render_all_signals_tab(
     theme_mode: str,
     settings: dict[str, Any],
     fx_label: str,
+    etf_map: dict[str, list] | None = None,
 ) -> None:
     with tab:
         render_panel_header(
@@ -635,7 +636,133 @@ def render_all_signals_tab(
             position_mode=position_mode,
             show_alerted_only=show_alerted_only,
             theme_mode=theme_mode,
+            etf_map=etf_map,
         )
+
+
+def render_screening_tab(
+    *,
+    tab,
+    signals: list[Any],
+    settings: dict[str, Any],
+    benchmark_code: str = "1001",
+) -> None:
+    """Render the 종목 스크리닝 tab: constituent stocks of Strong Buy sectors."""
+    from src.data_sources.krx_stock_screening import load_screened_stocks
+
+    with tab:
+        render_panel_header(
+            eyebrow="종목 스크리닝",
+            title="Strong Buy 섹터 구성종목",
+            description="현재 Strong Buy 섹터의 구성종목을 RS·RSI·SMA 기준으로 필터링한 매수 후보 리스트",
+        )
+
+        # Derive Strong Buy sectors from current signals
+        strong_buy_sectors = [
+            {"code": sig.index_code, "name": sig.sector_name}
+            for sig in signals
+            if getattr(sig, "action", "") == "Strong Buy"
+        ]
+
+        if not strong_buy_sectors:
+            st.info("현재 Strong Buy 섹터가 없습니다. 매크로 국면이 확정되면 종목 스크리닝이 활성화됩니다.")
+            return
+
+        sector_labels = ", ".join(s["name"] for s in strong_buy_sectors)
+        st.caption(f"대상 섹터: **{sector_labels}**")
+
+        col_refresh, col_filter = st.columns([1, 3])
+        with col_refresh:
+            force_refresh = st.button("데이터 갱신", key="screening_refresh")
+        with col_filter:
+            show_momentum_only = st.toggle(
+                "모멘텀 통과 종목만", value=True,
+                help="RS > RS_MA AND SMA20 > SMA60 조건을 모두 충족하는 종목만 표시",
+            )
+
+        with st.spinner("구성종목 로딩 중..."):
+            status, rows = load_screened_stocks(
+                strong_buy_sectors=strong_buy_sectors,
+                benchmark_code=benchmark_code,
+                settings=settings,
+                force_refresh=force_refresh,
+            )
+
+        if status == "UNAVAILABLE" or not rows:
+            st.warning(
+                "구성종목 데이터를 가져올 수 없습니다. "
+                "주말·공휴일 또는 KRX API 점검 중에는 조회가 불가능합니다. "
+                "평일 장중/장후에 '데이터 갱신'을 눌러주세요."
+            )
+            return
+
+        status_label = {"LIVE": "실시간", "CACHED": "캐시(24h)"}
+        st.caption(f"데이터 상태: **{status_label.get(status, status)}** | 총 {len(rows)}개 종목")
+
+        if show_momentum_only:
+            rows = [r for r in rows if r.get("momentum_ok")]
+
+        if not rows:
+            st.info("모멘텀 조건(RS 상승 + SMA 추세 양호)을 충족하는 종목이 없습니다.")
+            return
+
+        df = pd.DataFrame([
+            {
+                "종목코드": r["ticker"],
+                "종목명": r["name"],
+                "섹터": r["sector_name"],
+                "RS": r["rs"],
+                "RSI": r["rsi"],
+                "RS↑": r["rs_strong"],
+                "추세↑": r["trend_ok"],
+                "1M(%)": r["ret_1m"],
+                "3M(%)": r["ret_3m"],
+                "알림": r["alerts"],
+            }
+            for r in rows
+        ])
+
+        st.dataframe(
+            df,
+            width="stretch",
+            hide_index=True,
+            height=min(700, 76 + len(df) * 35),
+            column_config={
+                "종목코드": st.column_config.TextColumn("종목코드", width="small"),
+                "종목명": st.column_config.TextColumn("종목명", width="medium"),
+                "섹터": st.column_config.TextColumn("섹터", width="medium"),
+                "RS": st.column_config.NumberColumn("RS", format="%.4f"),
+                "RSI": st.column_config.NumberColumn("RSI", format="%.1f"),
+                "RS↑": st.column_config.CheckboxColumn("RS↑", width="small"),
+                "추세↑": st.column_config.CheckboxColumn("추세↑", width="small"),
+                "1M(%)": st.column_config.NumberColumn("1M(%)", format="%.1f%%"),
+                "3M(%)": st.column_config.NumberColumn("3M(%)", format="%.1f%%"),
+                "알림": st.column_config.TextColumn("알림", width="small"),
+            },
+        )
+
+        # CSV download
+        csv = df.to_csv(index=False, encoding="utf-8-sig")
+        st.download_button(
+            label="CSV 다운로드",
+            data=csv.encode("utf-8-sig"),
+            file_name=f"screening_{pd.Timestamp.now().strftime('%Y%m%d')}.csv",
+            mime="text/csv",
+        )
+
+
+def _build_etf_map(sector_map: dict | None) -> dict[str, list]:
+    """Build {index_code: [{"code":..., "name":...}, ...]} from sector_map config."""
+    if not sector_map:
+        return {}
+    etf_map: dict[str, list] = {}
+    for regime_data in sector_map.get("regimes", {}).values():
+        for sector in regime_data.get("sectors", []):
+            code = str(sector.get("code", ""))
+            etfs = sector.get("etfs") or []
+            if code and etfs:
+                etf_map[code] = [{"code": str(e["code"]), "name": str(e["name"])} for e in etfs]
+    return etf_map
 
 
 def render_dashboard_tabs(
@@ -661,11 +788,14 @@ def render_dashboard_tabs(
     show_alerted_only: bool,
     settings: dict[str, Any],
     is_mobile_client: bool,
+    sector_map: dict[str, Any] | None = None,
 ) -> None:
-    tab_summary, tab_charts, tab_all_signals = st.tabs([
+    etf_map = _build_etf_map(sector_map)
+    tab_summary, tab_charts, tab_all_signals, tab_screening = st.tabs([
         "대시보드 요약",
         "모멘텀/차트 분석",
         "전체 종목 데이터",
+        "종목 스크리닝",
     ])
     render_summary_tab(
         tab=tab_summary,
@@ -701,4 +831,11 @@ def render_dashboard_tabs(
         theme_mode=theme_mode,
         settings=settings,
         fx_label=fx_label,
+        etf_map=etf_map,
+    )
+    render_screening_tab(
+        tab=tab_screening,
+        signals=signals,
+        settings=settings,
+        benchmark_code=str(settings.get("benchmark_code", "1001")),
     )

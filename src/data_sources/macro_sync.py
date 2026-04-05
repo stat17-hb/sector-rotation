@@ -176,7 +176,36 @@ def sync_provider_macro(
 
     latest_periods = {} if force else get_macro_latest_periods(aliases, market=market)
     close_cached_read_only_connection()
-    upsert_macro_dimension(_series_dimension_rows(provider, active_config), market=market)
+    try:
+        upsert_macro_dimension(_series_dimension_rows(provider, active_config), market=market)
+    except RuntimeError as exc:
+        # Write lock unavailable (e.g. another process holds warehouse.duckdb).
+        # Fall back to whatever cached data already exists in the warehouse.
+        logger.warning(
+            "%s sync skipped — write lock unavailable, returning cached data. (%s)",
+            provider,
+            exc,
+        )
+        fallback = _warehouse_provider_frame(
+            provider,
+            series_aliases=aliases,
+            start_ym=normalized_start,
+            end_ym=normalized_end,
+            market=market,
+        )
+        if not fallback.empty:
+            validated = normalize_then_validate(fallback, "macro_monthly")
+            return "CACHED", validated, {
+                "provider": provider,
+                "status": "CACHED",
+                "coverage_complete": False,
+                "delta_aliases": [],
+                "failed_aliases": {},
+                "start": normalized_start,
+                "end": normalized_end,
+                "reason": reason,
+            }
+        raise
     delta_aliases: list[str] = []
     failed_aliases: dict[str, str] = {}
 
