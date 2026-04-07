@@ -48,6 +48,14 @@
 - Pattern: `git push` to GitHub failed because a regenerated `data/warehouse.duckdb` blob in the latest commit exceeded the 100 MB file limit.
 - Rule: Before committing or pushing, inspect staged/generated artifacts for size-sensitive paths (`data/`, `backups/`, `logs/`) and keep local DuckDB files untracked via `.gitignore` plus `git rm --cached` when they were already tracked.
 
+## 2026-04-07
+- Pattern: pykrx를 데이터 소스로 재선택하려는 상황에서, pykrx가 KRX 서버 응답 구조 변경으로 실제로 broken 상태일 수 있음.
+- Rule: `KRX_PROVIDER=PYKRX`로 복귀하기 전에 반드시 pykrx 실시간 호출이 정상인지 먼저 확인한다.
+  - 확인 방법: `python -c "from pykrx import stock; df = stock.get_index_ohlcv('20260101', '20260107', '1001'); print(df)"` 실행 후 비어 있지 않은 DataFrame이 반환되는지 검증.
+  - pykrx GitHub issues (<https://github.com/sharebook-kr/pykrx/issues>) 에서 open 이슈 및 최근 릴리즈 확인.
+  - 빈 DataFrame, `'시장'`/`'지수명'` KeyError, `IndexTicker singleton had empty df` 경고 중 하나라도 발생하면 pykrx가 아직 broken 상태이므로 OPENAPI를 유지한다.
+- Context: 2026-02-27 KRX 서버 변경으로 pykrx `get_index_ohlcv`가 `'지수명'` 컬럼 누락 문제를 일으켰고, 1.2.4(최신)에서도 미수정(issue #276). 이 프로젝트는 KRX OpenAPI 경로로 전환해 해결함.
+
 ## 2026-03-30
 - Pattern: Streamlit app load hit a DuckDB write-lock error in US macro loading because `sync_provider_macro()` always called `upsert_macro_dimension()` before checking whether cached warehouse macro data already satisfied the request.
 - Rule: In warehouse-backed sync paths, never open a write connection on a cache-hit fast path; perform completeness checks using read-only calls first and only switch to write mode after a live refresh is actually required.
