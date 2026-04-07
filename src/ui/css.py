@@ -281,8 +281,10 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     [data-testid="stHeader"] {{
-        background: {header_background_css} !important;
+        background: color-mix(in srgb, {header_background_css} 80%, transparent) !important;
         border-bottom: 1px solid {header_border_css};
+        backdrop-filter: blur(12px) !important;
+        -webkit-backdrop-filter: blur(12px) !important;
     }}
 
     [data-testid="stDecoration"] {{
@@ -305,6 +307,7 @@ def inject_css(theme_mode: str) -> None:
 
     div[data-testid="stMetricValue"], code, pre {{
         font-family: {MONO_FONT_CSS} !important;
+        font-variant-numeric: tabular-nums;
     }}
 
     div[data-testid="stMetricValue"] {{
@@ -382,6 +385,12 @@ def inject_css(theme_mode: str) -> None:
         border-radius: 14px;
         padding: 14px 16px;
         margin-bottom: 0.8rem;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }}
+
+    .app-summary-card:hover {{
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px color-mix(in srgb, var(--primary) 12%, transparent);
     }}
 
     .page-shell {{
@@ -473,6 +482,12 @@ def inject_css(theme_mode: str) -> None:
         border-radius: var(--radius-lg);
         padding: 0.85rem 1rem;
         margin-bottom: 0.9rem;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }}
+    
+    .status-strip:hover {{
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px color-mix(in srgb, var(--primary) 12%, transparent);
     }}
 
     .status-strip__badge {{
@@ -869,6 +884,13 @@ def inject_css(theme_mode: str) -> None:
         background: color-mix(in srgb, var(--surface) 94%, transparent);
         border-radius: var(--radius-md);
         padding: 0.85rem 0.95rem;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }}
+    
+    .decision-hero__stat:hover,
+    .status-card:hover {{
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px color-mix(in srgb, var(--primary) 12%, transparent);
     }}
 
     .decision-hero__stat-label,
@@ -1133,7 +1155,39 @@ def inject_css(theme_mode: str) -> None:
         box-shadow: 0 0 0 4px color-mix(in srgb, var(--ring) 18%, transparent) !important;
     }}
 
+    .empty-state-card {{
+        border: 2px dashed var(--border);
+        background: color-mix(in srgb, var(--surface) 50%, transparent);
+        border-radius: var(--radius-lg);
+        padding: 3rem 1.5rem;
+        text-align: center;
+        color: var(--text-muted);
+        margin-bottom: 1rem;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+    }}
+
+    .empty-state-card h4 {{
+        color: var(--text);
+        margin-top: 0.8rem;
+        margin-bottom: 0.4rem;
+        font-weight: 700;
+        font-size: 1.15rem;
+    }}
+
+    .empty-state-card p {{
+        font-size: 0.92rem;
+        margin-bottom: 0;
+        max-width: 48ch;
+    }}
+
     @media (max-width: 840px) {{
+        .stApp h1 {{ font-size: 1.8rem !important; line-height: 1.25 !important; }}
+        .stApp h2 {{ font-size: 1.5rem !important; line-height: 1.25 !important; }}
+        div[data-testid="stMetricValue"] {{ font-size: 1.35rem !important; }}
+
         .page-shell {{
             padding: 1rem 1rem 0.95rem;
         }}

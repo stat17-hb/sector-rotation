@@ -86,7 +86,7 @@ def render_sidebar_controls(
     st.session_state["asof_date_str"] = asof_date.strftime("%Y%m%d")
 
     st.divider()
-    with st.expander("고급 설정", expanded=False):
+    with st.popover("⚙️ 고급 설정", use_container_width=True):
         with st.form("model_params_form"):
             st.caption("슬라이더 숫자를 직접 클릭해 세밀하게 조정할 수 있습니다.")
             param_col1, param_col2 = st.columns(2)
@@ -529,8 +529,12 @@ def render_charts_tab(
                 "Benchmark Missing" in getattr(signal, "alerts", []) for signal in signals_filtered
             )
             if benchmark_missing:
-                st.warning(
-                    "벤치마크(KOSPI, 1001) 데이터 누락으로 RS 산점도를 계산할 수 없습니다. 시장데이터 갱신 후 다시 시도하세요."
+                st.markdown(
+                    '<div class="empty-state-card">'
+                    '<h4>벤치마크 데이터 누락</h4>'
+                    '<p>KOSPI(1001) 가격 데이터 누락으로 RS 산점도를 계산할 수 없습니다.<br>시장데이터 갱신 후 다시 시도하세요.</p>'
+                    '</div>',
+                    unsafe_allow_html=True,
                 )
             else:
                 scatter_height = 520 if is_mobile_client else 700
@@ -584,7 +588,13 @@ def render_charts_tab(
             fig_heatmap = render_returns_heatmap(signals_filtered, theme_mode=theme_mode)
             st.plotly_chart(fig_heatmap, width="stretch")
         else:
-            st.info("글로벌 필터 조건에 맞는 신호가 없습니다.")
+            st.markdown(
+                '<div class="empty-state-card">'
+                '<h4>표시할 데이터 없음</h4>'
+                '<p>글로벌 필터 조건에 맞는 신호가 없습니다.<br>선택된 액션 및 국면 필터를 확인해 주세요.</p>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
 
 
 def render_all_signals_tab(
@@ -683,7 +693,13 @@ def render_screening_tab(
         ]
 
         if not strong_buy_sectors:
-            st.info("현재 Strong Buy 섹터가 없습니다. 매크로 국면이 확정되면 종목 스크리닝이 활성화됩니다.")
+            st.markdown(
+                '<div class="empty-state-card">'
+                '<h4>투자 유니버스 대기 중</h4>'
+                '<p>현재 <b>Strong Buy</b> 섹터가 없습니다.<br>매크로 국면이 확정되거나 필터 조건이 완화되면 종목 스크리닝이 활성화됩니다.</p>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
             return
 
         sector_labels = ", ".join(s["name"] for s in strong_buy_sectors)
@@ -707,10 +723,12 @@ def render_screening_tab(
             )
 
         if status == "UNAVAILABLE" or not rows:
-            st.warning(
-                "구성종목 데이터를 가져올 수 없습니다. "
-                "주말·공휴일 또는 KRX API 점검 중에는 조회가 불가능합니다. "
-                "평일 장중/장후에 '데이터 갱신'을 눌러주세요."
+            st.markdown(
+                '<div class="empty-state-card">'
+                '<h4>데이터 조회 불가</h4>'
+                '<p>구성종목 데이터를 가져올 수 없습니다.<br>주말·공휴일 또는 서비스 API 점검 중일 수 있습니다.<br>평일 장중/장후에 <b>데이터 갱신</b>을 눌러주세요.</p>'
+                '</div>',
+                unsafe_allow_html=True,
             )
             return
 
@@ -721,7 +739,13 @@ def render_screening_tab(
             rows = [r for r in rows if r.get("momentum_ok")]
 
         if not rows:
-            st.info("모멘텀 조건(RS 상승 + SMA 추세 양호)을 충족하는 종목이 없습니다.")
+            st.markdown(
+                '<div class="empty-state-card">'
+                '<h4>모멘텀 충족 종목 없음</h4>'
+                '<p>설정된 모멘텀 조건(RS 상승 + SMA 추세 양호)을 충족하는 종목이 현재 없습니다.</p>'
+                '</div>',
+                unsafe_allow_html=True,
+            )
             return
 
         df = pd.DataFrame([
@@ -740,8 +764,19 @@ def render_screening_tab(
             for r in rows
         ])
 
+        def _color_momentum(val):
+            if not isinstance(val, (int, float)) or pd.isna(val):
+                return ""
+            if val > 0:
+                return "color: #ff4b4b; font-weight: 600;"
+            elif val < 0:
+                return "color: #2b7af0; font-weight: 600;"
+            return ""
+
+        styled_df = df.style.map(_color_momentum, subset=["1M(%)", "3M(%)"])
+
         st.dataframe(
-            df,
+            styled_df,
             width="stretch",
             hide_index=True,
             height=min(700, 76 + len(df) * 35),

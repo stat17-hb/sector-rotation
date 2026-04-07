@@ -36,8 +36,18 @@ def render_top_picks_table(
         position_mode=position_mode,
     )
     if not filtered:
-        st.info(_empty_top_pick_message(position_mode, held_sectors, locale=locale))
+        msg = _empty_top_pick_message(position_mode, held_sectors, locale=locale)
+        st.markdown(f'<div class="empty-state-card"><h4>데이터 없음</h4><p>{msg}</p></div>', unsafe_allow_html=True)
         return
+
+    def _color_momentum(val):
+        if not isinstance(val, (int, float)) or pd.isna(val):
+            return ""
+        if val > 0:
+            return "color: #ff4b4b; font-weight: 600;"
+        elif val < 0:
+            return "color: #2b7af0; font-weight: 600;"
+        return ""
 
     rows: list[dict[str, object]] = []
     filtered = sorted(filtered, key=lambda signal: signal_display_sort_key(signal, held_sectors))
@@ -59,6 +69,11 @@ def render_top_picks_table(
 
     df_display = pd.DataFrame(rows)
     height = 76 + len(df_display) * 35
+    
+    styled_df = df_display.style.map(
+        _color_momentum, subset=["3M"]
+    )
+    
     column_config: dict[str, object] = {
         "Rank": st.column_config.NumberColumn(get_ui_text("col_rank", locale), format="%d", width="small"),
         "Sector": st.column_config.TextColumn(get_ui_text("col_sector", locale), width="medium"),
@@ -72,7 +87,7 @@ def render_top_picks_table(
     if include_held:
         column_config["Held"] = st.column_config.CheckboxColumn(get_ui_text("col_held", locale), width="small")
     st.dataframe(
-        df_display,
+        styled_df,
         width="stretch",
         hide_index=True,
         height=height,
@@ -107,7 +122,7 @@ def render_signal_table(
     del theme_mode  # native dataframe rendering does not need a theme argument
 
     if not signals:
-        st.info(get_ui_text("signals_empty", locale))
+        st.markdown(f'<div class="empty-state-card"><h4>데이터 없음</h4><p>{get_ui_text("signals_empty", locale)}</p></div>', unsafe_allow_html=True)
         return
 
     filtered = filter_signals_for_display(
@@ -121,7 +136,7 @@ def render_signal_table(
     )
 
     if not filtered:
-        st.info(get_ui_text("signals_filtered_empty", locale))
+        st.markdown(f'<div class="empty-state-card"><h4>필터된 신호 없음</h4><p>{get_ui_text("signals_filtered_empty", locale)}</p></div>', unsafe_allow_html=True)
         return
 
     filtered = sorted(filtered, key=lambda signal: signal_display_sort_key(signal, held_sectors))
@@ -150,8 +165,22 @@ def render_signal_table(
 
     df_display = pd.DataFrame(rows)
     height = min(760, 76 + len(df_display) * 35)
+
+    def _color_momentum(val):
+        if not isinstance(val, (int, float)) or pd.isna(val):
+            return ""
+        if val > 0:
+            return "color: #ff4b4b; font-weight: 600;"
+        elif val < 0:
+            return "color: #2b7af0; font-weight: 600;"
+        return ""
+
+    styled_df = df_display.style.map(
+        _color_momentum, subset=["1M", "3M"]
+    )
+
     st.dataframe(
-        df_display,
+        styled_df,
         width="stretch",
         hide_index=True,
         height=height,
