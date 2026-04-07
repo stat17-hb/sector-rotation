@@ -10,6 +10,7 @@ fx_shock_pct: 3.0
 benchmark_code: "1001"
 price_years: 3
 cache_ttl: 21600  # 6 hours in seconds
+ui_locale: ko
 # Regime detection improvements
 use_adaptive_epsilon: true   # epsilon=0일 때 지표별 std 기반 자동 계산
 epsilon_factor: 0.5          # adaptive epsilon = factor × std(diff)

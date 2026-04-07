@@ -1,3 +1,35 @@
+# 2026-04-07 - Stabilization Wave: UI Locale Contract, App Orchestration, Repo Hygiene
+
+Status: Completed
+Owner: Codex + User
+
+## Execution Checklist
+- [x] Add `src/ui/copy.py` and centralize locale-aware UI copy with Korean default and English fallback
+- [x] Update UI helpers/renderers to accept `locale` and stop embedding contract strings directly
+- [x] Change dashboard session/action-filter state to store `ALL_ACTION_KEY` instead of localized labels
+- [x] Add `ui_locale: ko` to market settings and thread locale through dashboard rendering
+- [x] Add `src/dashboard/runtime.py` and move cache invalidation / refresh orchestration out of `app.py`
+- [x] Replace direct underscore-helper imports in `app.py` with public dashboard wrappers/runtime APIs
+- [x] Add tests for `src/ui/copy.py`, locale-aware UI contracts, session normalization, and dashboard runtime helpers
+- [x] Move manual root scripts into `scripts/manual/` and untrack generated outputs / local metadata artifacts
+- [x] Run verification and record results
+
+## Review
+- Added `src/ui/copy.py` as the single locale-aware source of truth for action labels, decision copy, empty states, captions, palette labels, cycle timeline copy, and filter labels. Korean is now the default UI locale and English remains an explicit fallback.
+- Updated `src/ui/base.py`, `src/ui/tables.py`, `src/ui/panels.py`, `src/ui/figures.py`, `src/dashboard/state.py`, and `src/dashboard/tabs.py` so tested UI helpers/renderers accept `locale`, filter/session state stores `ALL_ACTION_KEY`, and localized labels do not leak into session state.
+- Added `src/dashboard/runtime.py` and public wrapper exports in `src/dashboard/data.py` / `src/dashboard/analysis.py`, then slimmed `app.py` to use runtime APIs and public dashboard helpers while preserving backward-compatible `_build_*` aliases for tests.
+- Added `ui_locale: ko` to both market settings files and threaded the locale into the decision-first UI stack plus sidebar heatmap palette formatting.
+- Added regression coverage in `tests/test_ui_copy.py` and `tests/test_dashboard_runtime.py`, and refreshed `tests/test_ui_components.py` / `tests/test_dashboard_state.py` for Korean-default plus English-fallback behavior.
+- Repository hygiene changes:
+  `debug_*.py`, `get_*.py`, root `test_*.py`, and `tmp_cpi_check.py` moved under `scripts/manual/`.
+  `pytest_*.txt`, `streamlit_smoke.log`, and `data/raw/krx/index_name_metadata.json` were untracked and covered by `.gitignore`.
+- Verification:
+  `python -m py_compile app.py src/ui/copy.py src/ui/base.py src/ui/tables.py src/ui/panels.py src/ui/figures.py src/dashboard/data.py src/dashboard/analysis.py src/dashboard/runtime.py src/dashboard/state.py src/dashboard/tabs.py tests/test_ui_copy.py tests/test_ui_components.py tests/test_dashboard_state.py tests/test_dashboard_runtime.py`
+  `pytest -q tests/test_ui_copy.py tests/test_dashboard_state.py tests/test_dashboard_runtime.py tests/test_ui_components.py` -> `52 passed`
+  `python -m compileall app.py src scripts tests`
+  `pytest -q` -> `233 passed`
+- Verification note: full-suite pytest initially exposed the current `warehouse.py` RO-cache regression under an external read-only connection. The final implementation keeps the cached RO path read-only when the warehouse file already exists, restoring the prior connection-safety behavior without changing the missing-file fallback path.
+
 # 2026-03-30 - Practical Investing UX/UI Decision-First Refresh
 
 Status: Completed

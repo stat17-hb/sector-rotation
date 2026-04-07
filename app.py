@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import shutil
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -21,47 +20,45 @@ from config.markets import load_market_configs
 from config.theme import THEME_SESSION_KEY, get_theme_mode
 from src.dashboard import data as dashboard_data_module
 from src.dashboard.analysis import (
-    _build_cycle_segments,
-    _build_heatmap_display,
-    _build_monthly_return_views,
-    _build_monthly_sector_returns,
-    _build_prices_wide,
-    _build_sector_name_map,
-    _extract_heatmap_selection,
-    _filter_monthly_frame_for_analysis,
-    _filter_prices_for_phase,
-    _rs_divergence_pct,
-    _top_pick_sort_key,
+    build_cycle_segments,
+    build_heatmap_display,
+    build_monthly_return_views,
+    build_monthly_sector_returns,
+    build_prices_wide,
+    build_sector_name_map,
+    extract_heatmap_selection,
+    filter_monthly_frame_for_analysis,
+    filter_prices_for_phase,
+    rs_divergence_pct,
+    top_pick_sort_key,
 )
 from src.dashboard.data import (
-    _all_sector_codes,
-    _build_macro_refresh_notice,
-    _build_market_refresh_notice,
-    _cached_analysis_sector_prices,
-    _cached_api_preflight,
-    _cached_macro,
-    _cached_sector_prices,
-    _cached_signals,
-    _is_mobile_client,
-    _krx_provider_configured,
-    _krx_provider_effective,
-    _load_api_key,
-    _load_analysis_sector_prices_from_cache as _dashboard_load_analysis_sector_prices_from_cache,
-    _macro_artifact_key,
-    _macro_cache_token,
-    _maybe_schedule_startup_krx_warm,
-    _market_range_strings,
-    _openapi_cache_fallback_note,
-    _parquet_key,
-    _price_artifact_key,
-    _price_cache_token,
-    _probe_macro_status,
-    _probe_market_status,
-    _render_dashboard_status_banner,
-    _resolve_market_end_date,
-    _secrets_mtime_ns,
-    _show_notice_toast,
+    cached_analysis_sector_prices,
+    cached_api_preflight,
+    cached_macro,
+    cached_signals,
+    get_krx_provider_configured,
+    get_krx_provider_effective,
+    get_macro_artifact_key,
+    get_macro_cache_token,
+    get_price_artifact_key,
+    get_price_cache_token,
+    is_mobile_client,
+    load_analysis_sector_prices_from_cache as dashboard_load_analysis_sector_prices_from_cache,
+    load_api_key,
+    maybe_schedule_startup_krx_warm,
+    probe_macro_status,
+    probe_market_status,
+    render_dashboard_status_banner,
+    resolve_market_end_date,
+    show_notice_toast,
     configure_dashboard_env,
+)
+from src.dashboard.runtime import (
+    invalidate_dashboard_caches,
+    run_feature_recompute,
+    run_macro_refresh,
+    run_market_refresh,
 )
 from src.dashboard.state import (
     apply_market_selection,
@@ -80,11 +77,10 @@ from src.dashboard.tabs import (
 from src.dashboard.types import AnalysisWindow, DashboardContext, DashboardDataBundle
 from src.macro.series_utils import extract_macro_series
 from src.data_sources.warehouse import (
-    close_cached_read_only_connection,
     read_market_prices,
 )
+from src.ui.copy import ALL_ACTION_KEY, DEFAULT_UI_LOCALE, normalize_locale
 from src.ui.components import (
-    ALL_ACTION_OPTION,
     HEATMAP_PALETTE_OPTIONS,
     filter_signals_for_display,
     infer_range_preset,
@@ -104,6 +100,19 @@ from src.ui.styles import inject_css
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
+
+# Backward-compatible analysis exports kept for tests.
+_build_cycle_segments = build_cycle_segments
+_build_heatmap_display = build_heatmap_display
+_build_monthly_return_views = build_monthly_return_views
+_build_monthly_sector_returns = build_monthly_sector_returns
+_build_prices_wide = build_prices_wide
+_build_sector_name_map = build_sector_name_map
+_extract_heatmap_selection = extract_heatmap_selection
+_filter_monthly_frame_for_analysis = filter_monthly_frame_for_analysis
+_filter_prices_for_phase = filter_prices_for_phase
+_rs_divergence_pct = rs_divergence_pct
+_top_pick_sort_key = top_pick_sort_key
 
 st.set_page_config(
     page_title="Sector Rotation Dashboard",
@@ -146,7 +155,7 @@ def _load_analysis_sector_prices_from_cache(
     original_reader = dashboard_data_module.read_market_prices
     dashboard_data_module.read_market_prices = read_market_prices
     try:
-        return _dashboard_load_analysis_sector_prices_from_cache(market_id, end_date_str, benchmark_code)
+        return dashboard_load_analysis_sector_prices_from_cache(market_id, end_date_str, benchmark_code)
     finally:
         dashboard_data_module.read_market_prices = original_reader
 
@@ -156,28 +165,29 @@ ensure_session_defaults(
     settings=settings,
     theme_key=THEME_SESSION_KEY,
     default_theme_mode=get_theme_mode(),
-    all_action_option=ALL_ACTION_OPTION,
+    all_action_option=ALL_ACTION_KEY,
 )
 theme_mode = get_theme_mode()
+ui_locale = normalize_locale(settings.get("ui_locale", DEFAULT_UI_LOCALE))
 analysis_heatmap_palette = normalize_session_state(
     st.session_state,
     theme_key=THEME_SESSION_KEY,
     theme_mode=theme_mode,
     heatmap_palette_options=HEATMAP_PALETTE_OPTIONS,
-    all_action_option=ALL_ACTION_OPTION,
+    all_action_option=ALL_ACTION_KEY,
     normalize_range_preset=normalize_range_preset,
 )
 inject_css(theme_mode)
 
 # Sidebar / runtime status
-macro_cache_token = _macro_cache_token()
-price_cache_token = _price_cache_token()
-krx_provider_configured = _krx_provider_configured()
-krx_provider_effective = _krx_provider_effective()
-krx_openapi_key_present = bool(_load_api_key("KRX_OPENAPI_KEY")) if selected_market_id == "KR" else False
+macro_cache_token = get_macro_cache_token()
+price_cache_token = get_price_cache_token()
+krx_provider_configured = get_krx_provider_configured()
+krx_provider_effective = get_krx_provider_effective()
+krx_openapi_key_present = bool(load_api_key("KRX_OPENAPI_KEY")) if selected_market_id == "KR" else False
 
-probe_price_status = _probe_market_status()
-probe_macro_status = _probe_macro_status()
+probe_price_status = probe_market_status()
+probe_macro_status = probe_macro_status()
 probe_data_status = {"price": probe_price_status, "macro": probe_macro_status}
 btn_states = get_button_states(probe_data_status)
 asof_default = parse_asof_default(st.session_state)
@@ -192,14 +202,11 @@ with st.sidebar:
         probe_macro_status=probe_macro_status,
         btn_states=btn_states,
         asof_default=asof_default,
+        ui_locale=ui_locale,
     )
 
 if apply_market_selection(st.session_state, market_id=selected_market_sidebar):
-    _cached_api_preflight.clear()
-    _cached_sector_prices.clear()
-    _cached_analysis_sector_prices.clear()
-    _cached_macro.clear()
-    _cached_signals.clear()
+    invalidate_dashboard_caches("all")
     st.rerun()
 
 rs_ma_period = int(st.session_state.get("rs_ma_period", settings.get("rs_ma_period", 20)))
@@ -207,7 +214,7 @@ ma_fast = int(st.session_state.get("ma_fast", settings.get("ma_fast", 20)))
 ma_slow = int(st.session_state.get("ma_slow", settings.get("ma_slow", 60)))
 price_years = int(st.session_state.get("price_years", settings.get("price_years", 3)))
 benchmark_code = str(settings.get("benchmark_code", "1001"))
-market_end_date = _resolve_market_end_date(benchmark_code)
+market_end_date = resolve_market_end_date(benchmark_code)
 market_end_date_str = market_end_date.strftime("%Y%m%d")
 
 context = DashboardContext(
@@ -221,74 +228,32 @@ context = DashboardContext(
     market_end_date_str=market_end_date_str,
     macro_cache_token=macro_cache_token,
     price_cache_token=price_cache_token,
-    price_artifact_key=_price_artifact_key(),
-    macro_artifact_key=_macro_artifact_key(),
+    price_artifact_key=get_price_artifact_key(),
+    macro_artifact_key=get_macro_artifact_key(),
     provider_configured=krx_provider_configured,
     provider_effective=krx_provider_effective,
     openapi_key_present=krx_openapi_key_present,
     theme_mode=theme_mode,
     analysis_heatmap_palette=analysis_heatmap_palette,
+    ui_locale=ui_locale,
 )
 
-_maybe_schedule_startup_krx_warm(benchmark_code, price_years, market_end_date)
+maybe_schedule_startup_krx_warm(benchmark_code, price_years, market_end_date)
 
 # Button handlers
 market_refresh_notice: tuple[str, str] | None = None
 macro_refresh_notice: tuple[str, str] | None = None
 
 if refresh_market:
-    if context.market_id == "US":
-        from src.data_sources.yfinance_sectors import run_manual_price_refresh
-    else:
-        from src.data_sources.krx_indices import run_manual_price_refresh
-
-    refresh_start_str, refresh_end_str = _market_range_strings(context.market_end_date_str, price_years)
-    try:
-        close_cached_read_only_connection()
-        _cached_api_preflight.clear()
-        with st.spinner("Refreshing market data..."):
-            (_, _), refresh_summary = run_manual_price_refresh(
-                _all_sector_codes(benchmark_code),
-                refresh_start_str,
-                refresh_end_str,
-            )
-        _cached_sector_prices.clear()
-        _cached_analysis_sector_prices.clear()
-        _cached_signals.clear()
-        market_refresh_notice = _build_market_refresh_notice(refresh_summary)
-    except Exception as exc:
-        logger.exception("Manual market refresh failed")
-        market_refresh_notice = ("error", f"Market data refresh failed: {exc}")
+    with st.spinner("Refreshing market data..."):
+        market_refresh_notice = run_market_refresh(context, price_years)
 
 if refresh_macro:
-    from src.data_sources.macro_sync import sync_macro_warehouse
-
-    macro_end_period = pd.Period(context.market_end_date_str[:6], freq="M")
-    macro_end_ym = macro_end_period.strftime("%Y%m")
-    macro_start_ym = (macro_end_period - 119).strftime("%Y%m")
-    try:
-        close_cached_read_only_connection()
-        with st.spinner("Refreshing macro data..."):
-            _, _, macro_summary = sync_macro_warehouse(
-                start_ym=macro_start_ym,
-                end_ym=macro_end_ym,
-                macro_series_cfg=macro_series_cfg,
-                reason="manual_refresh",
-                force=False,
-                market=context.market_id,
-            )
-        _cached_macro.clear()
-        _cached_signals.clear()
-        macro_refresh_notice = _build_macro_refresh_notice(macro_summary)
-    except Exception as exc:
-        logger.exception("Manual macro refresh failed")
-        macro_refresh_notice = ("error", f"Macro data refresh failed: {exc}")
+    with st.spinner("Refreshing macro data..."):
+        macro_refresh_notice = run_macro_refresh(context, macro_series_cfg)
 
 if recompute:
-    close_cached_read_only_connection()
-    shutil.rmtree("data/features", ignore_errors=True)
-    Path("data/features").mkdir(exist_ok=True)
-    _cached_signals.clear()
+    run_feature_recompute()
     st.rerun()
 
 # Core data load
@@ -304,7 +269,7 @@ with st.spinner("Loading dashboard data..."):
             "price_years": price_years,
         }
         params_hash = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()[:8]
-        signals, macro_result, price_status, macro_status, market_blocking_error = _cached_signals(
+        signals, macro_result, price_status, macro_status, market_blocking_error = cached_signals(
             context.market_id,
             context.market_end_date_str,
             prices_key,
@@ -356,7 +321,7 @@ if price_status == "CACHED":
         )
 
 try:
-    preflight_status = _cached_api_preflight(timeout_sec=3, market_id_arg=context.market_id)
+    preflight_status = cached_api_preflight(timeout_sec=3, market_id_arg=context.market_id)
 except Exception as exc:
     preflight_status = {
         "PRECHECK": {
@@ -370,8 +335,8 @@ except Exception as exc:
 openapi_missing_key_warning_shown = (
     context.market_id == "KR" and context.provider_configured == "OPENAPI" and not context.openapi_key_present
 )
-_show_notice_toast(market_refresh_notice)
-_show_notice_toast(macro_refresh_notice)
+show_notice_toast(market_refresh_notice)
+show_notice_toast(macro_refresh_notice)
 
 dashboard_status_banner = resolve_dashboard_status_banner(
     data_status=data_status,
@@ -397,7 +362,7 @@ if not macro_result.empty:
 
 is_provisional = any(getattr(signal, "is_provisional", False) for signal in signals)
 
-_, macro_df = _cached_macro(context.market_id, context.macro_cache_token, context.market_end_date_str)
+_, macro_df = cached_macro(context.market_id, context.macro_cache_token, context.market_end_date_str)
 growth_val: float | None = None
 inflation_val: float | None = None
 fx_change: float | None = None
@@ -422,10 +387,10 @@ render_page_header(
         {"label": "Provider", "value": context.provider_effective, "tone": "info"},
     ],
 )
-_render_dashboard_status_banner(dashboard_status_banner)
+render_dashboard_status_banner(dashboard_status_banner)
 
 try:
-    sector_prices_canvas = pd.DataFrame() if price_status == "BLOCKED" else _cached_analysis_sector_prices(
+    sector_prices_canvas = pd.DataFrame() if price_status == "BLOCKED" else cached_analysis_sector_prices(
         context.market_id,
         context.market_end_date_str,
         benchmark_code,
@@ -436,13 +401,13 @@ except Exception as exc:
     logger.warning("Analysis canvas price load fallback: %s", exc)
     sector_prices_canvas = pd.DataFrame()
 
-sector_name_map = _build_sector_name_map(
+sector_name_map = build_sector_name_map(
     signals=list(signals),
     sector_prices=sector_prices_canvas,
     benchmark_code=benchmark_code,
     benchmark_label=str(settings.get("benchmark_label", getattr(market_profile, "benchmark_label", benchmark_code))),
 )
-prices_wide = _build_prices_wide(
+prices_wide = build_prices_wide(
     sector_prices=sector_prices_canvas,
     sector_name_map=sector_name_map,
 )
@@ -451,12 +416,12 @@ benchmark_label = sector_name_map.get(
     str(settings.get("benchmark_label", getattr(market_profile, "benchmark_label", benchmark_code))),
 )
 sector_columns = [column for column in prices_wide.columns if column != benchmark_label]
-monthly_close_full, monthly_returns_full, benchmark_monthly_return, monthly_excess_returns_full = _build_monthly_return_views(
+monthly_close_full, monthly_returns_full, benchmark_monthly_return, monthly_excess_returns_full = build_monthly_return_views(
     prices_wide=prices_wide,
     sector_columns=sector_columns,
     benchmark_label=benchmark_label,
 )
-cycle_segments_all, phase_by_month = _build_cycle_segments(
+cycle_segments_all, phase_by_month = build_cycle_segments(
     macro_result=macro_result,
     monthly_close=monthly_close_full,
 )
@@ -497,6 +462,7 @@ resolved_start, resolved_end, resolved_preset, toolbar_submitted = render_analys
     selected_range_preset=toolbar_selected_preset if current_range_preset == "CUSTOM" else current_range_preset,
     selected_cycle_phase=toolbar_selected_phase,
     selected_sector=toolbar_selected_sector,
+    locale=context.ui_locale,
 )
 if toolbar_submitted and apply_analysis_toolbar_selection(
     st.session_state,
@@ -516,28 +482,28 @@ phase_by_month_visible = phase_by_month.loc[
 ] if not phase_by_month.empty else pd.Series(dtype=object)
 
 selected_cycle_phase = str(st.session_state.get("selected_cycle_phase", "ALL") or "ALL")
-analysis_prices_phase = _filter_prices_for_phase(
+analysis_prices_phase = filter_prices_for_phase(
     prices_wide=analysis_prices,
     phase_by_month=phase_by_month_visible,
     selected_cycle_phase=selected_cycle_phase,
 )
 
-heatmap_return_source = _filter_monthly_frame_for_analysis(
+heatmap_return_source = filter_monthly_frame_for_analysis(
     monthly_frame=monthly_returns_full,
     start_date=analysis_start_date,
     end_date=analysis_end_date,
     selected_cycle_phase=selected_cycle_phase,
     phase_by_month=phase_by_month_visible,
 )
-heatmap_strength_source = _filter_monthly_frame_for_analysis(
+heatmap_strength_source = filter_monthly_frame_for_analysis(
     monthly_frame=monthly_excess_returns_full,
     start_date=analysis_start_date,
     end_date=analysis_end_date,
     selected_cycle_phase=selected_cycle_phase,
     phase_by_month=phase_by_month_visible,
 )
-heatmap_return_display = _build_heatmap_display(heatmap_return_source)
-heatmap_strength_display = _build_heatmap_display(heatmap_strength_source)
+heatmap_return_display = build_heatmap_display(heatmap_return_source)
+heatmap_strength_display = build_heatmap_display(heatmap_strength_source)
 visible_months = list(heatmap_return_display.columns) if not heatmap_return_display.empty else []
 ensure_visible_month_selection(st.session_state, visible_months=visible_months)
 
@@ -557,7 +523,7 @@ analysis_window = AnalysisWindow(
     selected_month=str(st.session_state.get("selected_month", "")),
 )
 
-is_mobile_client = _is_mobile_client()
+mobile_client = is_mobile_client()
 signal_lookup = {str(signal.sector_name): signal for signal in signals}
 held_sector_options = sorted({str(signal.sector_name) for signal in signals if str(signal.sector_name).strip()})
 held_sectors, filter_action_global, filter_regime_only_global, position_mode, show_alerted_only = render_decision_first_sections(
@@ -574,8 +540,8 @@ held_sectors, filter_action_global, filter_regime_only_global, position_mode, sh
     yield_curve_status=yield_curve_status,
     signals=list(signals),
     held_sector_options=held_sector_options,
-    action_options=[ALL_ACTION_OPTION, "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
-    is_mobile_client=is_mobile_client,
+    action_options=[ALL_ACTION_KEY, "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
+    is_mobile_client=mobile_client,
     analysis_canvas_kwargs={
         "heatmap_return_display": heatmap_return_display,
         "heatmap_strength_display": heatmap_strength_display,
@@ -593,7 +559,9 @@ held_sectors, filter_action_global, filter_regime_only_global, position_mode, sh
         "build_sector_detail_figure": build_sector_detail_figure,
         "resolve_range_from_preset": resolve_range_from_preset,
         "signal_lookup": signal_lookup,
+        "ui_locale": context.ui_locale,
     },
+    ui_locale=context.ui_locale,
 )
 signals_filtered = filter_signals_for_display(
     list(signals),
@@ -661,7 +629,7 @@ render_dashboard_tabs(
     position_mode=position_mode,
     show_alerted_only=show_alerted_only,
     settings=settings,
-    is_mobile_client=is_mobile_client,
+    is_mobile_client=mobile_client,
     sector_map=sector_map,
 )
 

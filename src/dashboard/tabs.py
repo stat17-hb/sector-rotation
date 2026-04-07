@@ -10,9 +10,11 @@ import streamlit as st
 from config.theme import set_theme_mode
 from src.dashboard.analysis import _extract_heatmap_selection
 from src.ui.components import (
+    DEFAULT_UI_LOCALE,
     HEATMAP_PALETTE_OPTIONS,
     build_sector_strength_heatmap,
     describe_signal_decision,
+    get_action_filter_label,
     format_cycle_phase_label,
     format_heatmap_palette_label,
     normalize_range_preset,
@@ -42,10 +44,11 @@ def render_sidebar_controls(
     probe_macro_status: str,
     btn_states: dict[str, bool],
     asof_default: date,
+    ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> tuple[str, date, bool, bool, bool]:
     market_options = ["KR", "US"]
     selected_market = st.radio(
-        ui_labels.get("market_selector", "Market"),
+        ui_labels.get("market_selector", "시장"),
         options=market_options,
         index=market_options.index(str(market_id or "KR").strip().upper() or "KR"),
         horizontal=True,
@@ -65,11 +68,11 @@ def render_sidebar_controls(
         st.rerun()
 
     selected_heatmap_palette = st.selectbox(
-        "Heatmap palette",
+        "히트맵 색상",
         options=list(HEATMAP_PALETTE_OPTIONS),
         index=list(HEATMAP_PALETTE_OPTIONS).index(analysis_heatmap_palette),
-        format_func=format_heatmap_palette_label,
-        help="Experiment with diverging palettes for the monthly analysis heatmaps.",
+        format_func=lambda value: format_heatmap_palette_label(value, locale=ui_locale),
+        help="월간 분석 히트맵의 발산형 색상을 변경합니다.",
     )
     if selected_heatmap_palette != analysis_heatmap_palette:
         st.session_state["analysis_heatmap_palette"] = selected_heatmap_palette
@@ -156,7 +159,7 @@ def render_sidebar_controls(
         help="SAMPLE 데이터에서는 비활성화됩니다." if not btn_states["recompute"] else "",
     )
 
-    st.caption(ui_labels.get("sidebar_title", "Sector Rotation"))
+    st.caption(ui_labels.get("sidebar_title", "섹터 로테이션"))
     return selected_market, asof_date, refresh_market, refresh_macro, recompute
 
 
@@ -178,13 +181,14 @@ def render_analysis_canvas(
     build_sector_detail_figure,
     resolve_range_from_preset,
     signal_lookup: dict[str, Any] | None = None,
+    ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
     with st.container(border=True):
         render_panel_header(
-            eyebrow="Sector comparison",
-            title="Monthly sector return",
-            description="Scan absolute monthly sector returns first. Clicking a cell pins the sector and month for the detail panel below.",
-            badge=format_cycle_phase_label(selected_cycle_phase),
+            eyebrow="섹터 비교",
+            title="월간 섹터 수익률",
+            description="절대 월간 섹터 수익률을 먼저 확인하세요. 셀 클릭 시 해당 섹터와 월이 아래 상세 패널에 고정됩니다.",
+            badge=format_cycle_phase_label(selected_cycle_phase, locale=ui_locale),
         )
         heatmap_fig = build_sector_strength_heatmap(
             heatmap_return_display,
@@ -192,9 +196,9 @@ def render_analysis_canvas(
             selected_month=str(st.session_state.get("selected_month", "")),
             theme_mode=theme_mode,
             palette=analysis_heatmap_palette,
-            title="Monthly sector return",
-            empty_message="No monthly sector return data is available for the active filters.",
-            helper_metric_label="monthly return",
+            title="월간 섹터 수익률",
+            empty_message="활성 필터에 해당하는 월간 섹터 수익률 데이터가 없습니다.",
+            helper_metric_label="월간 수익률",
             hover_value_suffix="%",
         )
         heatmap_event = st.plotly_chart(
@@ -209,10 +213,10 @@ def render_analysis_canvas(
 
     with st.container(border=True):
         render_panel_header(
-            eyebrow="Relative strength",
-            title=f"Monthly sector strength vs {benchmark_label}",
-            description=f"Read each cell as monthly excess return versus {benchmark_label}, using the same linked sector/month selection.",
-            badge=format_cycle_phase_label(selected_cycle_phase),
+            eyebrow="상대강도",
+            title=f"월간 섹터 강도 vs {benchmark_label}",
+            description=f"각 셀은 {benchmark_label} 대비 월간 초과 수익률입니다. 동일한 섹터/월 연동 선택을 사용합니다.",
+            badge=format_cycle_phase_label(selected_cycle_phase, locale=ui_locale),
         )
         strength_fig = build_sector_strength_heatmap(
             heatmap_strength_display,
@@ -220,9 +224,9 @@ def render_analysis_canvas(
             selected_month=str(st.session_state.get("selected_month", "")),
             theme_mode=theme_mode,
             palette=analysis_heatmap_palette,
-            title=f"Monthly sector strength vs {benchmark_label}",
-            empty_message=f"No monthly sector strength vs {benchmark_label} data is available for the active filters.",
-            helper_metric_label="monthly excess return",
+            title=f"월간 섹터 강도 vs {benchmark_label}",
+            empty_message=f"활성 필터에 해당하는 {benchmark_label} 대비 월간 섹터 강도 데이터가 없습니다.",
+            helper_metric_label="월간 초과 수익률",
             hover_value_suffix=f"%p vs {benchmark_label}",
         )
         strength_event = st.plotly_chart(
@@ -248,15 +252,16 @@ def render_analysis_canvas(
 
     with st.container(border=True):
         render_panel_header(
-            eyebrow="Cycle context",
-            title="Cycle timeline context",
-            description="Use early/late cycle filters to compress the heatmap and the detail chart down to a specific macro phase.",
+            eyebrow="사이클 맥락",
+            title="사이클 타임라인 맥락",
+            description="초기/후기 사이클 필터를 사용해 히트맵과 상세 차트를 특정 매크로 국면으로 압축하세요.",
             badge=current_regime,
         )
         chosen_cycle_phase = render_cycle_timeline_panel(
             segments=visible_segments,
             selected_cycle_phase=selected_cycle_phase,
             theme_mode=theme_mode,
+            locale=ui_locale,
         )
         if chosen_cycle_phase != selected_cycle_phase:
             st.session_state["selected_cycle_phase"] = chosen_cycle_phase
@@ -309,17 +314,18 @@ def render_analysis_canvas(
     )
 
     with st.container(border=True):
-        detail_badge = selected_sector or "No selection"
+        detail_badge = selected_sector or "선택 없음"
         detail_summary = None
         if signal_lookup and selected_sector in signal_lookup:
             detail_summary = describe_signal_decision(
                 signal_lookup[selected_sector],
                 st.session_state.get("held_sectors", []),
+                locale=ui_locale,
             )
         render_panel_header(
-            eyebrow="Linked detail",
-            title="Selected sector detail tracking",
-            description="Rank the sectors on the left, then compare the selected sector against the benchmark and the strongest peers on the right.",
+            eyebrow="연동 상세",
+            title="선택 섹터 상세 추적",
+            description="왼쪽에서 섹터 순위를 확인하고, 선택 섹터를 벤치마크 및 상위 섹터와 비교하세요.",
             badge=detail_badge,
         )
         chosen_sector, chosen_preset = render_sector_detail_panel(
@@ -328,6 +334,7 @@ def render_analysis_canvas(
             selected_sector=selected_sector,
             selected_range_preset=normalize_range_preset(st.session_state.get("selected_range_preset", "1Y")),
             detail_summary=detail_summary,
+            locale=ui_locale,
         )
         if chosen_sector and chosen_sector != selected_sector:
             st.session_state["selected_sector"] = chosen_sector
@@ -362,6 +369,7 @@ def render_decision_first_sections(
     action_options: list[str],
     is_mobile_client: bool,
     analysis_canvas_kwargs: dict[str, Any],
+    ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> tuple[list[str], str, bool, str, bool]:
     """Render the decision-first main-page stack and return the active filters."""
     render_decision_hero(
@@ -373,6 +381,7 @@ def render_decision_first_sections(
         fx_label=fx_label,
         is_provisional=is_provisional,
         theme_mode=theme_mode,
+        locale=ui_locale,
     )
     render_status_card_row(
         current_regime=current_regime,
@@ -380,15 +389,18 @@ def render_decision_first_sections(
         price_status=price_status,
         macro_status=macro_status,
         yield_curve_status=yield_curve_status,
+        locale=ui_locale,
     )
     held_sectors = render_investor_decision_boards(
         signals=signals,
         held_sector_options=held_sector_options,
+        locale=ui_locale,
     )
     filter_action, filter_regime_only, position_mode, show_alerted_only = render_top_bar_filters(
         current_regime=current_regime,
         action_options=action_options,
         is_mobile=is_mobile_client,
+        locale=ui_locale,
     )
     render_analysis_canvas(**analysis_canvas_kwargs)
     return held_sectors, filter_action, filter_regime_only, position_mode, show_alerted_only
@@ -410,6 +422,7 @@ def render_summary_tab(
     yield_curve_status: str | None,
     top_pick_signals: list[Any],
     signals_filtered: list[Any],
+    ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
     with tab:
         from src.ui.components import (
@@ -428,6 +441,7 @@ def render_summary_tab(
             fx_label=fx_label,
             is_provisional=is_provisional,
             theme_mode=theme_mode,
+            locale=ui_locale,
         )
         render_status_card_row(
             current_regime=current_regime,
@@ -435,30 +449,32 @@ def render_summary_tab(
             price_status=price_status,
             macro_status=macro_status,
             yield_curve_status=yield_curve_status,
+            locale=ui_locale,
         )
 
         with st.container(border=True):
             render_panel_header(
-                eyebrow="Priority board",
-                title="Top picks",
-                description="The highest-ranked sectors after the active filters.",
-                badge=f"{min(5, len(top_pick_signals))} shown",
+                eyebrow="우선순위 보드",
+                title="상위 추천",
+                description="활성 필터 적용 후 가장 높은 순위의 섹터입니다.",
+                badge=f"{min(5, len(top_pick_signals))}개 표시",
             )
             render_top_picks_table(
                 top_pick_signals,
                 held_sectors=st.session_state.get("held_sectors", []),
                 limit=5,
+                locale=ui_locale,
             )
 
         st.divider()
         st.subheader("액션 분포")
         with st.container(border=True):
             render_panel_header(
-                eyebrow="Breadth",
-                title="Action distribution",
-                description="See how the filtered universe spreads across the action ladder.",
+                eyebrow="폭",
+                title="액션 분포",
+                description="필터 적용 후 유니버스가 액션 사다리에 걸쳐 어떻게 분포하는지 확인하세요.",
             )
-            render_action_summary(signals_filtered, theme_mode=theme_mode)
+            render_action_summary(signals_filtered, theme_mode=theme_mode, locale=ui_locale)
 
 
 def render_charts_tab(
@@ -476,9 +492,9 @@ def render_charts_tab(
         )
 
         render_panel_header(
-            eyebrow="Momentum map",
-            title="RS scatter and momentum bars",
-            description="Relative strength and RS gap panels use the same visual shell for easier scanning.",
+            eyebrow="모멘텀 맵",
+            title="RS 산점도 및 모멘텀 막대",
+            description="상대강도와 RS 이격도 패널은 동일한 시각적 구조를 사용해 비교가 쉽습니다.",
         )
         st.markdown(
             """
@@ -561,9 +577,9 @@ def render_charts_tab(
                 unsafe_allow_html=True,
             )
             render_panel_header(
-                eyebrow="Cross-section",
-                title="Return heatmap",
-                description="Compare multi-horizon sector returns with the same panel treatment used across the dashboard.",
+                eyebrow="횡단면",
+                title="수익률 히트맵",
+                description="대시보드 전체에서 사용하는 동일한 패널 구조로 복수 기간 섹터 수익률을 비교하세요.",
             )
             fig_heatmap = render_returns_heatmap(signals_filtered, theme_mode=theme_mode)
             st.plotly_chart(fig_heatmap, width="stretch")
@@ -585,17 +601,18 @@ def render_all_signals_tab(
     settings: dict[str, Any],
     fx_label: str,
     etf_map: dict[str, list] | None = None,
+    ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
     with tab:
         render_panel_header(
-            eyebrow="Full table",
-            title="All sector signals",
-            description="Native Streamlit grid with the same shell and filter feedback as the summary panels.",
+            eyebrow="전체 테이블",
+            title="전체 섹터 신호",
+            description="요약 패널과 동일한 구조와 필터 피드백을 사용하는 Streamlit 그리드입니다.",
         )
         from src.ui.components import render_signal_table
 
         st.caption(
-            f"적용 필터: 액션={filter_action_global}, "
+            f"적용 필터: 액션={get_action_filter_label(filter_action_global, ui_locale)}, "
             f"현재 국면만 보기={'ON' if filter_regime_only_global else 'OFF'}"
         )
         with st.expander("적합/비적합 판정 기준", expanded=False):
@@ -637,6 +654,7 @@ def render_all_signals_tab(
             show_alerted_only=show_alerted_only,
             theme_mode=theme_mode,
             etf_map=etf_map,
+            locale=ui_locale,
         )
 
 
@@ -789,6 +807,7 @@ def render_dashboard_tabs(
     settings: dict[str, Any],
     is_mobile_client: bool,
     sector_map: dict[str, Any] | None = None,
+    ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
     etf_map = _build_etf_map(sector_map)
     tab_summary, tab_charts, tab_all_signals, tab_screening = st.tabs([
@@ -812,6 +831,7 @@ def render_dashboard_tabs(
         yield_curve_status=yield_curve_status,
         top_pick_signals=top_pick_signals,
         signals_filtered=signals_filtered,
+        ui_locale=ui_locale,
     )
     render_charts_tab(
         tab=tab_charts,
@@ -832,6 +852,7 @@ def render_dashboard_tabs(
         settings=settings,
         fx_label=fx_label,
         etf_map=etf_map,
+        ui_locale=ui_locale,
     )
     render_screening_tab(
         tab=tab_screening,

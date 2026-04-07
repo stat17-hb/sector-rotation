@@ -717,3 +717,64 @@ def _cached_signals(
         )
 
     return signals, macro_result, price_status, macro_status, market_blocking_error
+
+
+get_all_sector_codes = _all_sector_codes
+build_market_refresh_notice = _build_market_refresh_notice
+build_macro_refresh_notice = _build_macro_refresh_notice
+cached_analysis_sector_prices = _cached_analysis_sector_prices
+cached_api_preflight = _cached_api_preflight
+cached_macro = _cached_macro
+cached_sector_prices = _cached_sector_prices
+cached_signals = _cached_signals
+is_mobile_client = _is_mobile_client
+get_krx_provider_configured = _krx_provider_configured
+get_krx_provider_effective = _krx_provider_effective
+load_api_key = _load_api_key
+load_analysis_sector_prices_from_cache = _load_analysis_sector_prices_from_cache
+get_macro_artifact_key = _macro_artifact_key
+get_macro_cache_token = _macro_cache_token
+maybe_schedule_startup_krx_warm = _maybe_schedule_startup_krx_warm
+get_market_range_strings = _market_range_strings
+get_openapi_cache_fallback_note = _openapi_cache_fallback_note
+get_parquet_key = _parquet_key
+get_price_artifact_key = _price_artifact_key
+get_price_cache_token = _price_cache_token
+probe_macro_status = _probe_macro_status
+probe_market_status = _probe_market_status
+render_dashboard_status_banner = _render_dashboard_status_banner
+resolve_market_end_date = _resolve_market_end_date
+get_secrets_mtime_ns = _secrets_mtime_ns
+show_notice_toast = _show_notice_toast
+
+
+__all__ = [
+    "build_macro_refresh_notice",
+    "build_market_refresh_notice",
+    "cached_analysis_sector_prices",
+    "cached_api_preflight",
+    "cached_macro",
+    "cached_sector_prices",
+    "cached_signals",
+    "configure_dashboard_env",
+    "get_all_sector_codes",
+    "get_krx_provider_configured",
+    "get_krx_provider_effective",
+    "get_macro_artifact_key",
+    "get_macro_cache_token",
+    "get_market_range_strings",
+    "get_openapi_cache_fallback_note",
+    "get_parquet_key",
+    "get_price_artifact_key",
+    "get_price_cache_token",
+    "get_secrets_mtime_ns",
+    "is_mobile_client",
+    "load_analysis_sector_prices_from_cache",
+    "load_api_key",
+    "maybe_schedule_startup_krx_warm",
+    "probe_macro_status",
+    "probe_market_status",
+    "render_dashboard_status_banner",
+    "resolve_market_end_date",
+    "show_notice_toast",
+]

@@ -293,3 +293,31 @@ def _top_pick_sort_key(signal: Any) -> tuple[int, float]:
     rs_div = _rs_divergence_pct(signal)
     rs_div_rank = -rs_div if not pd.isna(rs_div) else float("inf")
     return ACTION_PRIORITY.get(signal.action, 99), rs_div_rank
+
+
+build_cycle_segments = _build_cycle_segments
+build_heatmap_display = _build_heatmap_display
+build_monthly_return_views = _build_monthly_return_views
+build_monthly_sector_returns = _build_monthly_sector_returns
+build_prices_wide = _build_prices_wide
+build_sector_name_map = _build_sector_name_map
+extract_heatmap_selection = _extract_heatmap_selection
+filter_monthly_frame_for_analysis = _filter_monthly_frame_for_analysis
+filter_prices_for_phase = _filter_prices_for_phase
+rs_divergence_pct = _rs_divergence_pct
+top_pick_sort_key = _top_pick_sort_key
+
+
+__all__ = [
+    "build_cycle_segments",
+    "build_heatmap_display",
+    "build_monthly_return_views",
+    "build_monthly_sector_returns",
+    "build_prices_wide",
+    "build_sector_name_map",
+    "extract_heatmap_selection",
+    "filter_monthly_frame_for_analysis",
+    "filter_prices_for_phase",
+    "rs_divergence_pct",
+    "top_pick_sort_key",
+]

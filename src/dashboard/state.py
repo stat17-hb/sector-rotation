@@ -4,6 +4,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Iterable, Mapping, MutableMapping
 
+from src.ui.copy import ALL_ACTION_KEY, normalize_action_filter
+
 
 SESSION_DEFAULTS: dict[str, Any] = {
     "market_id": "KR",
@@ -55,7 +57,7 @@ def ensure_session_defaults(
     if "price_years" not in session_state:
         session_state["price_years"] = int(settings.get("price_years", 3))
     if "filter_action_global" not in session_state:
-        session_state["filter_action_global"] = all_action_option
+        session_state["filter_action_global"] = normalize_action_filter(all_action_option)
     if "filter_regime_only_global" not in session_state:
         session_state["filter_regime_only_global"] = False
     if "position_mode" not in session_state:
@@ -121,9 +123,11 @@ def normalize_session_state(
         session_state["analysis_heatmap_palette"] = analysis_heatmap_palette
 
     if session_state.get("filter_action_global") == "All":
-        session_state["filter_action_global"] = all_action_option
+        session_state["filter_action_global"] = ALL_ACTION_KEY
     elif "filter_action_global" not in session_state:
-        session_state["filter_action_global"] = all_action_option
+        session_state["filter_action_global"] = normalize_action_filter(all_action_option)
+    else:
+        session_state["filter_action_global"] = normalize_action_filter(session_state.get("filter_action_global"))
 
     position_mode = str(session_state.get("position_mode", "all")).strip().lower()
     if position_mode not in {"all", "held", "new"}:

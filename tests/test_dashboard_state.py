@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 from src.dashboard import state
+from src.ui.copy import ALL_ACTION_KEY
 
 
 def _normalize_range_preset(value: str | None) -> str:
@@ -22,7 +23,7 @@ def test_ensure_session_defaults_populates_missing_keys():
         settings={"epsilon": 0.2, "rs_ma_period": 21, "ma_fast": 10, "ma_slow": 50, "price_years": 4},
         theme_key="theme_mode",
         default_theme_mode="dark",
-        all_action_option="전체",
+        all_action_option=ALL_ACTION_KEY,
     )
     assert session["theme_mode"] == "dark"
     assert session["epsilon"] == 0.2
@@ -45,14 +46,29 @@ def test_normalize_session_state_repairs_legacy_values():
         theme_key="theme_mode",
         theme_mode="dark",
         heatmap_palette_options=("classic", "contrast"),
-        all_action_option="전체",
+        all_action_option=ALL_ACTION_KEY,
         normalize_range_preset=_normalize_range_preset,
     )
     assert palette == "classic"
     assert session["theme_mode"] == "dark"
-    assert session["filter_action_global"] == "전체"
+    assert session["filter_action_global"] == ALL_ACTION_KEY
     assert session["selected_range_preset"] == "ALL"
     assert session["position_mode"] == "all"
+
+
+def test_normalize_session_state_repairs_localized_all_filter_to_key():
+    session = {"filter_action_global": "전체"}
+
+    state.normalize_session_state(
+        session,
+        theme_key="theme_mode",
+        theme_mode="dark",
+        heatmap_palette_options=("classic",),
+        all_action_option=ALL_ACTION_KEY,
+        normalize_range_preset=_normalize_range_preset,
+    )
+
+    assert session["filter_action_global"] == ALL_ACTION_KEY
 
 
 def test_apply_analysis_toolbar_selection_updates_state_when_values_change():

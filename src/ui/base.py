@@ -12,20 +12,36 @@ import streamlit as st
 
 from config.theme import get_chart_tokens, get_signal_tokens
 from src.dashboard.metrics import compute_rs_divergence_pct
+from src.ui.copy import (
+    ALL_ACTION_KEY,
+    DEFAULT_UI_LOCALE,
+    UiLocale,
+    get_action_filter_label,
+    get_action_label,
+    get_all_action_label,
+    get_cycle_palette_items,
+    get_cycle_phase_label,
+    get_decision_label,
+    get_heatmap_palette_label,
+    get_position_mode_label,
+    get_range_preset_label,
+    get_regime_subtitle,
+    get_ui_text,
+    is_all_action_filter,
+    normalize_action_filter,
+)
 from src.ui.styles import (
     get_action_colors,
     get_plotly_template,
     get_theme_tokens,
 )
-ALL_ACTION_OPTION = "전체"
-LEGACY_ALL_ACTION_OPTIONS = {ALL_ACTION_OPTION, "All"}
-
-ACTION_LABELS: dict[str, str] = {
-    "Strong Buy": "[+] Strong Buy",
-    "Watch": "[~] Watch",
-    "Hold": "[=] Hold",
-    "Avoid": "[x] Avoid",
-    "N/A": "[-] N/A",
+ALL_ACTION_OPTION = get_all_action_label()
+LEGACY_ALL_ACTION_OPTIONS = {
+    ALL_ACTION_KEY,
+    ALL_ACTION_OPTION,
+    get_all_action_label("en"),
+    "All",
+    "전체",
 }
 
 ACTION_PRIORITY: dict[str, int] = {
@@ -37,27 +53,6 @@ ACTION_PRIORITY: dict[str, int] = {
 }
 
 POSITION_MODE_OPTIONS: tuple[str, ...] = ("all", "held", "new")
-POSITION_MODE_LABELS: dict[str, str] = {
-    "all": "All sectors",
-    "held": "Held positions",
-    "new": "New ideas",
-}
-
-HELD_DECISION_LABELS: dict[str, str] = {
-    "Strong Buy": "Add candidate",
-    "Watch": "Hold / monitor",
-    "Hold": "Reduce / rotate",
-    "Avoid": "Sell / exit review",
-    "N/A": "Data check",
-}
-
-NEW_DECISION_LABELS: dict[str, str] = {
-    "Strong Buy": "New buy candidate",
-    "Watch": "Watchlist",
-    "Hold": "Not a fresh buy",
-    "Avoid": "Avoid",
-    "N/A": "Data check",
-}
 
 HELD_ACTION_PRIORITY: dict[str, int] = {
     "Strong Buy": 0,
@@ -69,28 +64,12 @@ HELD_ACTION_PRIORITY: dict[str, int] = {
 
 NEW_ACTION_PRIORITY: dict[str, int] = dict(ACTION_PRIORITY)
 
-REGIME_SUBLABELS: dict[str, str] = {
-    "Recovery": "Early-cycle rebound",
-    "Expansion": "Risk-on growth phase",
-    "Slowdown": "Growth cooling",
-    "Contraction": "Defensive cycle",
-    "Indeterminate": "Signal mix is inconclusive",
-}
-
 RANGE_PRESET_MONTHS: dict[str, int | None] = {
     "1Y": 12,
     "3Y": 36,
     "5Y": 60,
     "ALL": None,
     "CUSTOM": None,
-}
-
-RANGE_PRESET_LABELS: dict[str, str] = {
-    "1Y": "1Y",
-    "3Y": "3Y",
-    "5Y": "5Y",
-    "ALL": "All",
-    "CUSTOM": "Custom",
 }
 
 LEGACY_RANGE_PRESET_MAP: dict[str, str] = {
@@ -112,18 +91,6 @@ CYCLE_PHASE_ORDER: list[str] = [
     "CONTRACTION_LATE",
 ]
 
-CYCLE_PHASE_LABELS: dict[str, str] = {
-    "ALL": "All phases",
-    "RECOVERY_EARLY": "Recovery / Early",
-    "RECOVERY_LATE": "Recovery / Late",
-    "EXPANSION_EARLY": "Expansion / Early",
-    "EXPANSION_LATE": "Expansion / Late",
-    "SLOWDOWN_EARLY": "Slowdown / Early",
-    "SLOWDOWN_LATE": "Slowdown / Late",
-    "CONTRACTION_EARLY": "Contraction / Early",
-    "CONTRACTION_LATE": "Contraction / Late",
-}
-
 CYCLE_REGIME_PALETTE_LABELS: list[tuple[str, str]] = [
     ("Recovery", "cycle-recovery"),
     ("Expansion", "cycle-expansion"),
@@ -133,33 +100,28 @@ CYCLE_REGIME_PALETTE_LABELS: list[tuple[str, str]] = [
 ]
 
 HEATMAP_PALETTE_OPTIONS: tuple[str, ...] = ("classic", "contrast", "blue_orange")
-HEATMAP_PALETTE_LABELS: dict[str, str] = {
-    "classic": "Classic red/green",
-    "contrast": "High-contrast red/green",
-    "blue_orange": "Blue/orange diverging",
-}
 
 
-def format_action_label(action: str) -> str:
+def format_action_label(action: str, locale: UiLocale = DEFAULT_UI_LOCALE) -> str:
     """Return explicit text for action status so color is never the only cue."""
-    return ACTION_LABELS.get(action, f"[?] {action}")
+    return get_action_label(action, locale)
 
 
-def format_cycle_phase_label(phase_key: str) -> str:
+def format_cycle_phase_label(phase_key: str, locale: UiLocale = DEFAULT_UI_LOCALE) -> str:
     """Return the user-facing label for a cycle phase selection key."""
-    return CYCLE_PHASE_LABELS.get(str(phase_key), str(phase_key))
+    return get_cycle_phase_label(str(phase_key), locale)
 
 
-def format_range_preset_label(preset: str) -> str:
+def format_range_preset_label(preset: str, locale: UiLocale = DEFAULT_UI_LOCALE) -> str:
     """Return the compact display label for a range preset."""
     normalized = normalize_range_preset(preset)
-    return RANGE_PRESET_LABELS.get(normalized, normalized)
+    return get_range_preset_label(normalized, locale)
 
 
-def format_heatmap_palette_label(palette: str) -> str:
+def format_heatmap_palette_label(palette: str, locale: UiLocale = DEFAULT_UI_LOCALE) -> str:
     """Return the user-facing label for a heatmap palette preset."""
     normalized = normalize_heatmap_palette(palette)
-    return HEATMAP_PALETTE_LABELS.get(normalized, normalized)
+    return get_heatmap_palette_label(normalized, locale)
 
 
 def normalize_position_mode(value: str | None) -> str:
@@ -168,10 +130,10 @@ def normalize_position_mode(value: str | None) -> str:
     return normalized if normalized in POSITION_MODE_OPTIONS else "all"
 
 
-def format_position_mode_label(value: str) -> str:
+def format_position_mode_label(value: str, locale: UiLocale = DEFAULT_UI_LOCALE) -> str:
     """Return the user-facing label for a position-mode key."""
     normalized = normalize_position_mode(value)
-    return POSITION_MODE_LABELS.get(normalized, normalized)
+    return get_position_mode_label(normalized, locale)
 
 
 def normalize_range_preset(preset: str | None) -> str:
@@ -256,7 +218,7 @@ def _safe_float(value: float | int | None) -> float | None:
 
 
 def _is_all_action_filter(value: str | None) -> bool:
-    return str(value).strip() in LEGACY_ALL_ACTION_OPTIONS
+    return is_all_action_filter(value)
 
 
 def _pct_value(value: float | int | None) -> float | None:
@@ -304,12 +266,16 @@ def is_signal_held(signal, held_sectors: Sequence[str] | None = None) -> bool:
     return bool(sector_name) and sector_name in held
 
 
-def describe_signal_decision(signal, held_sectors: Sequence[str] | None = None) -> dict[str, object]:
+def describe_signal_decision(
+    signal,
+    held_sectors: Sequence[str] | None = None,
+    *,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> dict[str, object]:
     """Return reusable decision-copy fields for one signal."""
     held = is_signal_held(signal, held_sectors)
     action = str(getattr(signal, "action", "N/A"))
-    decision_labels = HELD_DECISION_LABELS if held else NEW_DECISION_LABELS
-    decision = decision_labels.get(action, "Data check")
+    decision = get_decision_label(action, held=held, locale=locale)
 
     rs_div = _rs_divergence_pct(signal)
     ret_3m = _pct_value(getattr(signal, "returns", {}).get("3M"))
@@ -318,50 +284,62 @@ def describe_signal_decision(signal, held_sectors: Sequence[str] | None = None) 
 
     positive_parts: list[str] = []
     if bool(getattr(signal, "macro_fit", False)):
-        positive_parts.append("Regime fit")
+        positive_parts.append(get_ui_text("reason_regime_fit", locale))
     if rs_div is not None:
-        positive_parts.append(f"RS {rs_div:+.1f}% vs trend")
+        positive_parts.append(get_ui_text("reason_rs_vs_trend", locale, value=rs_div))
     if bool(getattr(signal, "trend_ok", False)):
-        positive_parts.append("Trend intact")
+        positive_parts.append(get_ui_text("reason_trend_intact", locale))
     if ret_3m is not None:
-        positive_parts.append(f"3M {ret_3m:+.1f}%")
-    reason = " | ".join(positive_parts[:3]) if positive_parts else "Need more confirming strength"
+        positive_parts.append(get_ui_text("reason_return_3m", locale, value=ret_3m))
+    reason = " | ".join(positive_parts[:3]) if positive_parts else get_ui_text("reason_need_confirming_strength", locale)
 
     risk_parts: list[str] = []
     if not bool(getattr(signal, "macro_fit", False)):
-        risk_parts.append("Regime mismatch")
+        risk_parts.append(get_ui_text("risk_regime_mismatch", locale))
     if rs_div is not None and rs_div < 0:
-        risk_parts.append(f"RS {rs_div:+.1f}% below trend")
+        risk_parts.append(get_ui_text("risk_rs_below_trend", locale, value=rs_div))
     if not bool(getattr(signal, "trend_ok", False)):
-        risk_parts.append("Trend weakened")
+        risk_parts.append(get_ui_text("risk_trend_weakened", locale))
     if volatility is not None and volatility >= 25.0:
-        risk_parts.append(f"20D vol {volatility:.1f}%")
+        risk_parts.append(get_ui_text("risk_volatility", locale, value=volatility))
     risk_parts.extend(alerts[:2])
     deduped_risks: list[str] = []
     for item in risk_parts:
         if item and item not in deduped_risks:
             deduped_risks.append(item)
-    risk = " | ".join(deduped_risks[:3]) if deduped_risks else "No major risk flags"
+    risk = " | ".join(deduped_risks[:3]) if deduped_risks else get_ui_text("risk_none", locale)
 
     if action == "N/A":
-        invalidation = "Wait for benchmark and sector price coverage."
+        invalidation = get_ui_text("invalid_wait_for_data", locale)
     elif bool(getattr(signal, "macro_fit", False)) and bool(getattr(signal, "trend_ok", False)):
-        invalidation = "Invalidate if regime fit breaks or RS falls below trend."
+        invalidation = get_ui_text("invalid_break_regime_fit", locale)
     elif bool(getattr(signal, "macro_fit", False)):
-        invalidation = "Invalidate if RS remains below trend through the next review."
+        invalidation = get_ui_text("invalid_rs_below_trend", locale)
     elif held:
-        invalidation = "Invalidate if regime mismatch persists and stronger rotations appear."
+        invalidation = get_ui_text("invalid_regime_mismatch_persists", locale)
     else:
-        invalidation = "Promote only after regime fit and RS trend both improve."
+        invalidation = get_ui_text("invalid_promote_after_improve", locale)
 
-    rs_trend = "Above trend" if rs_div is not None and rs_div >= 0 else "Below trend" if rs_div is not None else "N/A"
+    rs_trend = (
+        get_ui_text("rs_trend_above", locale)
+        if rs_div is not None and rs_div >= 0
+        else get_ui_text("rs_trend_below", locale)
+        if rs_div is not None
+        else "N/A"
+    )
     return_3m = f"{ret_3m:+.1f}%" if ret_3m is not None else "N/A"
     volatility_20d = f"{volatility:.1f}%" if volatility is not None else "N/A"
-    alerts_text = ", ".join(alerts) if alerts else "None"
-    regime_fit = "Fit" if bool(getattr(signal, "macro_fit", False)) else "Mismatch"
-    conclusion = (
-        f"{decision} | Regime: {regime_fit} | RS trend: {rs_trend} | "
-        f"3M: {return_3m} | Volatility: {volatility_20d} | Alerts: {alerts_text}"
+    alerts_text = ", ".join(alerts) if alerts else get_ui_text("alerts_none", locale)
+    regime_fit = get_ui_text("regime_fit_yes", locale) if bool(getattr(signal, "macro_fit", False)) else get_ui_text("regime_fit_no", locale)
+    conclusion = get_ui_text(
+        "conclusion_template",
+        locale,
+        decision=decision,
+        regime_fit=regime_fit,
+        rs_trend=rs_trend,
+        return_3m=return_3m,
+        volatility_20d=volatility_20d,
+        alerts_text=alerts_text,
     )
 
     return {
@@ -435,25 +413,26 @@ __all__ = [
     "get_action_colors",
     "get_plotly_template",
     "get_theme_tokens",
+    "UiLocale",
+    "DEFAULT_UI_LOCALE",
+    "ALL_ACTION_KEY",
     "ALL_ACTION_OPTION",
     "LEGACY_ALL_ACTION_OPTIONS",
-    "ACTION_LABELS",
     "ACTION_PRIORITY",
     "POSITION_MODE_OPTIONS",
-    "POSITION_MODE_LABELS",
-    "HELD_DECISION_LABELS",
-    "NEW_DECISION_LABELS",
     "HELD_ACTION_PRIORITY",
     "NEW_ACTION_PRIORITY",
-    "REGIME_SUBLABELS",
     "RANGE_PRESET_MONTHS",
-    "RANGE_PRESET_LABELS",
     "LEGACY_RANGE_PRESET_MAP",
     "CYCLE_PHASE_ORDER",
-    "CYCLE_PHASE_LABELS",
     "CYCLE_REGIME_PALETTE_LABELS",
     "HEATMAP_PALETTE_OPTIONS",
-    "HEATMAP_PALETTE_LABELS",
+    "get_action_filter_label",
+    "get_all_action_label",
+    "get_cycle_palette_items",
+    "get_regime_subtitle",
+    "get_ui_text",
+    "normalize_action_filter",
     "format_action_label",
     "format_cycle_phase_label",
     "format_position_mode_label",

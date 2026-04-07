@@ -20,6 +20,8 @@ __pycache__/
 .coverage
 .coverage.*
 htmlcov/
+pytest_*.txt
+streamlit_smoke.log
 
 # Local temporary logs and scratch files
 .tmp*

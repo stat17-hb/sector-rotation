@@ -29,6 +29,7 @@ class DashboardContext:
     openapi_key_present: bool
     theme_mode: str
     analysis_heatmap_palette: str
+    ui_locale: str
 
 
 @dataclass

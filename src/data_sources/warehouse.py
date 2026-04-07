@@ -54,7 +54,8 @@ class _CachedROConn:
                         self._conn.close()
                     except Exception:
                         pass
-                self._conn = duckdb.connect(str(WAREHOUSE_PATH), read_only=True)
+                connect_kwargs = {"read_only": True} if WAREHOUSE_PATH.exists() else {}
+                self._conn = duckdb.connect(str(WAREHOUSE_PATH), **connect_kwargs)
                 self._mtime = current_mtime
         return _NoopCloseConn(self._conn)
 

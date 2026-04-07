@@ -6,8 +6,8 @@ import pytest
 import app as app_module
 
 from src.signals.matrix import SectorSignal
+from src.ui.copy import ALL_ACTION_KEY
 from src.ui.components import (
-    ALL_ACTION_OPTION,
     HEATMAP_PALETTE_OPTIONS,
     build_sector_detail_figure,
     build_sector_strength_heatmap,
@@ -254,7 +254,7 @@ def test_render_action_summary_handles_empty_signal_list(monkeypatch):
 
     render_action_summary([], theme_mode="dark")
 
-    assert info_calls == ["No signal data available."]
+    assert info_calls == ["신호 데이터가 없습니다."]
     assert not chart_calls
 
 
@@ -278,7 +278,7 @@ def test_render_top_bar_filters_returns_selected_state(monkeypatch):
     )
     monkeypatch.setattr(
         "src.ui.components.st.selectbox",
-        lambda _label, options, key: session_state.__setitem__(key, options[1]),
+        lambda _label, options, key, **kwargs: session_state.__setitem__(key, options[1]),
     )
     monkeypatch.setattr(
         "src.ui.components.st.toggle",
@@ -295,7 +295,7 @@ def test_render_top_bar_filters_returns_selected_state(monkeypatch):
 
     action, regime_only, position_mode, alerted_only = render_top_bar_filters(
         current_regime="Recovery",
-        action_options=[ALL_ACTION_OPTION, "Strong Buy", "Watch"],
+        action_options=[ALL_ACTION_KEY, "Strong Buy", "Watch"],
         is_mobile=False,
     )
 
@@ -326,6 +326,20 @@ def test_render_decision_hero_renders_regime_and_provisional_badge(monkeypatch):
     assert markdown_calls
     assert "decision-hero" in markdown_calls[0]
     assert "Recovery" in markdown_calls[0]
+    assert "잠정 매크로 데이터 포함" in markdown_calls[0]
+
+    markdown_calls.clear()
+    render_decision_hero(
+        regime="Recovery",
+        regime_is_confirmed=False,
+        growth_val=101.25,
+        inflation_val=2.1,
+        fx_change=1.4,
+        is_provisional=True,
+        theme_mode="light",
+        locale="en",
+    )
+
     assert "Includes provisional macro prints" in markdown_calls[0]
 
 
@@ -344,6 +358,19 @@ def test_render_status_card_row_renders_card_markup(monkeypatch):
 
     assert markdown_calls
     assert "status-card-grid" in markdown_calls[0]
+    assert "수익률 곡선" in markdown_calls[0]
+    assert "역전" in markdown_calls[0]
+
+    markdown_calls.clear()
+    render_status_card_row(
+        current_regime="Recovery",
+        regime_is_confirmed=True,
+        price_status="LIVE",
+        macro_status="CACHED",
+        yield_curve_status="Inverted",
+        locale="en",
+    )
+
     assert "Yield curve" in markdown_calls[0]
     assert "Inverted" in markdown_calls[0]
 
@@ -353,13 +380,16 @@ def test_describe_signal_decision_changes_by_held_state():
 
     held_view = describe_signal_decision(signal, ["Sector A"])
     new_view = describe_signal_decision(signal, [])
+    english_view = describe_signal_decision(signal, ["Sector A"], locale="en")
 
     assert held_view["held"] is True
-    assert held_view["decision"] == "Add candidate"
-    assert "Regime fit" in held_view["reason"]
+    assert held_view["decision"] == "추가 매수 후보"
+    assert "국면 적합" in held_view["reason"]
     assert held_view["alerts_text"] == "Overheat"
     assert new_view["held"] is False
-    assert new_view["decision"] == "New buy candidate"
+    assert new_view["decision"] == "신규 매수 후보"
+    assert english_view["decision"] == "Add candidate"
+    assert "Regime fit" in english_view["reason"]
 
 
 def test_render_top_picks_table_uses_native_dataframe_and_limit(monkeypatch):
@@ -396,6 +426,12 @@ def test_render_top_picks_table_uses_native_dataframe_and_limit(monkeypatch):
     ]
     assert len(df) == 5
     assert "column_config" in kwargs
+    assert any("상위 5개" in text for text in caption_calls)
+
+    caption_calls.clear()
+    dataframe_calls.clear()
+    render_top_picks_table(signals, held_sectors=["Sector 0"], limit=5, locale="en")
+
     assert any("Showing top 5 of 6" in text for text in caption_calls)
 
 
@@ -431,9 +467,9 @@ def test_render_signal_table_uses_native_dataframe_and_applies_filters(monkeypat
     df, kwargs = dataframe_calls[0]
     assert kwargs.get("width") == "stretch"
     assert len(df) == 1
-    assert df.iloc[0]["Action"] == "[~] Watch"
+    assert df.iloc[0]["Action"] == "[~] 관망 (Watch)"
     assert bool(df.iloc[0]["Held"]) is True
-    assert df.iloc[0]["Decision"] == "Hold / monitor"
+    assert df.iloc[0]["Decision"] == "유지 / 모니터링"
     assert bool(df.iloc[0]["In Regime"]) is True
     assert "column_config" in kwargs
     assert set(kwargs["column_config"]) == {
@@ -453,6 +489,22 @@ def test_render_signal_table_uses_native_dataframe_and_applies_filters(monkeypat
         "Alerts",
     }
 
+    dataframe_calls.clear()
+    render_signal_table(
+        signals,
+        filter_action="Watch",
+        filter_regime_only=True,
+        current_regime="Recovery",
+        held_sectors=["Sector A"],
+        position_mode="held",
+        show_alerted_only=False,
+        locale="en",
+    )
+
+    df, _ = dataframe_calls[0]
+    assert df.iloc[0]["Action"] == "[~] Watch"
+    assert df.iloc[0]["Decision"] == "Hold / monitor"
+
 
 def test_render_signal_table_handles_empty_after_filters(monkeypatch):
     info_calls: list[str] = []
@@ -464,6 +516,17 @@ def test_render_signal_table_handles_empty_after_filters(monkeypatch):
         filter_action="Avoid",
         filter_regime_only=False,
         current_regime="Recovery",
+    )
+
+    assert info_calls == ["활성 필터 조건에 맞는 섹터가 없습니다."]
+
+    info_calls.clear()
+    render_signal_table(
+        [_signal("A", "Watch", 1.10, 1.00, macro_regime="Recovery")],
+        filter_action="Avoid",
+        filter_regime_only=False,
+        current_regime="Recovery",
+        locale="en",
     )
 
     assert info_calls == ["No sectors match the active filters."]
@@ -490,6 +553,18 @@ def test_render_signal_table_accepts_legacy_english_all_filter(monkeypatch):
     assert len(dataframe_calls) == 1
     df, _ = dataframe_calls[0]
     assert len(df) == 1
+    assert df.iloc[0]["Action"] == "[~] 관망 (Watch)"
+
+    dataframe_calls.clear()
+    render_signal_table(
+        [_signal("A", "Watch", 1.10, 1.00, macro_regime="Recovery")],
+        filter_action="All",
+        filter_regime_only=False,
+        current_regime="Recovery",
+        locale="en",
+    )
+
+    df, _ = dataframe_calls[0]
     assert df.iloc[0]["Action"] == "[~] Watch"
 
 
@@ -570,8 +645,10 @@ def test_heatmap_palette_helpers_normalize_and_label_presets():
     assert normalize_heatmap_palette("contrast") == "contrast"
     assert normalize_heatmap_palette("BLUE_ORANGE") == "blue_orange"
     assert normalize_heatmap_palette("unknown") == "classic"
-    assert format_heatmap_palette_label("classic") == "Classic red/green"
-    assert format_heatmap_palette_label("contrast") == "High-contrast red/green"
+    assert format_heatmap_palette_label("classic") == "기본 빨강/초록"
+    assert format_heatmap_palette_label("contrast") == "고대비 빨강/초록"
+    assert format_heatmap_palette_label("classic", locale="en") == "Classic red/green"
+    assert format_heatmap_palette_label("contrast", locale="en") == "High-contrast red/green"
 
 
 def test_get_analysis_heatmap_colorscale_returns_distinct_presets():
@@ -743,13 +820,33 @@ def test_render_cycle_timeline_panel_returns_selected_phase(monkeypatch):
     assert len(chart_calls) == 1
     assert chart_calls[0][1]["width"] == "stretch"
     fig = chart_calls[0][0]
-    assert fig.layout.title.text == "Cycle timeline (monthly)"
+    assert fig.layout.title.text == "사이클 타임라인 (월별)"
     assert fig.layout.xaxis.tickformat == "%Y-%m"
     assert fig.layout.xaxis.dtick == "M1"
     assert len(fig.data) == 2
     assert all(getattr(trace, "fill", "") == "toself" for trace in fig.data)
-    assert fig.data[0].fillcolor != fig.data[1].fillcolor
-    assert fig.data[0].line.width != fig.data[1].line.width
+
+    chart_calls.clear()
+    phase = render_cycle_timeline_panel(
+        segments=[
+            {
+                "phase_key": "RECOVERY_EARLY",
+                "label": "Recovery / Early",
+                "start": pd.Timestamp("2024-01-31"),
+                "end": pd.Timestamp("2024-06-30"),
+                "summary": "Top sector: Tech (+8.0%)",
+                "is_current": False,
+            }
+        ],
+        selected_cycle_phase="ALL",
+        theme_mode="dark",
+        locale="en",
+    )
+
+    assert phase == "SLOWDOWN_LATE"
+    fig = chart_calls[0][0]
+    assert fig.layout.title.text == "Cycle timeline (monthly)"
+    assert len(fig.data) == 1
     assert "Status:" in fig.data[0].hovertemplate
 
 

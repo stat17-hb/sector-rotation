@@ -4,15 +4,20 @@ from __future__ import annotations
 from src.ui.base import *
 
 
-def _empty_top_pick_message(position_mode: str, held_sectors: Sequence[str] | None = None) -> str:
+def _empty_top_pick_message(
+    position_mode: str,
+    held_sectors: Sequence[str] | None = None,
+    *,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> str:
     normalized = normalize_position_mode(position_mode)
     if normalized == "held" and not list(held_sectors or []):
-        return "Add held sectors first to enable portfolio action recommendations."
+        return get_ui_text("top_picks_empty_held_missing", locale)
     if normalized == "held":
-        return "No held sectors match the current decision rules."
+        return get_ui_text("top_picks_empty_held", locale)
     if normalized == "new":
-        return "No new-buy ideas match the current decision rules."
-    return "No sectors match the current filter set."
+        return get_ui_text("top_picks_empty_new", locale)
+    return get_ui_text("top_picks_empty_all", locale)
 
 
 def render_top_picks_table(
@@ -22,6 +27,7 @@ def render_top_picks_table(
     position_mode: str = "all",
     limit: int = 5,
     include_held: bool = True,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
 ) -> None:
     """Render a compact top-picks table using Streamlit's native dataframe."""
     filtered = filter_signals_for_display(
@@ -30,13 +36,13 @@ def render_top_picks_table(
         position_mode=position_mode,
     )
     if not filtered:
-        st.info(_empty_top_pick_message(position_mode, held_sectors))
+        st.info(_empty_top_pick_message(position_mode, held_sectors, locale=locale))
         return
 
     rows: list[dict[str, object]] = []
     filtered = sorted(filtered, key=lambda signal: signal_display_sort_key(signal, held_sectors))
     for rank, signal in enumerate(list(filtered)[:limit], start=1):
-        thesis = describe_signal_decision(signal, held_sectors)
+        thesis = describe_signal_decision(signal, held_sectors, locale=locale)
         row = {
             "Rank": rank,
             "Sector": signal.sector_name + (" *" if signal.is_provisional else ""),
@@ -54,17 +60,17 @@ def render_top_picks_table(
     df_display = pd.DataFrame(rows)
     height = 76 + len(df_display) * 35
     column_config: dict[str, object] = {
-        "Rank": st.column_config.NumberColumn("Rank", format="%d", width="small"),
-        "Sector": st.column_config.TextColumn("Sector", width="medium"),
-        "Decision": st.column_config.TextColumn("Decision", width="medium"),
-        "Reason": st.column_config.TextColumn("Reason", width="large"),
-        "Risk": st.column_config.TextColumn("Risk", width="large"),
-        "Invalidation": st.column_config.TextColumn("Invalidation", width="large"),
-        "3M": st.column_config.NumberColumn("3M", format="%.1f%%"),
-        "Alerts": st.column_config.TextColumn("Alerts", width="medium"),
+        "Rank": st.column_config.NumberColumn(get_ui_text("col_rank", locale), format="%d", width="small"),
+        "Sector": st.column_config.TextColumn(get_ui_text("col_sector", locale), width="medium"),
+        "Decision": st.column_config.TextColumn(get_ui_text("col_decision", locale), width="medium"),
+        "Reason": st.column_config.TextColumn(get_ui_text("col_reason", locale), width="large"),
+        "Risk": st.column_config.TextColumn(get_ui_text("col_risk", locale), width="large"),
+        "Invalidation": st.column_config.TextColumn(get_ui_text("col_invalidation", locale), width="large"),
+        "3M": st.column_config.NumberColumn(get_ui_text("period_3m", locale), format="%.1f%%"),
+        "Alerts": st.column_config.TextColumn(get_ui_text("col_alerts", locale), width="medium"),
     }
     if include_held:
-        column_config["Held"] = st.column_config.CheckboxColumn("Held", width="small")
+        column_config["Held"] = st.column_config.CheckboxColumn(get_ui_text("col_held", locale), width="small")
     st.dataframe(
         df_display,
         width="stretch",
@@ -74,9 +80,9 @@ def render_top_picks_table(
     )
 
     if len(filtered) > limit:
-        st.caption(f"Showing top {limit} of {len(filtered)} matching sectors.")
+        st.caption(get_ui_text("top_picks_showing", locale, total=len(filtered), limit=limit))
     if any(getattr(signal, "is_provisional", False) for signal in filtered):
-        st.caption("* Includes sectors influenced by provisional macro data.")
+        st.caption(get_ui_text("provisional_caption", locale))
 
 def _format_etfs(etfs: list) -> str:
     """Format ETF list as 'NAME (CODE) / NAME (CODE)'."""
@@ -95,12 +101,13 @@ def render_signal_table(
     show_alerted_only: bool = False,
     theme_mode: str = "dark",
     etf_map: dict | None = None,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
 ) -> None:
     """Render the full signal table using Streamlit's native dataframe."""
     del theme_mode  # native dataframe rendering does not need a theme argument
 
     if not signals:
-        st.info("No signal data available.")
+        st.info(get_ui_text("signals_empty", locale))
         return
 
     filtered = filter_signals_for_display(
@@ -114,21 +121,21 @@ def render_signal_table(
     )
 
     if not filtered:
-        st.info("No sectors match the active filters.")
+        st.info(get_ui_text("signals_filtered_empty", locale))
         return
 
     filtered = sorted(filtered, key=lambda signal: signal_display_sort_key(signal, held_sectors))
 
     rows: list[dict[str, object]] = []
     for signal in filtered:
-        thesis = describe_signal_decision(signal, held_sectors)
+        thesis = describe_signal_decision(signal, held_sectors, locale=locale)
         alerts = thesis["alerts_text"]
         row: dict[str, object] = {
             "Sector": signal.sector_name + (" *" if signal.is_provisional else ""),
             "Held": bool(thesis["held"]),
             "Decision": thesis["decision"],
             "In Regime": bool(signal.macro_fit),
-            "Action": format_action_label(signal.action),
+            "Action": format_action_label(signal.action, locale=locale),
             "ETF": _format_etfs((etf_map or {}).get(signal.index_code, [])),
             "Reason": thesis["reason"],
             "Invalidation": thesis["invalidation"],
@@ -149,22 +156,22 @@ def render_signal_table(
         hide_index=True,
         height=height,
         column_config={
-            "Sector": st.column_config.TextColumn("Sector", width="medium"),
-            "Held": st.column_config.CheckboxColumn("Held", width="small"),
-            "Decision": st.column_config.TextColumn("Decision", width="medium"),
-            "In Regime": st.column_config.CheckboxColumn("In Regime", width="small"),
-            "Action": st.column_config.TextColumn("Action", width="small"),
-            "ETF": st.column_config.TextColumn("매수 ETF", width="medium"),
-            "Reason": st.column_config.TextColumn("Reason", width="large"),
-            "Invalidation": st.column_config.TextColumn("Invalidation", width="large"),
+            "Sector": st.column_config.TextColumn(get_ui_text("col_sector", locale), width="medium"),
+            "Held": st.column_config.CheckboxColumn(get_ui_text("col_held", locale), width="small"),
+            "Decision": st.column_config.TextColumn(get_ui_text("col_decision", locale), width="medium"),
+            "In Regime": st.column_config.CheckboxColumn(get_ui_text("col_in_regime", locale), width="small"),
+            "Action": st.column_config.TextColumn(get_ui_text("col_action", locale), width="small"),
+            "ETF": st.column_config.TextColumn(get_ui_text("col_etf", locale), width="medium"),
+            "Reason": st.column_config.TextColumn(get_ui_text("col_reason", locale), width="large"),
+            "Invalidation": st.column_config.TextColumn(get_ui_text("col_invalidation", locale), width="large"),
             "RSI": st.column_config.NumberColumn("RSI", format="%.1f"),
-            "1M": st.column_config.NumberColumn("1M", format="%.1f%%"),
-            "3M": st.column_config.NumberColumn("3M", format="%.1f%%"),
-            "Volatility": st.column_config.NumberColumn("Volatility", format="%.1f%%"),
-            "MDD (3M)": st.column_config.NumberColumn("MDD (3M)", format="%.1f%%"),
-            "Alerts": st.column_config.TextColumn("Alerts", width="large"),
+            "1M": st.column_config.NumberColumn(get_ui_text("period_1m", locale), format="%.1f%%"),
+            "3M": st.column_config.NumberColumn(get_ui_text("period_3m", locale), format="%.1f%%"),
+            "Volatility": st.column_config.NumberColumn(get_ui_text("col_volatility", locale), format="%.1f%%"),
+            "MDD (3M)": st.column_config.NumberColumn(get_ui_text("col_mdd_3m", locale), format="%.1f%%"),
+            "Alerts": st.column_config.TextColumn(get_ui_text("col_alerts", locale), width="large"),
         },
     )
 
     if any(signal.is_provisional for signal in filtered):
-        st.caption("* Includes sectors influenced by provisional macro data.")
+        st.caption(get_ui_text("provisional_caption", locale))

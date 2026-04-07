@@ -33,15 +33,15 @@ def render_rs_scatter(
         texts.append(signal.sector_name.split(" ")[-1])
         colors.append(action_colors.get(signal.action, tokens["text_muted"]))
         hovers.append(
-            "<b>{}</b><br>Action: {}<br>RS: {:.4f}<br>RS MA: {:.4f}<br>RSI(D): {:.1f}<br>"
-            "Trend: {}<br>Alerts: {}".format(
+            "<b>{}</b><br>액션: {}<br>RS: {:.4f}<br>RS MA: {:.4f}<br>RSI(D): {:.1f}<br>"
+            "추세: {}<br>알림: {}".format(
                 html.escape(signal.sector_name),
                 html.escape(signal.action),
                 rs,
                 rs_ma,
                 float(signal.rsi_d),
-                "Healthy" if signal.trend_ok else "Weakening",
-                html.escape(", ".join(signal.alerts) or "None"),
+                "양호" if signal.trend_ok else "약화",
+                html.escape(", ".join(signal.alerts) or "없음"),
             )
         )
 
@@ -83,7 +83,7 @@ def render_rs_scatter(
         )
     else:
         fig.add_annotation(
-            text="No valid RS / RS MA points are available. Check benchmark coverage first.",
+            text="유효한 RS / RS MA 데이터가 없습니다. 벤치마크 커버리지를 먼저 확인하세요.",
             x=0.5,
             y=0.5,
             xref="paper",
@@ -94,7 +94,7 @@ def render_rs_scatter(
 
     fig.update_layout(
         **template,
-        title="Relative Strength versus RS Moving Average",
+        title="상대강도 (RS) vs RS 이동평균",
         xaxis_title="RS",
         yaxis_title="RS MA",
         height=height,
@@ -169,8 +169,8 @@ def render_rs_momentum_bar(signals: Sequence, theme_mode: str = "dark") -> go.Fi
     fig.add_vline(x=0, line=dict(color=tokens["border"], width=1.5))
     fig.update_layout(
         **template,
-        title="RS gap by sector",
-        xaxis_title="RS gap (%)",
+        title="섹터별 RS 이격도",
+        xaxis_title="RS 이격도 (%)",
         yaxis_title="",
         height=max(300, len(filtered_sorted) * 36 + 80),
         showlegend=False,
@@ -200,7 +200,7 @@ def render_returns_heatmap(signals: Sequence, theme_mode: str = "dark") -> go.Fi
 
     if not sector_names:
         fig = go.Figure()
-        fig.update_layout(**template, title="No return data available")
+        fig.update_layout(**template, title="수익률 데이터 없음")
         return fig
 
     fig = go.Figure(
@@ -221,7 +221,7 @@ def render_returns_heatmap(signals: Sequence, theme_mode: str = "dark") -> go.Fi
     )
     fig.update_layout(
         **template,
-        title="Multi-period return heatmap (%)",
+        title="복수 기간 수익률 히트맵 (%)",
         height=max(300, len(sector_names) * 40),
     )
     return fig
@@ -272,7 +272,7 @@ def build_sector_strength_heatmap(
     theme_mode: str = "dark",
     palette: str = "classic",
     title: str = "Monthly sector return",
-    empty_message: str = "No monthly sector return data is available for the active filters.",
+    empty_message: str = "활성 필터에 해당하는 월간 섹터 수익률 데이터가 없습니다.",
     helper_metric_label: str = "monthly return",
     hover_value_suffix: str = "%",
 ) -> go.Figure:
@@ -428,6 +428,7 @@ def render_cycle_timeline_panel(
     segments: Sequence[Mapping[str, object]],
     selected_cycle_phase: str,
     theme_mode: str = "dark",
+    locale: UiLocale = DEFAULT_UI_LOCALE,
 ) -> str:
     """Render cycle chips plus a full-width regime timeline card."""
     template = get_plotly_template(theme_mode)
@@ -440,19 +441,19 @@ def render_cycle_timeline_panel(
             f"<span>{html.escape(label)}</span>"
             "</span>"
         )
-        for label, css_class in CYCLE_REGIME_PALETTE_LABELS
+        for label, css_class in get_cycle_palette_items(locale)
     )
 
     st.markdown('<div class="phase-chip-row"></div>', unsafe_allow_html=True)
     st.markdown(
-        f'<div class="cycle-palette"><span class="cycle-palette__label">Cycle palette</span>{palette_markup}</div>',
+        f'<div class="cycle-palette"><span class="cycle-palette__label">{html.escape(get_ui_text("cycle_palette_label", locale))}</span>{palette_markup}</div>',
         unsafe_allow_html=True,
     )
     selected_phase = st.segmented_control(
-        "Cycle phase",
+        get_ui_text("cycle_phase_control", locale),
         options=CYCLE_PHASE_ORDER,
         default=selected_cycle_phase if selected_cycle_phase in CYCLE_PHASE_ORDER else "ALL",
-        format_func=format_cycle_phase_label,
+        format_func=lambda value: format_cycle_phase_label(value, locale=locale),
         selection_mode="single",
         key="cycle_phase_segmented_control",
         label_visibility="collapsed",
@@ -462,7 +463,7 @@ def render_cycle_timeline_panel(
     fig = go.Figure()
     if not segments:
         fig.add_annotation(
-            text="No regime history is available for the selected window.",
+            text=get_ui_text("cycle_empty_message", locale),
             x=0.5,
             y=0.5,
             xref="paper",
@@ -470,7 +471,7 @@ def render_cycle_timeline_panel(
             showarrow=False,
             font={"size": 13, "color": tokens["text"]},
         )
-        fig.update_layout(**template, title="Cycle timeline (monthly)", height=240)
+        fig.update_layout(**template, title=get_ui_text("cycle_title", locale), height=240)
         fig.update_xaxes(title="", type="date", tickformat="%Y-%m", dtick="M1", tickangle=-45)
         st.plotly_chart(fig, width="stretch", config={"displayModeBar": False})
         return str(selected_phase or "ALL")
@@ -493,13 +494,13 @@ def render_cycle_timeline_panel(
             phase_styles["INDETERMINATE"],
         )
         if phase_key == "INDETERMINATE":
-            segment_state = "Indeterminate"
+            segment_state = get_ui_text("cycle_status_indeterminate", locale)
         elif is_selected:
-            segment_state = "Selected"
+            segment_state = get_ui_text("cycle_status_selected", locale)
         elif is_current:
-            segment_state = "Current"
+            segment_state = get_ui_text("cycle_status_current", locale)
         else:
-            segment_state = "Context"
+            segment_state = get_ui_text("cycle_status_context", locale)
         line_width = 4 if is_selected else 3 if is_current else 1.25
         line_color = (
             tokens["text"]
@@ -526,12 +527,12 @@ def render_cycle_timeline_panel(
                     f"{html.escape(label_text)}"
                     "<br>%{customdata[0]} -> %{customdata[1]}"
                     "<br>%{customdata[2]}"
-                    "<br>Status: %{customdata[3]}<extra></extra>"
+                    f"<br>{html.escape(get_ui_text('cycle_status_label', locale))}: %{{customdata[3]}}<extra></extra>"
                 ),
                 customdata=[[
                     start.strftime("%Y-%m"),
                     end.strftime("%Y-%m"),
-                    str(segment.get("summary", "No sector summary available.")),
+                    str(segment.get("summary", get_ui_text("cycle_summary_missing", locale))),
                     segment_state,
                 ]] * 5,
                 name=label_text,
@@ -553,7 +554,7 @@ def render_cycle_timeline_panel(
 
     fig.update_layout(
         **template,
-        title="Cycle timeline (monthly)",
+        title=get_ui_text("cycle_title", locale),
         height=270,
     )
     fig.update_layout(margin=dict(l=24, r=24, t=52, b=82))
@@ -588,7 +589,7 @@ def build_sector_detail_figure(
     fig = go.Figure()
     if series_df.empty or selected_sector not in series_df.columns:
         fig.add_annotation(
-            text="No sector detail data is available for the current selection.",
+            text="현재 선택에 대한 섹터 상세 데이터가 없습니다.",
             x=0.5,
             y=0.5,
             xref="paper",
@@ -596,7 +597,7 @@ def build_sector_detail_figure(
             showarrow=False,
             font={"size": 13, "color": tokens["text"]},
         )
-        fig.update_layout(**template, title="Selected sector detail", height=360)
+        fig.update_layout(**template, title="선택 섹터 상세", height=360)
         return fig
 
     compare_order: list[str] = []
@@ -640,7 +641,7 @@ def build_sector_detail_figure(
                     y=selected_points[selected_sector],
                     mode="markers",
                     marker=dict(color=tokens["primary"], size=8, line=dict(color=tokens["surface"], width=1)),
-                    name="Pinned month",
+                    name="선택 월",
                     showlegend=False,
                     hovertemplate=f"{html.escape(selected_sector)}<br>%{{x|%Y-%m-%d}}: %{{y:.2f}}<extra></extra>",
                 )
@@ -648,11 +649,11 @@ def build_sector_detail_figure(
 
     fig.update_layout(
         **template,
-        title="Selected sector detail",
+        title="선택 섹터 상세",
         height=400,
     )
     fig.update_layout(margin=dict(l=48, r=20, t=58, b=48))
     fig.update_layout(legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0))
-    fig.update_yaxes(title="Indexed performance")
+    fig.update_yaxes(title="인덱스 성과")
     fig.update_xaxes(title="")
     return fig

@@ -5,3 +5,4 @@ fx_shock_pct: 3.0
 yield_curve_long: "treasury_10y"
 yield_curve_short: "treasury_2y"
 use_adaptive_epsilon: false
+ui_locale: ko
