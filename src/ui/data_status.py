@@ -74,6 +74,22 @@ def resolve_price_cache_banner_case(
 
     provider = str(provider_mode or "").strip().upper()
     if provider != "OPENAPI":
+        warm = dict(warm_status or {})
+        warm_state = str(warm.get("status", "")).strip().upper()
+        warm_end = _normalize_yyyymmdd(warm.get("end") or warm.get("watermark_key"))
+        requested_end = _normalize_yyyymmdd(market_end_date_str)
+        coverage_complete = bool(warm.get("coverage_complete"))
+        failed_days = _normalize_string_list(warm.get("failed_days"))
+        failed_codes = _normalize_string_map(warm.get("failed_codes"))
+        if (
+            warm_state in {"LIVE", "CACHED"}
+            and coverage_complete
+            and warm_end
+            and warm_end == requested_end
+            and not failed_days
+            and not failed_codes
+        ):
+            return "fresh_cache"
         return "pykrx_cache_fallback"
     if not openapi_key_present:
         return "missing_openapi_key"

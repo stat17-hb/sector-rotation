@@ -51,7 +51,7 @@ def _build_prices_wide(
 ) -> pd.DataFrame:
     """Pivot long sector prices into a wide trade-date index frame."""
     if sector_prices.empty:
-        return pd.DataFrame()
+        return pd.DataFrame(index=pd.DatetimeIndex([]))
 
     prices_reset = sector_prices.reset_index().copy()
     date_col = sector_prices.index.name or "trade_date"

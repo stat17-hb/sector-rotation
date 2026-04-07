@@ -95,13 +95,47 @@ class TestDataStatus:
         assert case == "missing_openapi_key"
 
     def test_resolve_price_cache_banner_case_pykrx_fallback(self):
-        """PYKRX cached paths should not be mislabeled as OpenAPI failure."""
+        """PYKRX with incomplete coverage should still return pykrx_cache_fallback."""
         case = resolve_price_cache_banner_case(
             price_status="CACHED",
             provider_mode="PYKRX",
             openapi_key_present=False,
             market_end_date_str="20260306",
             warm_status={},
+        )
+        assert case == "pykrx_cache_fallback"
+
+    def test_resolve_price_cache_banner_case_pykrx_fresh_cache(self):
+        """PYKRX with complete coverage and matching end date should return fresh_cache."""
+        case = resolve_price_cache_banner_case(
+            price_status="CACHED",
+            provider_mode="PYKRX",
+            openapi_key_present=False,
+            market_end_date_str="20260306",
+            warm_status={
+                "status": "CACHED",
+                "coverage_complete": True,
+                "end": "20260306",
+                "failed_days": [],
+                "failed_codes": {},
+            },
+        )
+        assert case == "fresh_cache"
+
+    def test_resolve_price_cache_banner_case_pykrx_fallback_on_failed_codes(self):
+        """PYKRX with failed codes should still return pykrx_cache_fallback."""
+        case = resolve_price_cache_banner_case(
+            price_status="CACHED",
+            provider_mode="PYKRX",
+            openapi_key_present=False,
+            market_end_date_str="20260306",
+            warm_status={
+                "status": "CACHED",
+                "coverage_complete": True,
+                "end": "20260306",
+                "failed_days": [],
+                "failed_codes": {"1028": "empty response"},
+            },
         )
         assert case == "pykrx_cache_fallback"
 
