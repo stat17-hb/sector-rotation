@@ -197,6 +197,90 @@ def _configured_benchmark_code() -> str:
     return "1001"
 
 
+def _reference_dates_for_frame(
+    frame: pd.DataFrame,
+    index_codes: list[str],
+    *,
+    reference_code: str = "",
+) -> pd.Index:
+    """Return the aligned date index for the chosen reference code within a price frame."""
+    if frame.empty or "index_code" not in frame.columns:
+        return pd.Index([])
+
+    requested_codes = [str(code).strip() for code in index_codes if str(code).strip()]
+    if not requested_codes:
+        return pd.Index([])
+
+    resolved_reference = str(reference_code or "").strip()
+    reference = (
+        frame[frame["index_code"].astype(str) == resolved_reference]
+        if resolved_reference
+        else pd.DataFrame()
+    )
+    if reference.empty:
+        for code in requested_codes:
+            reference = frame[frame["index_code"].astype(str) == code]
+            if not reference.empty:
+                break
+    if reference.empty:
+        return pd.Index([])
+
+    expected_dates = pd.Index(reference.index.unique()).sort_values()
+    return expected_dates if not expected_dates.empty else pd.Index([])
+
+
+def _frame_has_aligned_code_dates(
+    frame: pd.DataFrame,
+    index_codes: list[str],
+    *,
+    reference_code: str = "",
+) -> bool:
+    """Return True when all requested codes share the same date axis."""
+    requested_codes = [str(code).strip() for code in index_codes if str(code).strip()]
+    if not requested_codes:
+        return False
+
+    expected_dates = _reference_dates_for_frame(
+        frame,
+        requested_codes,
+        reference_code=reference_code,
+    )
+    if expected_dates.empty:
+        return False
+
+    for code in requested_codes:
+        code_dates = pd.Index(frame[frame["index_code"].astype(str) == code].index.unique())
+        if len(code_dates) != len(expected_dates):
+            return False
+        if not code_dates.sort_values().equals(expected_dates):
+            return False
+    return True
+
+
+def _frame_is_usable_stale_warehouse_cache(
+    frame: pd.DataFrame,
+    index_codes: list[str],
+    *,
+    start: str,
+    reference_code: str = "",
+) -> bool:
+    """Return True when warehouse cache covers the requested start and stays date-aligned."""
+    if not _frame_has_aligned_code_dates(frame, index_codes, reference_code=reference_code):
+        return False
+
+    expected_dates = _reference_dates_for_frame(
+        frame,
+        index_codes,
+        reference_code=reference_code,
+    )
+    if expected_dates.empty:
+        return False
+
+    requested_start = pd.Timestamp(start).normalize()
+    earliest_date = pd.Timestamp(expected_dates.min()).normalize()
+    return earliest_date <= requested_start
+
+
 def _warehouse_coverage_complete(index_codes: list[str], start: str, end: str) -> bool:
     """Validate warehouse coverage using benchmark dates when available."""
     frame = read_market_prices(index_codes, start, end)
@@ -207,18 +291,14 @@ def _warehouse_coverage_complete(index_codes: list[str], start: str, end: str) -
     reference_code = _configured_benchmark_code()
     if reference_code not in requested_codes:
         reference_code = requested_codes[0] if requested_codes else ""
-
-    reference = frame[frame["index_code"].astype(str) == reference_code]
-    if reference.empty:
-        for code in requested_codes:
-            reference = frame[frame["index_code"].astype(str) == code]
-            if not reference.empty:
-                reference_code = code
-                break
-    if reference.empty:
+    if not _frame_has_aligned_code_dates(frame, requested_codes, reference_code=reference_code):
         return False
 
-    expected_dates = pd.Index(reference.index.unique()).sort_values()
+    expected_dates = _reference_dates_for_frame(
+        frame,
+        requested_codes,
+        reference_code=reference_code,
+    )
     if expected_dates.empty:
         return False
 
@@ -744,6 +824,66 @@ def _filter_sector_price_result(
     filtered = result[~result["index_code"].astype(str).isin(excluded)].copy()
     filtered.index = pd.DatetimeIndex(filtered.index)
     return filtered
+
+
+def _is_warehouse_write_lock_error(exc: RuntimeError) -> bool:
+    """Return True when a warehouse write failed because another process holds the lock."""
+    lowered = str(exc).lower()
+    return (
+        "cannot acquire write lock on warehouse.duckdb" in lowered
+        or "file is already open" in lowered
+    )
+
+
+def _try_import_raw_cache_to_warehouse(
+    validated: pd.DataFrame,
+    *,
+    start: str,
+    end: str,
+) -> bool:
+    """Best-effort write-back for raw-cache imports used by interactive reads."""
+    try:
+        _sync_index_dimension(sorted(validated["index_code"].astype(str).unique().tolist()))
+        upsert_market_prices(validated, provider="WAREHOUSE_MIGRATION")
+        if not (CURATED_DIR / "sector_prices.parquet").exists():
+            _persist_curated_sector_prices(validated)
+        export_market_parquet()
+        update_ingest_watermark(
+            dataset="market_prices",
+            watermark_key=end,
+            status="CACHED",
+            coverage_complete=True,
+            provider="WAREHOUSE_MIGRATION",
+            details={"reason": "raw_cache_import"},
+        )
+        record_ingest_run(
+            dataset="market_prices",
+            reason="raw_cache_import",
+            provider="WAREHOUSE_MIGRATION",
+            requested_start=start,
+            requested_end=end,
+            status="CACHED",
+            coverage_complete=True,
+            failed_days=[],
+            failed_codes={},
+            delta_keys=[],
+            row_count=int(len(validated)),
+            summary={
+                "status": "CACHED",
+                "coverage_complete": True,
+                "rows": int(len(validated)),
+                "reason": "raw_cache_import",
+            },
+        )
+    except RuntimeError as exc:
+        if not _is_warehouse_write_lock_error(exc):
+            raise
+        logger.warning(
+            "Serving raw-cache-backed market data without warehouse write-back because the warehouse is locked: %s",
+            exc,
+        )
+        return False
+    return True
 
 
 def _collect_raw_cache_state(
@@ -1401,6 +1541,13 @@ def load_sector_prices(
             "Detected contaminated raw cache during load for codes=%s; bypassing cache-only fast path",
             ",".join(contaminated_codes),
         )
+    filtered_warehouse = _filter_sector_price_result(warehouse_cached, contaminated_codes)
+    usable_stale_warehouse = _frame_is_usable_stale_warehouse_cache(
+        filtered_warehouse,
+        cache_safe_codes,
+        start=start,
+        reference_code=coverage_code,
+    )
 
     has_all_cache_slices = (not contaminated_codes) and bool(live_codes) and all(
         raw_state[code]["has_slice"] and not raw_state[code]["has_older_gap"]
@@ -1411,52 +1558,25 @@ def load_sector_prices(
         cached_result = _build_result_from_raw_frames(raw_frames, live_codes, start, end)
         if not cached_result.empty:
             validated = _validate_sector_prices(cached_result)
-            _sync_index_dimension(sorted(validated["index_code"].astype(str).unique().tolist()))
-            upsert_market_prices(validated, provider="WAREHOUSE_MIGRATION")
-            if not (CURATED_DIR / "sector_prices.parquet").exists():
-                _persist_curated_sector_prices(validated)
-            export_market_parquet()
-            update_ingest_watermark(
-                dataset="market_prices",
-                watermark_key=end,
-                status="CACHED",
-                coverage_complete=True,
-                provider="WAREHOUSE_MIGRATION",
-                details={"reason": "raw_cache_import"},
-            )
-            record_ingest_run(
-                dataset="market_prices",
-                reason="raw_cache_import",
-                provider="WAREHOUSE_MIGRATION",
-                requested_start=start,
-                requested_end=end,
-                status="CACHED",
-                coverage_complete=True,
-                failed_days=[],
-                failed_codes={},
-                delta_keys=[],
-                row_count=int(len(validated)),
-                summary={
-                    "status": "CACHED",
-                    "coverage_complete": True,
-                    "rows": int(len(validated)),
-                    "reason": "raw_cache_import",
-                },
-            )
-            logger.info(
-                "Loaded %d codes from raw cache and imported them into DuckDB",
-                len(live_codes),
-            )
+            imported = _try_import_raw_cache_to_warehouse(validated, start=start, end=end)
+            if imported:
+                logger.info(
+                    "Loaded %d codes from raw cache and imported them into DuckDB",
+                    len(live_codes),
+                )
+            else:
+                logger.info(
+                    "Loaded %d codes from raw cache without warehouse write-back",
+                    len(live_codes),
+                )
             return ("CACHED", validated)
 
     if provider_mode == "OPENAPI" and not get_krx_openapi_key():
         logger.warning(
             "KRX provider is OPENAPI but KRX_OPENAPI_KEY is missing; falling back to cache."
         )
-        if not warehouse_cached.empty:
-            filtered_warehouse = _filter_sector_price_result(warehouse_cached, contaminated_codes)
-            if not filtered_warehouse.empty:
-                return ("CACHED", _validate_sector_prices(filtered_warehouse))
+        if not filtered_warehouse.empty:
+            return ("CACHED", _validate_sector_prices(filtered_warehouse))
         cached = _load_curated_sector_prices()
         if not cached.empty:
             filtered_cached = _filter_sector_price_result(cached, contaminated_codes)
@@ -1472,6 +1592,13 @@ def load_sector_prices(
     if provider_mode == "OPENAPI":
         predicted_requests = _predict_openapi_requests(live_codes, start, end)
         if predicted_requests > INTERACTIVE_OPENAPI_REQUEST_LIMIT:
+            if usable_stale_warehouse:
+                logger.warning(
+                    "Interactive OpenAPI request budget exceeded (%d > %d); serving aligned warehouse cache instead.",
+                    predicted_requests,
+                    INTERACTIVE_OPENAPI_REQUEST_LIMIT,
+                )
+                return ("CACHED", _validate_sector_prices(filtered_warehouse))
             raise KRXInteractiveRangeLimitError(
                 "Interactive OpenAPI refresh would require "
                 f"{predicted_requests} snapshot requests, exceeding the limit of "

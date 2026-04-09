@@ -2506,3 +2506,27 @@ Review:
 - `python -m streamlit run app.py --server.headless true --server.port 8524` stayed running until timeout and was then stopped manually, indicating successful headless startup.
 - Residual risks / follow-ups:
 - Sidebar and explanatory copy still contain some legacy KR-specific strings in portions of `src/dashboard/tabs.py`; the core market toggle, benchmark labels, provider dispatch, and signal pipeline are already market-aware, but a second pass on presentation copy would improve polish.
+
+## 66) KRX market-data blocking recurrence hardening (2026-04-09)
+
+Pre-Implementation Check-in:
+- 2026-04-09: prevent recurrent `BLOCKED` market-data failures when `OPENAPI` interactive loads exceed the request budget but usable local warehouse cache already exists.
+- Scope: add stale-but-usable warehouse fallback for oversized OPENAPI ranges, split blocked-banner copy by root cause, make raw-cache import write-back best-effort under DuckDB write locks, and add focused regression tests.
+
+Execution Checklist:
+- [x] Add stale warehouse fallback helpers and oversized-range fallback behavior to `src/data_sources/krx_indices.py`.
+- [x] Make raw-cache import write-back best-effort so read paths do not fail on warehouse write locks.
+- [x] Differentiate blocked market-data banner copy for range-limit vs access-denied causes in `src/ui/data_status.py`.
+- [x] Add regression tests for oversized-range fallback, write-lock tolerance, and blocked-banner classification.
+- [x] Run `py_compile` and targeted `pytest`, then record results below.
+
+Review:
+- `src/data_sources/krx_indices.py` now reuses frame-based date-axis helpers to distinguish complete warehouse coverage from stale-but-usable warehouse fallback; oversized `OPENAPI` interactive loads return `CACHED` instead of raising `KRXInteractiveRangeLimitError` when the local warehouse still has an aligned start-covered slice.
+- The raw-cache import branch now uses best-effort warehouse write-back. If `_sync_index_dimension`, `upsert_market_prices`, or subsequent warehouse writes hit the known DuckDB write-lock `RuntimeError`, the loader logs a warning and still returns the cached frame instead of failing the read path.
+- `src/ui/data_status.py` was rewritten as clean UTF-8 and now separates blocked-banner copy into `range_limit`, `access_denied`, and neutral fallback cases while preserving the existing cache/sample/banner priority order.
+- Added regression coverage in `tests/test_integration.py` for stale warehouse oversized-range fallback and raw-cache write-lock tolerance, and in `tests/test_data_status.py` for range-limit vs access-denied blocked-banner copy.
+- Verification:
+- `python -m py_compile src/data_sources/krx_indices.py src/ui/data_status.py tests/test_integration.py tests/test_data_status.py`
+- `pytest tests/test_integration.py -q` -> `27 passed in 5.85s`
+- `pytest tests/test_data_status.py -q` -> `16 passed in 0.45s`
+- `rg -n "�|\?곗|\?꾨|\?쒖|\?ㅽ" src/ui/data_status.py tests/test_data_status.py` -> no matches

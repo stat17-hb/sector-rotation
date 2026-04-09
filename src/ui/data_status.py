@@ -15,6 +15,7 @@ PriceCacheBannerCase = Literal[
     "missing_openapi_key",
     "pykrx_cache_fallback",
 ]
+BlockedBannerCase = Literal["range_limit", "access_denied", "other"]
 
 
 class DashboardStatusBanner(TypedDict):
@@ -155,6 +156,28 @@ def _summarize_warm_failures(warm_status: Mapping[str, Any] | None) -> list[str]
     return details
 
 
+def _classify_market_blocking_error(market_blocking_error: str) -> BlockedBannerCase:
+    detail = str(market_blocking_error or "").strip().lower()
+    if not detail:
+        return "other"
+
+    if (
+        "snapshot requests" in detail
+        or "exceeding the limit" in detail
+        or "use the warm script" in detail
+    ):
+        return "range_limit"
+
+    if (
+        "access denied" in detail
+        or "permission denied" in detail
+        or "forbidden" in detail
+    ):
+        return "access_denied"
+
+    return "other"
+
+
 def resolve_dashboard_status_banner(
     *,
     data_status: Mapping[str, str],
@@ -171,10 +194,25 @@ def resolve_dashboard_status_banner(
     warm_details = _summarize_warm_failures(price_warm_status)
 
     if price_status == "BLOCKED" and market_blocking_error:
+        blocked_case = _classify_market_blocking_error(market_blocking_error)
+        if blocked_case == "range_limit":
+            return {
+                "level": "error",
+                "title": "시장 데이터 범위 제한",
+                "message": "대화형 시장 데이터 새로고침 범위를 초과했습니다. warm 스크립트로 미리 채우거나 로컬 캐시를 사용하세요.",
+                "details": [market_blocking_error],
+            }
+        if blocked_case == "access_denied":
+            return {
+                "level": "error",
+                "title": "시장 데이터 접근 차단",
+                "message": "시장 데이터 새로고침이 차단되었습니다. 권한 또는 공급자 상태를 확인하세요.",
+                "details": [market_blocking_error],
+            }
         return {
             "level": "error",
-            "title": "시장 데이터 접근 차단",
-            "message": "시장 데이터 새로고침이 차단되었습니다. 권한 또는 공급자 상태를 확인하세요.",
+            "title": "시장 데이터 새로고침 실패",
+            "message": "시장 데이터 새로고침을 완료하지 못했습니다. 상세 오류를 확인하세요.",
             "details": [market_blocking_error],
         }
 
@@ -205,7 +243,7 @@ def resolve_dashboard_status_banner(
     if price_cache_case == "retryable_cache_fallback":
         details = [
             "시장 데이터는 현재 로컬 warehouse cache를 사용 중입니다.",
-            "잠시 후 새로고침을 다시 시도하거나 현재 캐시로 계속 진행할 수 있습니다.",
+            "일시적 문제일 수 있으므로 새로고침을 다시 시도하거나 현재 캐시로 계속 진행할 수 있습니다.",
         ]
         details.extend(warm_details)
         return {
@@ -219,10 +257,10 @@ def resolve_dashboard_status_banner(
         return {
             "level": "warning",
             "title": "시장 데이터 캐시 사용 중",
-            "message": "pykrx 경로가 실시간 응답을 반환하지 않아 캐시를 사용하고 있습니다.",
+            "message": "pykrx 경로가 실시간 응답을 안정적으로 반환하지 않아 캐시를 사용하고 있습니다.",
             "details": [
-                "pykrx는 인증 세션 상태에 따라 응답이 불안정할 수 있습니다.",
-                "가능하면 OPENAPI 경로를 사용하거나 나중에 다시 시도하세요.",
+                "pykrx는 외부 응답 상태에 따라 결과가 불안정할 수 있습니다.",
+                "가능하면 OPENAPI 경로를 사용하거나 잠시 후 다시 시도하세요.",
             ],
         }
 
@@ -232,7 +270,7 @@ def resolve_dashboard_status_banner(
         return {
             "level": "warning",
             "title": "매크로 데이터 캐시 사용 중",
-            "message": "매크로 공급자 최신 응답을 확인하지 못해 캐시 데이터를 보여주고 있습니다.",
+            "message": "매크로 공급자의 최신 응답을 확인하지 못해 캐시 데이터를 보여주고 있습니다.",
             "details": details,
         }
 
@@ -240,7 +278,7 @@ def resolve_dashboard_status_banner(
         return {
             "level": "info",
             "title": "API 사전 점검 참고",
-            "message": "일부 엔드포인트 연결 상태를 확인하지 못했지만 현재 화면은 계속 사용할 수 있습니다.",
+            "message": "일부 외부 데이터 소스의 연결 상태를 확인하지 못했지만 현재 화면은 계속 사용할 수 있습니다.",
             "details": preflight_details,
         }
 

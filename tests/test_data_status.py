@@ -1,8 +1,6 @@
 """Pure function tests for data_status module."""
 from __future__ import annotations
 
-import pytest
-
 from src.ui.data_status import (
     get_button_states,
     is_sample_mode,
@@ -153,7 +151,7 @@ class TestDataStatus:
         assert banner["level"] == "error"
         assert banner["title"] == "SAMPLE 데이터 모드"
 
-    def test_resolve_dashboard_status_banner_prefers_blocked_over_general_warning(self):
+    def test_resolve_dashboard_status_banner_prefers_access_denied_blocked_banner(self):
         banner = resolve_dashboard_status_banner(
             data_status={"price": "BLOCKED", "macro": "LIVE"},
             market_blocking_error="Access denied",
@@ -166,7 +164,23 @@ class TestDataStatus:
         assert banner is not None
         assert banner["level"] == "error"
         assert banner["title"] == "시장 데이터 접근 차단"
+        assert "권한" in banner["message"]
         assert "Access denied" in banner["details"][0]
+
+    def test_resolve_dashboard_status_banner_maps_range_limit_to_specific_copy(self):
+        banner = resolve_dashboard_status_banner(
+            data_status={"price": "BLOCKED", "macro": "LIVE"},
+            market_blocking_error=(
+                "Interactive OpenAPI refresh would require 1568 snapshot requests, "
+                "exceeding the limit of 60. Use the warm script for large backfills."
+            ),
+        )
+
+        assert banner is not None
+        assert banner["level"] == "error"
+        assert banner["title"] == "시장 데이터 범위 제한"
+        assert "권한" not in banner["message"]
+        assert "warm" in banner["message"]
 
     def test_resolve_dashboard_status_banner_uses_single_missing_key_message(self):
         banner = resolve_dashboard_status_banner(

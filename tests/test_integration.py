@@ -156,6 +156,42 @@ class TestIntegration:
         assert not result.empty
         assert result["close"].tolist() == [100.0, 101.0, 102.0, 103.0, 104.0]
 
+    def test_load_sector_prices_raw_cache_import_tolerates_warehouse_write_lock(self, tmp_path, monkeypatch):
+        """Raw-cache-backed reads should still return CACHED when warehouse write-back is locked."""
+        import src.data_sources.krx_indices as krx_mod
+
+        curated = tmp_path / "curated"
+        raw_dir = tmp_path / "raw"
+        monkeypatch.setattr(krx_mod, "CURATED_DIR", curated)
+        monkeypatch.setattr(krx_mod, "RAW_DIR", raw_dir)
+        monkeypatch.setattr(krx_mod, "get_krx_provider", lambda: "OPENAPI")
+        monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "OPENAPI_KEY")
+
+        idx = pd.date_range("2024-01-01", periods=5, freq="B")
+        raw_frame = pd.DataFrame({"close": [100.0, 101.0, 102.0, 103.0, 104.0]}, index=idx)
+        code_dir = raw_dir / "1001"
+        code_dir.mkdir(parents=True)
+        raw_frame.to_parquet(code_dir / "20240131.parquet")
+
+        monkeypatch.setattr(
+            krx_mod,
+            "fetch_index_ohlcv_openapi_batch_detailed",
+            lambda *a, **kw: (_ for _ in ()).throw(AssertionError("OpenAPI should not be called")),
+        )
+        monkeypatch.setattr(
+            krx_mod,
+            "_sync_index_dimension",
+            lambda *a, **kw: (_ for _ in ()).throw(
+                RuntimeError("Cannot acquire write lock on warehouse.duckdb")
+            ),
+        )
+
+        status, result = krx_mod.load_sector_prices(["1001"], "20240101", "20240105")
+
+        assert status == "CACHED"
+        assert not result.empty
+        assert result["close"].tolist() == [100.0, 101.0, 102.0, 103.0, 104.0]
+
     def test_detect_contaminated_raw_cache_codes_ignores_nonmatching_1170(self, tmp_path, monkeypatch):
         """Duplicate trailing series should flag only the contaminated KOSPI200 sector codes."""
         import src.data_sources.krx_indices as krx_mod
@@ -568,6 +604,41 @@ class TestIntegration:
 
         with pytest.raises(krx_mod.KRXInteractiveRangeLimitError):
             krx_mod.load_sector_prices(["1001", "5044"], "20240101", "20240430")
+
+    def test_load_sector_prices_uses_stale_warehouse_cache_for_oversized_openapi_range(self, tmp_path, monkeypatch):
+        """Aligned stale warehouse cache should prevent BLOCKED on oversized OPENAPI ranges."""
+        import src.data_sources.krx_indices as krx_mod
+
+        monkeypatch.setattr(krx_mod, "CURATED_DIR", tmp_path / "curated")
+        monkeypatch.setattr(krx_mod, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(krx_mod, "get_krx_provider", lambda: "OPENAPI")
+        monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "OPENAPI_KEY")
+
+        stale = _make_sector_prices_df(["1001", "5044"], n=75)
+        monkeypatch.setattr(krx_mod, "read_market_prices", lambda *args, **kwargs: stale)
+        monkeypatch.setattr(krx_mod, "is_market_coverage_complete", lambda *args, **kwargs: False)
+        monkeypatch.setattr(
+            krx_mod,
+            "_collect_raw_cache_state",
+            lambda *args, **kwargs: (
+                {},
+                {
+                    "1001": {"has_slice": False, "has_older_gap": False},
+                    "5044": {"has_slice": False, "has_older_gap": False},
+                },
+            ),
+        )
+        monkeypatch.setattr(
+            krx_mod,
+            "warm_sector_price_cache",
+            lambda *a, **kw: (_ for _ in ()).throw(AssertionError("warm should not run")),
+        )
+
+        status, result = krx_mod.load_sector_prices(["1001", "5044"], "20240101", "20240430")
+
+        assert status == "CACHED"
+        assert not result.empty
+        assert set(result["index_code"].astype(str).unique()) == {"1001", "5044"}
 
     def test_load_sector_prices_raises_access_denied_instead_of_cached_fallback(self, tmp_path, monkeypatch):
         """Interactive OpenAPI access denial should surface as a blocking error."""
