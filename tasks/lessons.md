@@ -60,3 +60,8 @@
 - Pattern: Streamlit app load hit a DuckDB write-lock error in US macro loading because `sync_provider_macro()` always called `upsert_macro_dimension()` before checking whether cached warehouse macro data already satisfied the request.
 - Rule: In warehouse-backed sync paths, never open a write connection on a cache-hit fast path; perform completeness checks using read-only calls first and only switch to write mode after a live refresh is actually required.
 - Rule: When fixing same-process DuckDB lock issues, add a regression test that proves the cached read path avoids both live fetches and dimension upserts.
+
+## 2026-04-09
+- Pattern: A KRX data-path change passed focused integration tests but still broke unrelated shared UI tests in CI because the final verification skipped full `pytest -q`.
+- Rule: Before pushing any change that touches shared UI exports or modules re-exported through compatibility barrels (for example `src/ui/components.py` -> `src/ui/tables.py`), always run full `pytest -q`, not only targeted tests.
+- Rule: When tests describe a renderer as using "native dataframe", keep the `st.dataframe` payload as a plain `DataFrame`; do not switch to `pandas.Styler` unless the test contract is intentionally updated in the same change.

@@ -2530,3 +2530,25 @@ Review:
 - `pytest tests/test_integration.py -q` -> `27 passed in 5.85s`
 - `pytest tests/test_data_status.py -q` -> `16 passed in 0.45s`
 - `rg -n "�|\?곗|\?꾨|\?쒖|\?ㅽ" src/ui/data_status.py tests/test_data_status.py` -> no matches
+
+## 67) CI failure recovery for UI table rendering (2026-04-09)
+
+Pre-Implementation Check-in:
+- 2026-04-09: GitHub Actions run `24193658102` failed in `tests/test_ui_components.py` after full `pytest -q`.
+- Scope: reproduce the exact failing tests locally, restore the expected `st.dataframe` / empty-state behavior in `src/ui/tables.py`, rerun relevant verification, and record the result.
+
+Execution Checklist:
+- [x] Reproduce the failing CI tests locally and isolate the UI regression in `src/ui/tables.py`.
+- [x] Restore `st.dataframe` native DataFrame usage and the expected empty-filter message path.
+- [x] Run targeted UI tests and full `pytest -q`.
+- [x] Record the root cause and verification results below.
+
+Review:
+- Root cause: `src/ui/tables.py` had drifted away from the "native dataframe" contract expected by `tests/test_ui_components.py`. `render_top_picks_table()` and `render_signal_table()` passed `pandas.Styler` objects into `st.dataframe`, while the tests intentionally monkeypatch `st.dataframe` to capture plain `DataFrame` arguments. The same file also changed the "empty after filters" path from `st.info(...)` to a markdown card, breaking the existing test contract.
+- Fix: rewrote `src/ui/tables.py` as clean UTF-8, restored plain `DataFrame` payloads for both table renderers, and restored `st.info(get_ui_text("signals_filtered_empty", ...))` for the filtered-empty path. The top-picks empty state also now uses `st.info(...)`, which keeps the renderer on native Streamlit primitives.
+- Verification:
+- `python -m py_compile src/ui/tables.py tests/test_ui_components.py`
+- `pytest tests/test_ui_components.py -q` -> `39 passed in 5.23s`
+- `python -m compileall app.py src scripts tests`
+- `pytest -q` -> `238 passed in 24.46s`
+- `python -m streamlit run app.py --server.headless true --server.port 8511 > .tmp_streamlit_ci_local.log 2>&1` hit the local timeout in PowerShell, but `.tmp_streamlit_ci_local.log` contained `You can now view your Streamlit app in your browser.` and `Local URL: http://localhost:8511`, matching the CI smoke success condition.
