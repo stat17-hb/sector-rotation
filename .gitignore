@@ -6,6 +6,7 @@
 
 # Local AI/tool state (can contain command/session context)
 .omc/
+.omx/
 .claude/settings.local.json
 
 # Python cache/build/test artifacts

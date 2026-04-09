@@ -633,6 +633,19 @@ def _cached_signals(
                 alias="cpi_yoy",
             )
 
+        # CPI YoY 히스토리 백필: 구 CPI 지수(DT_1J22003)에서 YoY 파생 후 스티칭
+        cpi_legacy_idx = extract_macro_series(macro_df, macro_series_cfg, "cpi_index_legacy")
+        if not cpi_legacy_idx.empty and not inflation_series.empty:
+            try:
+                legacy_yoy = (cpi_legacy_idx / cpi_legacy_idx.shift(12) - 1) * 100
+                legacy_yoy = legacy_yoy.dropna()
+                cutoff = inflation_series.index.min()
+                legacy_part = legacy_yoy[legacy_yoy.index < cutoff]
+                if not legacy_part.empty:
+                    inflation_series = pd.concat([legacy_part, inflation_series]).sort_index()
+            except Exception as _stitch_exc:
+                logger.debug("CPI legacy stitch skipped: %s", _stitch_exc)
+
         long_alias = str(settings.get("yield_curve_long", "bond_3y"))
         short_alias = str(settings.get("yield_curve_short", "base_rate"))
         _bond_s = extract_macro_series(macro_df, macro_series_cfg, long_alias)

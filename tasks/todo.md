@@ -2593,3 +2593,40 @@ Review:
 - `python -m compileall app.py src scripts tests`
 - `pytest -q` -> `241 passed in 22.74s`
 - `python -m streamlit run app.py --server.headless true --server.port 8511` reached the startup banner and logged `Local URL: http://localhost:8511`
+
+## 70) Windows oh-my-codex user-scope setup (2026-04-09)
+
+Pre-Implementation Check-in:
+- 2026-04-09: install and configure `oh-my-codex` so it is usable from the existing native Windows Codex environment.
+- Scope: inspect upstream install/setup behavior, back up the current user Codex config, install the latest `oh-my-codex` globally via npm, run `omx setup` in `user` scope, verify `omx`/doctor output, and record any Windows-only follow-up such as optional `psmux`.
+
+Execution Checklist:
+- [x] Confirm upstream installation requirements and Windows-specific constraints.
+- [x] Back up current user Codex configuration before OMX-managed changes.
+- [x] Install latest `oh-my-codex` globally and confirm the `omx` command resolves.
+- [x] Run `omx setup --scope user` and verify generated Codex assets/config.
+- [x] Run `omx doctor` and a smoke launch/help check, then document results below.
+
+Review:
+- Installed `oh-my-codex` `0.12.4` globally via `npm install -g oh-my-codex`; `omx --version` now resolves from `C:\Users\k1190\AppData\Roaming\npm\omx.cmd`.
+- Confirmed base prerequisites before install: `node v22.20.0`, `npm 10.9.3`, and `codex-cli 0.117.0`.
+- Backed up the user-managed Codex files before setup under `C:\Users\k1190\.omx\manual-backups\pre-omx-managed-files-20260409-232614\`.
+- Ran `omx setup --scope user --verbose` from this repo so OMX user assets were installed under `C:\Users\k1190\.codex\` and project runtime state was initialized under `.omx/`.
+- Generated / refreshed OMX-managed assets:
+- `C:\Users\k1190\.codex\prompts\` -> 20 prompt files
+- `C:\Users\k1190\.codex\skills\` -> 25 skill directories
+- `C:\Users\k1190\.codex\agents\` -> 20 native agent TOMLs
+- `C:\Users\k1190\.codex\AGENTS.md`
+- `C:\Users\k1190\.codex\hooks.json`
+- `C:\Users\k1190\.codex\config.toml`
+- Preserved the user's prior default reasoning preference by restoring `model_reasoning_effort = "xhigh"` after setup; OMX-required config, MCP servers, hooks, and notification wiring remain intact.
+- Added `.omx/` to `.gitignore` so repo-local OMX runtime state does not show up as untracked project noise.
+- Verification:
+- `omx setup --scope user --dry-run --verbose`
+- `omx setup --scope user --verbose`
+- `omx doctor` -> `11 passed, 1 warning, 0 failed`
+- `omx --help` -> CLI launcher and OMX subcommands printed normally
+- `where.exe omx` -> global shim found under `C:\Users\k1190\AppData\Roaming\npm\`
+- Residual Windows-specific notes:
+- `psmux` is not installed, so native Windows `omx team` durable pane mode is not ready yet.
+- `cargo` is not installed, so `omx doctor` still warns that the optional Explore Harness is unavailable; core `omx` usage, prompts, skills, hooks, and MCP integrations are ready.

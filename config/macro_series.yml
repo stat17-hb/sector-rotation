@@ -66,3 +66,12 @@ kosis:
       objL1: "A03"
     label: "Leading Index Cycle"
     unit: "p"
+  cpi_index_legacy:
+    enabled: true
+    org_id: "101"
+    tbl_id: "DT_1J22003"
+    item_id: "T"
+    obj_params:
+      objL1: "ALL"
+    label: "CPI Index (Legacy)"
+    unit: "index"
