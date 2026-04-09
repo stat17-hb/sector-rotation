@@ -2552,3 +2552,44 @@ Review:
 - `python -m compileall app.py src scripts tests`
 - `pytest -q` -> `238 passed in 24.46s`
 - `python -m streamlit run app.py --server.headless true --server.port 8511 > .tmp_streamlit_ci_local.log 2>&1` hit the local timeout in PowerShell, but `.tmp_streamlit_ci_local.log` contained `You can now view your Streamlit app in your browser.` and `Local URL: http://localhost:8511`, matching the CI smoke success condition.
+
+## 68) US DuckDB lock fallback hardening (2026-04-09)
+
+Pre-Implementation Check-in:
+- 2026-04-09: keep the US dashboard usable when `yfinance` live refresh hits the known DuckDB write-lock conflict and cached/sample data is available.
+- Scope: harden `src/data_sources/yfinance_sectors.py` so write-locks only downgrade to cache/sample, make warehouse bookkeeping best-effort, add focused regression tests, and record verification below.
+
+Execution Checklist:
+- [x] Add write-lock-aware live persist handling and best-effort bookkeeping to `src/data_sources/yfinance_sectors.py`.
+- [x] Add regression tests for cached fallback under external DuckDB read lock, sample fallback under external read lock, and non-fatal bookkeeping failures.
+- [x] Run `py_compile` and focused `pytest`, then record results below.
+
+Review:
+- Root cause: `src/data_sources/yfinance_sectors.py` treated the first DuckDB write-lock as a recoverable live-refresh failure, but the subsequent cache/sample fallback still called `record_ingest_run()`, which opened another write connection and re-raised the same `Cannot acquire write lock on warehouse.duckdb` error. That made the US page fail even when cached data was already usable.
+- Fix: split the loader into fetch, persist, and bookkeeping stages. The persist stage now calls `close_cached_read_only_connection()` before the first write and downgrades `RuntimeError` write-lock failures to cache/sample fallback. Warehouse bookkeeping (`export_market_parquet`, `update_ingest_watermark`, `record_ingest_run`) is now best-effort so telemetry cannot break the read path.
+- Test coverage: added US regressions for cached fallback under an external DuckDB read-only connection, sample fallback when no cache exists under the same lock, and non-fatal bookkeeping failure after a successful live persist. `tests/test_yfinance_sectors.py` now also isolates `CURATED_PATH` to the tmp workspace so the test suite never touches the repo-local parquet path.
+- Full verification note: `pytest -q` exposed a pre-existing UI contract regression in `src/ui/tables.py`, where `render_top_picks_table()` had drifted back to HTML cards instead of the native `st.dataframe` contract expected by `tests/test_ui_components.py`. Restored the native dataframe renderer so the suite is green again.
+- Verification:
+- `python -m py_compile src/data_sources/yfinance_sectors.py tests/test_yfinance_sectors.py tests/test_fred.py tests/test_warehouse_multimarket.py tests/test_warehouse_cli.py`
+- `pytest -q tests/test_yfinance_sectors.py tests/test_fred.py tests/test_warehouse_multimarket.py tests/test_warehouse_cli.py` -> `23 passed in 5.72s`
+
+## 69) CI failure recovery for top-picks table renderer (2026-04-09)
+
+Pre-Implementation Check-in:
+- 2026-04-09: GitHub Actions run `24194798134` failed in `tests/test_ui_components.py::test_render_top_picks_table_uses_native_dataframe_and_limit` on commit `32daa3c`.
+- Scope: restore the native `st.dataframe` contract for `render_top_picks_table()` in `src/ui/tables.py`, rerun focused UI verification, then rerun workflow-equivalent verification and record the result.
+
+Execution Checklist:
+- [x] Confirm the failing test and isolate the regression in `src/ui/tables.py`.
+- [x] Restore `render_top_picks_table()` to emit a native `DataFrame` through `st.dataframe` while preserving existing captions and filtering behavior.
+- [x] Run `py_compile`, focused UI tests, full `pytest -q`, and headless Streamlit smoke; record the results below.
+
+Review:
+- Root cause: commit `32daa3c` switched `render_top_picks_table()` from the established native-table renderer to HTML card markup via `st.markdown(...)`. The UI tests intentionally monkeypatch `src.ui.components.st.dataframe` and assert the `DataFrame` payload/columns, so that renderer swap broke the compatibility contract and caused CI to fail before the smoke step.
+- Fix: `src/ui/tables.py` now rebuilds the top-picks rows into a plain `DataFrame`, restores the native `st.dataframe(...)` call with `column_config`, and keeps the existing top-N / provisional captions intact. This is the smallest change that matches the tested public behavior.
+- Verification:
+- `pytest -q tests/test_ui_components.py` -> `39 passed in 4.47s`
+- `python -m py_compile src/ui/tables.py tests/test_ui_components.py`
+- `python -m compileall app.py src scripts tests`
+- `pytest -q` -> `241 passed in 22.74s`
+- `python -m streamlit run app.py --server.headless true --server.port 8511` reached the startup banner and logged `Local URL: http://localhost:8511`

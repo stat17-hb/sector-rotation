@@ -12,6 +12,7 @@ import pandas as pd
 
 from src.contracts.validators import normalize_then_validate
 from src.data_sources.warehouse import (
+    close_cached_read_only_connection,
     export_market_parquet,
     get_dataset_artifact_key,
     is_market_coverage_complete,
@@ -45,6 +46,13 @@ DEFAULT_TICKER_NAMES: dict[str, str] = {
     "XLV": "Health Care",
     "XLY": "Consumer Discretionary",
 }
+
+
+def _run_best_effort_bookkeeping(label: str, callback, /, *args, **kwargs) -> None:
+    try:
+        callback(*args, **kwargs)
+    except Exception as exc:
+        logger.warning("US market bookkeeping skipped (%s): %s", label, exc)
 
 
 def _normalize_market_date(value: str) -> date:
@@ -202,49 +210,70 @@ def load_sector_prices(tickers: list[str], start: str, end: str) -> LoaderResult
                     requested_end.strftime("%Y-%m-%d"),
                 )
 
+    live: pd.DataFrame | None = None
     try:
         live = normalize_then_validate(fetch_sector_prices(normalized, start, end), "sector_prices")
-        upsert_index_dimension(_index_dimension_rows(normalized), market=MARKET_ID)
-        upsert_market_prices(live, provider="YFINANCE", market=MARKET_ID)
-        export_market_parquet(CURATED_PATH, market=MARKET_ID)
-        coverage_complete = is_market_coverage_complete(
-            normalized,
-            start,
-            end,
-            benchmark_code=coverage_code,
-            market=MARKET_ID,
-        )
-        update_ingest_watermark(
-            dataset="market_prices",
-            watermark_key=end,
-            status="LIVE",
-            coverage_complete=coverage_complete,
-            provider="YFINANCE",
-            details={"tickers": normalized},
-            market=MARKET_ID,
-        )
-        record_ingest_run(
-            dataset="market_prices",
-            reason="load_sector_prices",
-            provider="YFINANCE",
-            requested_start=start,
-            requested_end=end,
-            status="LIVE",
-            coverage_complete=coverage_complete,
-            failed_days=[],
-            failed_codes={},
-            delta_keys=normalized,
-            row_count=int(len(live)),
-            summary={"status": "LIVE", "rows": int(len(live)), "coverage_complete": coverage_complete},
-            market=MARKET_ID,
-        )
-        return ("LIVE", live)
     except Exception as exc:
         logger.warning("US market live fetch failed: %s", exc)
+    else:
+        try:
+            close_cached_read_only_connection()
+            upsert_index_dimension(_index_dimension_rows(normalized), market=MARKET_ID)
+            upsert_market_prices(live, provider="YFINANCE", market=MARKET_ID)
+        except RuntimeError as exc:
+            logger.warning(
+                "US market live refresh skipped, write lock unavailable; returning cached data. (%s)",
+                exc,
+            )
+        else:
+            _run_best_effort_bookkeeping(
+                "export_market_parquet",
+                export_market_parquet,
+                CURATED_PATH,
+                market=MARKET_ID,
+            )
+            coverage_complete = is_market_coverage_complete(
+                normalized,
+                start,
+                end,
+                benchmark_code=coverage_code,
+                market=MARKET_ID,
+            )
+            _run_best_effort_bookkeeping(
+                "update_ingest_watermark",
+                update_ingest_watermark,
+                dataset="market_prices",
+                watermark_key=end,
+                status="LIVE",
+                coverage_complete=coverage_complete,
+                provider="YFINANCE",
+                details={"tickers": normalized},
+                market=MARKET_ID,
+            )
+            _run_best_effort_bookkeeping(
+                "record_ingest_run",
+                record_ingest_run,
+                dataset="market_prices",
+                reason="load_sector_prices",
+                provider="YFINANCE",
+                requested_start=start,
+                requested_end=end,
+                status="LIVE",
+                coverage_complete=coverage_complete,
+                failed_days=[],
+                failed_codes={},
+                delta_keys=normalized,
+                row_count=int(len(live)),
+                summary={"status": "LIVE", "rows": int(len(live)), "coverage_complete": coverage_complete},
+                market=MARKET_ID,
+            )
+            return ("LIVE", live)
 
     cached = read_market_prices(normalized, start, end, market=MARKET_ID)
     if not cached.empty:
-        record_ingest_run(
+        _run_best_effort_bookkeeping(
+            "record_ingest_run",
+            record_ingest_run,
             dataset="market_prices",
             reason="load_sector_prices_cache_fallback",
             provider="YFINANCE",
@@ -271,7 +300,9 @@ def load_sector_prices(tickers: list[str], start: str, end: str) -> LoaderResult
             logger.warning("US curated cache load failed: %s", exc)
 
     sample = _make_sample_df(normalized)
-    record_ingest_run(
+    _run_best_effort_bookkeeping(
+        "record_ingest_run",
+        record_ingest_run,
         dataset="market_prices",
         reason="load_sector_prices_sample",
         provider="YFINANCE",
