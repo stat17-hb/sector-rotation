@@ -994,6 +994,121 @@ def inject_css(theme_mode: str) -> None:
         white-space: nowrap;
     }}
 
+    .top-picks-container {{
+        display: flex;
+        flex-direction: column;
+        gap: 0.7rem;
+        margin-bottom: 0.6rem;
+    }}
+
+    .top-pick-card {{
+        border: 1px solid var(--border);
+        background: color-mix(in srgb, var(--surface) 96%, var(--bg) 4%);
+        border-radius: var(--radius-md);
+        padding: 1rem 1.1rem;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }}
+
+    .top-pick-card:hover {{
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px color-mix(in srgb, var(--primary) 10%, transparent);
+    }}
+
+    .top-pick-card__header {{
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 0.7rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+    }}
+
+    .top-pick-card__title {{
+        color: var(--text);
+        font-size: 1.05rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+    }}
+
+    .top-pick-card__rank {{
+        color: var(--text-muted);
+        font-size: 0.95rem;
+        font-weight: 600;
+        display: inline-block;
+        min-width: 1.2rem;
+    }}
+
+    .top-pick-card__held-badge {{
+        font-size: 0.7rem;
+        background: color-mix(in srgb, var(--success) 15%, transparent);
+        border: 1px solid color-mix(in srgb, var(--success) 35%, transparent);
+        color: var(--success);
+        padding: 0.15rem 0.45rem;
+        border-radius: 999px;
+        margin-left: 0.2rem;
+        font-weight: 700;
+    }}
+
+    .top-pick-card__decision {{
+        font-size: 0.82rem;
+        font-weight: 750;
+        color: var(--primary);
+        background: color-mix(in srgb, var(--primary) 12%, transparent);
+        border: 1px solid color-mix(in srgb, var(--primary) 25%, transparent);
+        padding: 0.3rem 0.7rem;
+        border-radius: 999px;
+        white-space: nowrap;
+        margin-left: 0.5rem;
+    }}
+
+    .top-pick-card__body {{
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }}
+
+    .top-pick-card__row {{
+        display: flex;
+        align-items: baseline;
+        gap: 0.65rem;
+        font-size: 0.9rem;
+    }}
+
+    .top-pick-card__label {{
+        color: var(--text-muted);
+        min-width: 75px;
+        max-width: 75px;
+        font-weight: 700;
+        font-size: 0.84rem;
+        flex-shrink: 0;
+    }}
+
+    .top-pick-card__value {{
+        color: var(--text);
+        flex: 1;
+        line-height: 1.5;
+    }}
+
+    .top-pick-card__metrics {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.2rem;
+        margin-top: 0.4rem;
+        padding-top: 0.6rem;
+        border-top: 1px dashed color-mix(in srgb, var(--border) 60%, transparent);
+        font-size: 0.84rem;
+        color: var(--text-muted);
+    }}
+    
+    .top-pick-card__metric strong {{
+        color: var(--text);
+        font-weight: 650;
+        margin-right: 0.25rem;
+    }}
+
     [data-testid="stDataFrame"] {{
         border: 1px solid {table_tokens['grid']};
         border-radius: 12px;

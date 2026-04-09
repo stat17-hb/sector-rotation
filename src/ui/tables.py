@@ -29,7 +29,7 @@ def render_top_picks_table(
     include_held: bool = True,
     locale: UiLocale = DEFAULT_UI_LOCALE,
 ) -> None:
-    """Render a compact top-picks table using Streamlit's native dataframe."""
+    """Render a compact top-picks list using HTML cards instead of a wide dataframe to avoid horizontal scrolling."""
     filtered = filter_signals_for_display(
         signals,
         held_sectors=held_sectors,
@@ -39,47 +39,63 @@ def render_top_picks_table(
         st.info(_empty_top_pick_message(position_mode, held_sectors, locale=locale))
         return
 
-    rows: list[dict[str, object]] = []
     filtered = sorted(filtered, key=lambda signal: signal_display_sort_key(signal, held_sectors))
+    
+    cards_html = []
     for rank, signal in enumerate(list(filtered)[:limit], start=1):
         thesis = describe_signal_decision(signal, held_sectors, locale=locale)
-        row = {
-            "Rank": rank,
-            "Sector": signal.sector_name + (" *" if signal.is_provisional else ""),
-            "Decision": thesis["decision"],
-            "Reason": thesis["reason"],
-            "Risk": thesis["risk"],
-            "Invalidation": thesis["invalidation"],
-            "3M": _pct_value(signal.returns.get("3M")),
-            "Alerts": thesis["alerts_text"],
-        }
+        
+        sector_name = signal.sector_name + (" *" if signal.is_provisional else "")
+        decision = thesis.get("decision", "")
+        reason = thesis.get("reason", "")
+        risk = thesis.get("risk", "")
+        invalidation = thesis.get("invalidation", "")
+        alerts_text = thesis.get("alerts_text", "")
+        
+        ret_3m = _pct_value(signal.returns.get("3M"))
+        ret_3m_str = f"{ret_3m:+.1f}%" if ret_3m is not None else "N/A"
+        
+        def _row(label: str, value: object) -> str:
+            str_val = str(value).strip() if value else ""
+            if not str_val or str_val == "None" or str_val == get_ui_text("alerts_none", locale):
+                return ""
+            return (
+                '<div class="top-pick-card__row">'
+                f'<span class="top-pick-card__label">{html.escape(label)}</span>'
+                f'<span class="top-pick-card__value">{html.escape(str_val)}</span>'
+                '</div>'
+            )
+            
+        held_badge = ""
         if include_held:
-            row["Held"] = bool(thesis["held"])
-        rows.append(row)
+            is_held = bool(thesis.get("held"))
+            if is_held:
+                held_badge = f'<span class="top-pick-card__held-badge">{html.escape(get_ui_text("col_held", locale))}</span>'
 
-    df_display = pd.DataFrame(rows)
-    height = 76 + len(df_display) * 35
+        card = (
+            '<div class="top-pick-card">'
+            '<div class="top-pick-card__header">'
+            '<div class="top-pick-card__title">'
+            f'<span class="top-pick-card__rank">{rank}.</span>'
+            f'{html.escape(sector_name)}'
+            f'{held_badge}'
+            '</div>'
+            f'<div class="top-pick-card__decision">{html.escape(str(decision))}</div>'
+            '</div>'
+            '<div class="top-pick-card__body">'
+            f'{_row(get_ui_text("col_reason", locale), reason)}'
+            f'{_row(get_ui_text("col_risk", locale), risk)}'
+            f'{_row(get_ui_text("col_invalidation", locale), invalidation)}'
+            '<div class="top-pick-card__metrics">'
+            f'<span class="top-pick-card__metric"><strong>{get_ui_text("period_3m", locale)}</strong>{html.escape(ret_3m_str)}</span>'
+            f'<span class="top-pick-card__metric"><strong>{get_ui_text("col_alerts", locale)}</strong>{html.escape(str(alerts_text))}</span>'
+            '</div>'
+            '</div>'
+            '</div>'
+        )
+        cards_html.append(card)
 
-    column_config: dict[str, object] = {
-        "Rank": st.column_config.NumberColumn(get_ui_text("col_rank", locale), format="%d", width="small"),
-        "Sector": st.column_config.TextColumn(get_ui_text("col_sector", locale), width="medium"),
-        "Decision": st.column_config.TextColumn(get_ui_text("col_decision", locale), width="medium"),
-        "Reason": st.column_config.TextColumn(get_ui_text("col_reason", locale), width="large"),
-        "Risk": st.column_config.TextColumn(get_ui_text("col_risk", locale), width="large"),
-        "Invalidation": st.column_config.TextColumn(get_ui_text("col_invalidation", locale), width="large"),
-        "3M": st.column_config.NumberColumn(get_ui_text("period_3m", locale), format="%.1f%%"),
-        "Alerts": st.column_config.TextColumn(get_ui_text("col_alerts", locale), width="medium"),
-    }
-    if include_held:
-        column_config["Held"] = st.column_config.CheckboxColumn(get_ui_text("col_held", locale), width="small")
-
-    st.dataframe(
-        df_display,
-        width="stretch",
-        hide_index=True,
-        height=height,
-        column_config=column_config,
-    )
+    st.markdown(f'<div class="top-picks-container">{"".join(cards_html)}</div>', unsafe_allow_html=True)
 
     if len(filtered) > limit:
         st.caption(get_ui_text("top_picks_showing", locale, total=len(filtered), limit=limit))
