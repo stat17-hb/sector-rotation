@@ -2628,5 +2628,34 @@ Review:
 - `omx --help` -> CLI launcher and OMX subcommands printed normally
 - `where.exe omx` -> global shim found under `C:\Users\k1190\AppData\Roaming\npm\`
 - Residual Windows-specific notes:
-- `psmux` is not installed, so native Windows `omx team` durable pane mode is not ready yet.
-- `cargo` is not installed, so `omx doctor` still warns that the optional Explore Harness is unavailable; core `omx` usage, prompts, skills, hooks, and MCP integrations are ready.
+- Follow-up completed in the same session: installed `marlocarlo.psmux 3.3.2` and `Rustlang.Rustup 1.29.0` via `winget`, confirmed the stable MSVC toolchain (`rustc 1.94.1`) is active, and verified `cargo`, `rustup`, `psmux`, and `tmux` all resolve when the current process reads the refreshed user PATH.
+- Follow-up verification:
+- `winget search rustup`
+- `winget search psmux`
+- `winget install --id marlocarlo.psmux -e --accept-package-agreements --accept-source-agreements`
+- `winget install --id Rustlang.Rustup -e --accept-package-agreements --accept-source-agreements`
+- `~/.cargo/bin/rustup.exe default stable`
+- with refreshed PATH in-process: `cargo --version`, `rustup --version`, `psmux --version`, `tmux --version`
+- with refreshed PATH in-process: `omx doctor` -> `12 passed, 0 warnings, 0 failed`
+- Current-session note: the Codex desktop process started before the installs, so this already-open session still carries the old PATH snapshot. A new terminal/Codex session will pick up the new user PATH automatically.
+
+## 71) oh-my-codex setup refresh verification (2026-04-09)
+
+Pre-Implementation Check-in:
+- 2026-04-09: refresh the current repo's OMX setup state via the `omx-setup` workflow without overwriting the hand-maintained project `AGENTS.md`.
+- Scope: confirm the persisted scope/config, run a dry-run plus a non-forced `user`-scope setup refresh from this repo, verify with `omx doctor`, and record the result.
+
+Execution Checklist:
+- [x] Confirm the current OMX install version and persisted setup scope.
+- [x] Run `omx setup --scope user --dry-run --verbose` from the project root.
+- [x] Run `omx setup --scope user --verbose` from the project root without forcing `AGENTS.md` overwrite.
+- [x] Run `omx doctor` and capture the verification result.
+- [x] Record the outcome and any residual notes below.
+
+Review:
+- Confirmed the existing install before refresh: `omx --version` reported `oh-my-codex v0.12.4`, and the repo-local `.omx/setup-scope.json` persisted `{"scope":"user"}`.
+- Ran `omx setup --scope user --dry-run --verbose` from the project root first. The dry-run showed a config backup/write path under `C:\Users\k1190\.omx\backups\setup\2026-04-09T14-49-08.352Z\` and explicitly reported `User scope leaves project AGENTS.md unchanged`.
+- Ran `omx setup --scope user --verbose` from the project root. It refreshed user-scope OMX assets, wrote `.omx/setup-scope.json`, backed up `C:\Users\k1190\.codex\config.toml` under `C:\Users\k1190\.omx\backups\setup\2026-04-09T14-49-12.104Z\`, updated the user `config.toml`, and left the hand-maintained project `AGENTS.md` untouched.
+- `omx doctor` verification result: `12 passed, 0 warnings, 0 failed`. The doctor resolved setup scope from `.omx/setup-scope.json`, found Codex CLI `0.117.0`, Node `v22.20.0`, cargo-backed Explore Harness readiness, OMX config entries, 20 prompts, 25 skills, the user-scope `AGENTS.md`, the repo `.omx/state` directory, and 5 configured MCP servers.
+- Repo-side change footprint stayed minimal: `git status --short` only showed `tasks/todo.md` as a tracked modification after the refresh because `.omx/` remains ignored.
+- Residual note: `omx setup` refreshed the user `config.toml`, so any future manual diffing of `C:\Users\k1190\.codex\config.toml` should compare against the new backup timestamp above rather than the earlier 2026-04-09 setup backup.
