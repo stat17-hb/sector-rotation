@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Any, Iterable, Mapping, MutableMapping
 
+from src.signals.flow import normalize_flow_profile
 from src.ui.copy import ALL_ACTION_KEY, normalize_action_filter
 
 
@@ -27,6 +28,7 @@ SESSION_DEFAULTS: dict[str, Any] = {
     "analysis_start_date": None,
     "analysis_end_date": None,
     "analysis_heatmap_palette": "classic",
+    "flow_profile": "foreign_lead",
 }
 
 
@@ -80,6 +82,8 @@ def ensure_session_defaults(
         session_state["analysis_end_date"] = None
     if "analysis_heatmap_palette" not in session_state:
         session_state["analysis_heatmap_palette"] = "classic"
+    if "flow_profile" not in session_state:
+        session_state["flow_profile"] = "foreign_lead"
 
 
 def apply_market_selection(
@@ -144,6 +148,7 @@ def normalize_session_state(
     ]
 
     session_state["show_alerted_only"] = bool(session_state.get("show_alerted_only", False))
+    session_state["flow_profile"] = normalize_flow_profile(session_state.get("flow_profile"))
 
     normalized_range_preset = normalize_range_preset(session_state.get("selected_range_preset"))
     if session_state.get("selected_range_preset") != normalized_range_preset:

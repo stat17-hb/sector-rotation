@@ -184,6 +184,15 @@ def _price_artifact_key() -> tuple:
     return get_price_artifact_key()
 
 
+def _investor_flow_artifact_key() -> tuple:
+    """Return a cache-busting key for the KR investor-flow warehouse state."""
+    if market_id != "KR":
+        return (0, 0, "", "", "")
+    from src.data_sources.krx_investor_flow import get_investor_flow_artifact_key
+
+    return get_investor_flow_artifact_key()
+
+
 def _macro_artifact_key() -> tuple:
     """Return cache-busting key for macro warehouse artifacts."""
     from src.data_sources.macro_sync import get_macro_artifact_key
@@ -206,6 +215,15 @@ def _probe_macro_status() -> str:
     from src.data_sources.macro_sync import probe_macro_status
 
     return probe_macro_status(market=market_id)
+
+
+def _probe_investor_flow_status() -> str:
+    """Return current investor-flow availability from the warehouse."""
+    if market_id != "KR":
+        return "SAMPLE"
+    from src.data_sources.krx_investor_flow import probe_investor_flow_status
+
+    return probe_investor_flow_status()
 
 
 def _all_sector_codes(benchmark_code: str) -> list[str]:
@@ -249,6 +267,12 @@ def _market_range_strings(end_date_str: str, price_years: int) -> tuple[str, str
     """Return the dashboard market-data lookback window."""
     end_date = pd.Timestamp(end_date_str).date()
     start_date = end_date - timedelta(days=365 * price_years)
+    return start_date.strftime("%Y%m%d"), end_date.strftime("%Y%m%d")
+
+
+def _investor_flow_range_strings(end_date_str: str, lookback_days: int = 120) -> tuple[str, str]:
+    end_date = pd.Timestamp(end_date_str).date()
+    start_date = end_date - timedelta(days=int(lookback_days))
     return start_date.strftime("%Y%m%d"), end_date.strftime("%Y%m%d")
 
 
@@ -308,6 +332,21 @@ def _build_macro_refresh_notice(summary: dict[str, object]) -> tuple[str, str]:
     if status == "CACHED":
         return ("warning", "Macro data refresh fell back to warehouse cache.")
     return ("error", "Macro data refresh did not complete successfully.")
+
+
+def _build_investor_flow_refresh_notice(summary: dict[str, object]) -> tuple[str, str]:
+    """Map manual investor-flow refresh summary into a user-facing flash message."""
+    status = str(summary.get("status", "")).strip().upper()
+    coverage_complete = bool(summary.get("coverage_complete"))
+    rows = int(summary.get("rows", 0) or 0)
+
+    if status == "LIVE" and coverage_complete:
+        return ("success", f"Investor-flow refresh completed ({rows} sector-investor rows cached).")
+    if status == "LIVE":
+        return ("warning", "Investor-flow refresh completed with partial coverage; unchanged actions stay on the base matrix.")
+    if status == "CACHED":
+        return ("warning", "Investor-flow refresh fell back to the local cache.")
+    return ("error", "Investor-flow refresh did not complete successfully.")
 
 
 def _legacy_show_notice_toast(notice: tuple[str, str] | None) -> None:
@@ -399,6 +438,13 @@ def _openapi_cache_fallback_note(warm_status: dict[str, object]) -> str:
         return f"Latest OpenAPI warm did not confirm current coverage (status={warm_state})."
 
     return "Latest OpenAPI warm did not confirm current coverage."
+
+
+def _investor_flow_is_fresh(status_detail: dict[str, Any], *, market_end_date_str: str) -> bool:
+    if not status_detail:
+        return False
+    latest = "".join(ch for ch in str(status_detail.get("end") or status_detail.get("watermark_key") or "") if ch.isdigit())[:8]
+    return bool(status_detail.get("coverage_complete")) and latest == str(market_end_date_str)
 
 
 @st.cache_data(ttl=600)
@@ -508,6 +554,31 @@ def _cached_analysis_sector_prices(
 
 
 @st.cache_data(ttl=CACHE_TTL)
+def _cached_investor_flow(
+    market_id_arg: str,
+    end_date_str: str,
+    flow_artifact_key: tuple,
+):
+    """Load KR investor-flow sector aggregates from the warehouse only."""
+    _ = flow_artifact_key
+    normalized_market = str(market_id_arg or market_id).strip().upper() or market_id
+    if normalized_market != "KR":
+        return "SAMPLE", False, {}, pd.DataFrame()
+
+    from src.data_sources.krx_investor_flow import load_sector_investor_flow, read_warm_status
+
+    start_str, end_str = _investor_flow_range_strings(end_date_str)
+    status, frame = load_sector_investor_flow(
+        sector_map=sector_map,
+        start=start_str,
+        end=end_str,
+        market=normalized_market,
+    )
+    status_detail = read_warm_status()
+    return status, _investor_flow_is_fresh(status_detail, market_end_date_str=end_str), status_detail, frame
+
+
+@st.cache_data(ttl=CACHE_TTL)
 def _cached_macro(market_id_arg: str, macro_cache_token: str, market_end_date_str: str):
     """Fetch or load macro data. Keyed by config + API key fingerprint token."""
     end_ym = str(market_end_date_str)[:6]
@@ -561,15 +632,30 @@ def _cached_signals(
     macro_cache_token: str,
     price_cache_token: str,
     price_artifact_key: tuple,
-    epsilon: float,
-    rs_ma_period: int,
-    ma_fast: int,
-    ma_slow: int,
-    price_years: int,
+    flow_artifact_key: tuple = (),
+    epsilon: float = 0.0,
+    rs_ma_period: int = 20,
+    ma_fast: int = 20,
+    ma_slow: int = 60,
+    price_years: int = 3,
+    flow_profile: str = "foreign_lead",
 ):
     """Compute signals. Keyed by parquet file metadata + params hash."""
     from src.macro.regime import compute_regime_history
     from src.signals.matrix import build_signal_table
+
+    if not isinstance(flow_artifact_key, tuple):
+        legacy_epsilon = float(flow_artifact_key)
+        legacy_rs_ma_period = int(epsilon)
+        legacy_ma_fast = int(rs_ma_period)
+        legacy_ma_slow = int(ma_fast)
+        legacy_price_years = int(ma_slow)
+        flow_artifact_key = ()
+        epsilon = legacy_epsilon
+        rs_ma_period = legacy_rs_ma_period
+        ma_fast = legacy_ma_fast
+        ma_slow = legacy_ma_slow
+        price_years = legacy_price_years
 
     normalized_market = str(market_id_arg or market_id).strip().upper() or market_id
     market_blocking_error = ""
@@ -592,6 +678,11 @@ def _cached_signals(
             price_status = "BLOCKED"
             sector_prices = pd.DataFrame()
             market_blocking_error = str(exc)
+        flow_status, flow_fresh, _flow_detail, sector_flow = _cached_investor_flow(
+            normalized_market,
+            market_end_date_str,
+            flow_artifact_key,
+        )
     else:
         price_status, sector_prices = _cached_sector_prices(
             normalized_market,
@@ -601,6 +692,7 @@ def _cached_signals(
             price_cache_token,
             price_artifact_key,
         )
+        flow_status, flow_fresh, sector_flow = "SAMPLE", False, pd.DataFrame()
 
     macro_status, macro_df = _cached_macro(normalized_market, macro_cache_token, market_end_date_str)
 
@@ -727,6 +819,9 @@ def _cached_signals(
             sector_map=sector_map,
             settings=runtime_settings,
             fx_change_pct=fx_change_pct,
+            sector_investor_flow=sector_flow,
+            flow_profile=flow_profile,
+            flow_enabled=bool(flow_fresh and flow_status in {"LIVE", "CACHED"}),
         )
 
     return signals, macro_result, price_status, macro_status, market_blocking_error
@@ -735,8 +830,10 @@ def _cached_signals(
 get_all_sector_codes = _all_sector_codes
 build_market_refresh_notice = _build_market_refresh_notice
 build_macro_refresh_notice = _build_macro_refresh_notice
+build_investor_flow_refresh_notice = _build_investor_flow_refresh_notice
 cached_analysis_sector_prices = _cached_analysis_sector_prices
 cached_api_preflight = _cached_api_preflight
+cached_investor_flow = _cached_investor_flow
 cached_macro = _cached_macro
 cached_sector_prices = _cached_sector_prices
 cached_signals = _cached_signals
@@ -749,10 +846,13 @@ get_macro_artifact_key = _macro_artifact_key
 get_macro_cache_token = _macro_cache_token
 maybe_schedule_startup_krx_warm = _maybe_schedule_startup_krx_warm
 get_market_range_strings = _market_range_strings
+get_investor_flow_range_strings = _investor_flow_range_strings
 get_openapi_cache_fallback_note = _openapi_cache_fallback_note
 get_parquet_key = _parquet_key
+get_investor_flow_artifact_key = _investor_flow_artifact_key
 get_price_artifact_key = _price_artifact_key
 get_price_cache_token = _price_cache_token
+probe_investor_flow_status = _probe_investor_flow_status
 probe_macro_status = _probe_macro_status
 probe_market_status = _probe_market_status
 render_dashboard_status_banner = _render_dashboard_status_banner
@@ -764,13 +864,17 @@ show_notice_toast = _show_notice_toast
 __all__ = [
     "build_macro_refresh_notice",
     "build_market_refresh_notice",
+    "build_investor_flow_refresh_notice",
     "cached_analysis_sector_prices",
     "cached_api_preflight",
+    "cached_investor_flow",
     "cached_macro",
     "cached_sector_prices",
     "cached_signals",
     "configure_dashboard_env",
     "get_all_sector_codes",
+    "get_investor_flow_artifact_key",
+    "get_investor_flow_range_strings",
     "get_krx_provider_configured",
     "get_krx_provider_effective",
     "get_macro_artifact_key",
@@ -785,6 +889,7 @@ __all__ = [
     "load_analysis_sector_prices_from_cache",
     "load_api_key",
     "maybe_schedule_startup_krx_warm",
+    "probe_investor_flow_status",
     "probe_macro_status",
     "probe_market_status",
     "render_dashboard_status_banner",

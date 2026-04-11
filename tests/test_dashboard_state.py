@@ -32,6 +32,7 @@ def test_ensure_session_defaults_populates_missing_keys():
     assert session["show_alerted_only"] is False
     assert session["held_sectors"] == []
     assert session["selected_cycle_phase"] == "ALL"
+    assert session["flow_profile"] == "foreign_lead"
 
 
 def test_normalize_session_state_repairs_legacy_values():
@@ -54,6 +55,7 @@ def test_normalize_session_state_repairs_legacy_values():
     assert session["filter_action_global"] == ALL_ACTION_KEY
     assert session["selected_range_preset"] == "ALL"
     assert session["position_mode"] == "all"
+    assert session["flow_profile"] == "foreign_lead"
 
 
 def test_normalize_session_state_repairs_localized_all_filter_to_key():

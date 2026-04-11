@@ -30,6 +30,9 @@ class DashboardContext:
     theme_mode: str
     analysis_heatmap_palette: str
     ui_locale: str
+    investor_flow_artifact_key: tuple[Any, ...] = ()
+    investor_flow_status: str = "SAMPLE"
+    investor_flow_profile: str = "foreign_lead"
 
 
 @dataclass
@@ -67,6 +70,12 @@ class DashboardDataBundle:
     analysis_max_date: date | None = None
     market_refresh_notice: tuple[str, str] | None = None
     macro_refresh_notice: tuple[str, str] | None = None
+    investor_flow_status: str = "SAMPLE"
+    investor_flow_fresh: bool = False
+    investor_flow_profile: str = "foreign_lead"
+    investor_flow_frame: pd.DataFrame = field(default_factory=pd.DataFrame)
+    investor_flow_detail: dict[str, Any] = field(default_factory=dict)
+    investor_flow_refresh_notice: tuple[str, str] | None = None
 
 
 @dataclass(frozen=True)

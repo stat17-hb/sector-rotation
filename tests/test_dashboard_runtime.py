@@ -41,12 +41,14 @@ def test_invalidate_dashboard_caches_scopes(monkeypatch):
     api = _DummyCache()
     sector = _DummyCache()
     analysis = _DummyCache()
+    flow = _DummyCache()
     macro = _DummyCache()
     signals = _DummyCache()
 
     monkeypatch.setattr(runtime, "cached_api_preflight", api)
     monkeypatch.setattr(runtime, "cached_sector_prices", sector)
     monkeypatch.setattr(runtime, "cached_analysis_sector_prices", analysis)
+    monkeypatch.setattr(runtime, "cached_investor_flow", flow)
     monkeypatch.setattr(runtime, "cached_macro", macro)
     monkeypatch.setattr(runtime, "cached_signals", signals)
 
@@ -61,12 +63,17 @@ def test_invalidate_dashboard_caches_scopes(monkeypatch):
     assert macro.clears == 1
     assert signals.clears == 2
 
+    runtime.invalidate_dashboard_caches("flow")
+    assert flow.clears == 1
+    assert signals.clears == 3
+
     runtime.invalidate_dashboard_caches("all")
     assert api.clears == 2
     assert sector.clears == 2
     assert analysis.clears == 2
+    assert flow.clears == 2
     assert macro.clears == 2
-    assert signals.clears == 3
+    assert signals.clears == 4
 
 
 def test_run_market_refresh_returns_notice_and_invalidates(monkeypatch):
@@ -124,3 +131,27 @@ def test_run_feature_recompute_clears_features_and_invalidates(tmp_path, monkeyp
     assert invalidate_calls == ["signals"]
     assert features_dir.exists()
     assert list(features_dir.iterdir()) == []
+
+
+def test_run_investor_flow_refresh_returns_notice_and_invalidates(monkeypatch):
+    close_calls: list[str] = []
+    invalidate_calls: list[str] = []
+
+    monkeypatch.setattr(runtime, "close_cached_read_only_connection", lambda: close_calls.append("close"))
+    monkeypatch.setattr(runtime, "invalidate_dashboard_caches", lambda scope: invalidate_calls.append(scope))
+    monkeypatch.setattr(runtime, "build_investor_flow_refresh_notice", lambda summary: ("warning", summary["status"]))
+
+    def _runner(**kwargs):
+        assert kwargs["market"] == "KR"
+        return (("LIVE", object()), {"status": "LIVE", "coverage_complete": True})
+
+    monkeypatch.setattr(
+        "src.data_sources.krx_investor_flow.run_manual_investor_flow_refresh",
+        _runner,
+    )
+
+    notice = runtime.run_investor_flow_refresh(_context("KR"))
+
+    assert notice == ("warning", "LIVE")
+    assert close_calls == ["close"]
+    assert invalidate_calls == ["flow"]

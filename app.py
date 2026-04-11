@@ -35,10 +35,12 @@ from src.dashboard.analysis import (
 from src.dashboard.data import (
     cached_analysis_sector_prices,
     cached_api_preflight,
+    cached_investor_flow,
     cached_macro,
     cached_signals,
     get_krx_provider_configured,
     get_krx_provider_effective,
+    get_investor_flow_artifact_key,
     get_macro_artifact_key,
     get_macro_cache_token,
     get_price_artifact_key,
@@ -47,6 +49,7 @@ from src.dashboard.data import (
     load_analysis_sector_prices_from_cache as dashboard_load_analysis_sector_prices_from_cache,
     load_api_key,
     maybe_schedule_startup_krx_warm,
+    probe_investor_flow_status,
     probe_macro_status,
     probe_market_status,
     render_dashboard_status_banner,
@@ -57,6 +60,7 @@ from src.dashboard.data import (
 from src.dashboard.runtime import (
     invalidate_dashboard_caches,
     run_feature_recompute,
+    run_investor_flow_refresh,
     run_macro_refresh,
     run_market_refresh,
 )
@@ -188,22 +192,28 @@ krx_openapi_key_present = bool(load_api_key("KRX_OPENAPI_KEY")) if selected_mark
 
 probe_price_status = probe_market_status()
 probe_macro_status = probe_macro_status()
+probe_flow_status = probe_investor_flow_status()
 probe_data_status = {"price": probe_price_status, "macro": probe_macro_status}
 btn_states = get_button_states(probe_data_status)
 asof_default = parse_asof_default(st.session_state)
+selected_flow_profile_state = str(st.session_state.get("flow_profile", "foreign_lead"))
 
 with st.sidebar:
-    selected_market_sidebar, asof_date, refresh_market, refresh_macro, recompute = render_sidebar_controls(
+    selected_market_sidebar, asof_date, selected_flow_profile, refresh_market, refresh_macro, refresh_flow, recompute = render_sidebar_controls(
         market_id=selected_market_id,
         ui_labels=getattr(market_profile, "ui_labels", {}),
         theme_mode=theme_mode,
         analysis_heatmap_palette=analysis_heatmap_palette,
         probe_price_status=probe_price_status,
         probe_macro_status=probe_macro_status,
+        probe_investor_flow_status=probe_flow_status,
+        flow_profile=selected_flow_profile_state,
         btn_states=btn_states,
         asof_default=asof_default,
         ui_locale=ui_locale,
     )
+
+st.session_state["flow_profile"] = selected_flow_profile
 
 if apply_market_selection(st.session_state, market_id=selected_market_sidebar):
     invalidate_dashboard_caches("all")
@@ -236,6 +246,9 @@ context = DashboardContext(
     theme_mode=theme_mode,
     analysis_heatmap_palette=analysis_heatmap_palette,
     ui_locale=ui_locale,
+    investor_flow_artifact_key=get_investor_flow_artifact_key(),
+    investor_flow_status=probe_flow_status,
+    investor_flow_profile=str(st.session_state.get("flow_profile", "foreign_lead")),
 )
 
 maybe_schedule_startup_krx_warm(benchmark_code, price_years, market_end_date)
@@ -243,6 +256,7 @@ maybe_schedule_startup_krx_warm(benchmark_code, price_years, market_end_date)
 # Button handlers
 market_refresh_notice: tuple[str, str] | None = None
 macro_refresh_notice: tuple[str, str] | None = None
+investor_flow_refresh_notice: tuple[str, str] | None = None
 
 if refresh_market:
     with st.spinner("Refreshing market data..."):
@@ -251,6 +265,10 @@ if refresh_market:
 if refresh_macro:
     with st.spinner("Refreshing macro data..."):
         macro_refresh_notice = run_macro_refresh(context, macro_series_cfg)
+
+if refresh_flow:
+    with st.spinner("Refreshing investor-flow data..."):
+        investor_flow_refresh_notice = run_investor_flow_refresh(context)
 
 if recompute:
     run_feature_recompute()
@@ -278,11 +296,13 @@ with st.spinner("Loading dashboard data..."):
             context.macro_cache_token,
             context.price_cache_token,
             context.price_artifact_key,
+            context.investor_flow_artifact_key,
             float(st.session_state["epsilon"]),
             rs_ma_period,
             ma_fast,
             ma_slow,
             price_years,
+            str(st.session_state.get("flow_profile", "foreign_lead")),
         )
         data_status = {"price": price_status, "macro": macro_status}
     except Exception as exc:
@@ -337,6 +357,7 @@ openapi_missing_key_warning_shown = (
 )
 show_notice_toast(market_refresh_notice)
 show_notice_toast(macro_refresh_notice)
+show_notice_toast(investor_flow_refresh_notice)
 
 dashboard_status_banner = resolve_dashboard_status_banner(
     data_status=data_status,
@@ -377,6 +398,20 @@ if not macro_df.empty:
     if len(fx_series) >= 2:
         fx_change = float((fx_series.iloc[-1] / fx_series.iloc[-2] - 1) * 100)
 
+if context.market_id == "KR":
+    investor_flow_status, investor_flow_fresh, investor_flow_detail, investor_flow_frame = cached_investor_flow(
+        context.market_id,
+        context.market_end_date_str,
+        context.investor_flow_artifact_key,
+    )
+else:
+    investor_flow_status, investor_flow_fresh, investor_flow_detail, investor_flow_frame = (
+        "SAMPLE",
+        False,
+        {},
+        pd.DataFrame(),
+    )
+
 render_page_header(
     title=str(getattr(market_profile, "page_header", "Sector Rotation")),
     description="Move from range selection to cycle context, sector comparison, and linked detail tracking without leaving the main canvas.",
@@ -385,7 +420,17 @@ render_page_header(
         {"label": "Market", "value": price_status, "tone": "danger" if price_status == "SAMPLE" else "warning" if price_status == "CACHED" else "success"},
         {"label": "Macro", "value": macro_status, "tone": "danger" if macro_status == "SAMPLE" else "warning" if macro_status == "CACHED" else "success"},
         {"label": "Provider", "value": context.provider_effective, "tone": "info"},
-    ],
+    ] + (
+        [
+            {
+                "label": "Flow",
+                "value": investor_flow_status if investor_flow_fresh else f"{investor_flow_status}*",
+                "tone": "success" if investor_flow_fresh else "warning" if investor_flow_status != "SAMPLE" else "info",
+            }
+        ]
+        if context.market_id == "KR"
+        else []
+    ),
 )
 render_dashboard_status_banner(dashboard_status_banner)
 
@@ -537,6 +582,9 @@ held_sectors, filter_action_global, filter_regime_only_global, position_mode, sh
     theme_mode=context.theme_mode,
     price_status=price_status,
     macro_status=macro_status,
+    investor_flow_status=investor_flow_status,
+    investor_flow_fresh=investor_flow_fresh,
+    investor_flow_profile=str(st.session_state.get("flow_profile", "foreign_lead")),
     yield_curve_status=yield_curve_status,
     signals=list(signals),
     held_sector_options=held_sector_options,
@@ -606,6 +654,12 @@ bundle = DashboardDataBundle(
     analysis_max_date=analysis_max_date,
     market_refresh_notice=market_refresh_notice,
     macro_refresh_notice=macro_refresh_notice,
+    investor_flow_status=investor_flow_status,
+    investor_flow_fresh=investor_flow_fresh,
+    investor_flow_profile=str(st.session_state.get("flow_profile", "foreign_lead")),
+    investor_flow_frame=investor_flow_frame,
+    investor_flow_detail=dict(investor_flow_detail),
+    investor_flow_refresh_notice=investor_flow_refresh_notice,
 )
 
 render_dashboard_tabs(
@@ -630,7 +684,13 @@ render_dashboard_tabs(
     show_alerted_only=show_alerted_only,
     settings=settings,
     is_mobile_client=mobile_client,
+    market_id=context.market_id,
+    investor_flow_status=bundle.investor_flow_status,
+    investor_flow_fresh=bundle.investor_flow_fresh,
+    investor_flow_profile=bundle.investor_flow_profile,
+    investor_flow_frame=bundle.investor_flow_frame,
     sector_map=sector_map,
+    ui_locale=context.ui_locale,
 )
 
 st.divider()

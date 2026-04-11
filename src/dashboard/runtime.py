@@ -9,14 +9,17 @@ from typing import Callable, Literal
 import pandas as pd
 
 from src.dashboard.data import (
+    build_investor_flow_refresh_notice,
     build_macro_refresh_notice,
     build_market_refresh_notice,
     cached_analysis_sector_prices,
     cached_api_preflight,
+    cached_investor_flow,
     cached_macro,
     cached_sector_prices,
     cached_signals,
     get_all_sector_codes,
+    get_investor_flow_range_strings,
     get_market_range_strings,
 )
 from src.dashboard.types import DashboardContext
@@ -25,7 +28,7 @@ from src.data_sources.warehouse import close_cached_read_only_connection
 
 logger = logging.getLogger(__name__)
 
-CacheScope = Literal["all", "market", "macro", "signals"]
+CacheScope = Literal["all", "market", "macro", "flow", "signals"]
 
 
 def invalidate_dashboard_caches(scope: CacheScope) -> None:
@@ -34,6 +37,7 @@ def invalidate_dashboard_caches(scope: CacheScope) -> None:
         cached_api_preflight.clear()
         cached_sector_prices.clear()
         cached_analysis_sector_prices.clear()
+        cached_investor_flow.clear()
         cached_macro.clear()
         cached_signals.clear()
         return
@@ -45,6 +49,10 @@ def invalidate_dashboard_caches(scope: CacheScope) -> None:
         return
     if scope == "macro":
         cached_macro.clear()
+        cached_signals.clear()
+        return
+    if scope == "flow":
+        cached_investor_flow.clear()
         cached_signals.clear()
         return
     if scope == "signals":
@@ -113,6 +121,28 @@ def run_macro_refresh(context: DashboardContext, macro_series_cfg: dict) -> tupl
         return ("error", f"Macro data refresh failed: {exc}")
 
 
+def run_investor_flow_refresh(context: DashboardContext) -> tuple[str, str] | None:
+    """Execute a manual KR investor-flow refresh and convert the result into a UI notice."""
+    if str(context.market_id).strip().upper() != "KR":
+        return None
+
+    from src.data_sources.krx_investor_flow import run_manual_investor_flow_refresh
+
+    _, end_str = get_investor_flow_range_strings(context.market_end_date_str)
+    try:
+        close_cached_read_only_connection()
+        (_, _), refresh_summary = run_manual_investor_flow_refresh(
+            sector_map=context.sector_map,
+            end_date_str=end_str,
+            market=context.market_id,
+        )
+        invalidate_dashboard_caches("flow")
+        return build_investor_flow_refresh_notice(refresh_summary)
+    except Exception as exc:
+        logger.exception("Manual investor-flow refresh failed")
+        return ("error", f"Investor-flow refresh failed: {exc}")
+
+
 def run_feature_recompute() -> None:
     """Clear derived feature artifacts and invalidate signal caches."""
     close_cached_read_only_connection()
@@ -124,6 +154,7 @@ def run_feature_recompute() -> None:
 __all__ = [
     "invalidate_dashboard_caches",
     "run_feature_recompute",
+    "run_investor_flow_refresh",
     "run_macro_refresh",
     "run_market_refresh",
 ]

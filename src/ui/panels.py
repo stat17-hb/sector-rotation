@@ -493,6 +493,63 @@ def render_status_card_row(
     _render_cards_grid(cards, "status-card-grid")
 
 
+def render_investor_flow_summary(
+    *,
+    signals: Sequence,
+    investor_flow_status: str,
+    investor_flow_fresh: bool,
+    investor_flow_profile: str,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> None:
+    """Render a compact KR investor-flow snapshot under the status cards."""
+    if not signals:
+        return
+
+    rows: list[dict[str, object]] = []
+    for signal in signals:
+        flow_state = str(getattr(signal, "flow_state", "unavailable") or "unavailable")
+        if flow_state == "unavailable":
+            continue
+        rows.append(
+            {
+                "Sector": str(getattr(signal, "sector_name", "")),
+                "Flow": get_flow_state_label(flow_state, locale),
+                "Action": f"{getattr(signal, 'base_action', getattr(signal, 'action', 'N/A'))} -> {getattr(signal, 'action', 'N/A')}",
+                "Score": _safe_float(getattr(signal, "flow_score", None)),
+                "Reason": str(getattr(signal, "flow_reason", "")),
+            }
+        )
+
+    with st.container(border=True):
+        render_panel_header(
+            eyebrow=get_ui_text("flow_status_label", locale),
+            title=get_ui_text("flow_summary_title", locale),
+            description=get_ui_text("flow_summary_description", locale),
+            badge=f"{investor_flow_status} · {get_flow_profile_label(investor_flow_profile, locale)}",
+        )
+        st.caption(get_ui_text("flow_sidebar_caption", locale))
+
+        if not rows:
+            st.info(get_ui_text("flow_tab_empty", locale))
+            return
+
+        top_rows = pd.DataFrame(rows).sort_values(by=["Score", "Sector"], ascending=[False, True]).head(5)
+        st.dataframe(
+            top_rows,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Sector": st.column_config.TextColumn(get_ui_text("col_sector", locale), width="medium"),
+                "Flow": st.column_config.TextColumn(get_ui_text("flow_col_state", locale), width="small"),
+                "Action": st.column_config.TextColumn(get_ui_text("flow_col_adjustment", locale), width="medium"),
+                "Score": st.column_config.NumberColumn(get_ui_text("flow_col_score", locale), format="%.2f"),
+                "Reason": st.column_config.TextColumn(get_ui_text("col_reason", locale), width="large"),
+            },
+        )
+        if not investor_flow_fresh:
+            st.caption(get_ui_text("flow_unavailable", locale))
+
+
 def render_investor_decision_boards(
     *,
     signals: Sequence,

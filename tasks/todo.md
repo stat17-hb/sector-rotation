@@ -1,3 +1,38 @@
+# 2026-04-11 - KRX Experimental Investor Flow Dashboard Integration
+
+Status: In progress
+Owner: Codex + User
+
+## Execution Checklist
+- [x] Add `investor_flow` warehouse schema/read-write/status plumbing
+- [x] Add KR-only investor-flow refresh/aggregation module backed by cached experimental data
+- [x] Add flow-profile scoring and one-step action adjustment to the signal pipeline
+- [x] Extend dashboard context/state/runtime wiring for investor-flow status, refresh, and profile selection
+- [x] Add KR-only main-panel summary plus dedicated investor-flow tab
+- [x] Add regression tests for warehouse flow storage, flow scoring, signal adjustment, and dashboard/UI wiring
+- [x] Run focused verification and record results
+
+## Review
+- Added `src/data_sources/krx_investor_flow.py` as the KR-only experimental refresh path. It collects daily investor-by-ticker net purchases via `pykrx`, aggregates them into sector-level `net_flow_ratio`, and persists both raw ticker rows and sector rows into `warehouse.duckdb`.
+- Extended `src/data_sources/warehouse.py` with `investor_flow` dataset support: raw/sector fact tables, upsert/read helpers, dataset status, and artifact-key plumbing.
+- Added `src/signals/flow.py` and wired `src/signals/matrix.py` so sector signals now preserve `base_action`, apply a one-step flow overlay through selectable profiles, and expose component states/scores for UI use.
+- Wired the dashboard through `app.py`, `src/dashboard/data.py`, `src/dashboard/runtime.py`, `src/dashboard/state.py`, `src/dashboard/types.py`, `src/dashboard/tabs.py`, `src/ui/base.py`, `src/ui/copy.py`, and `src/ui/panels.py`.
+- KR sidebar now exposes `투자자수급 갱신` and a flow-profile selector. The main decision-first stack can show an investor-flow snapshot, and KR gets a dedicated `투자자 수급` tab with experimental warning plus adjustment/detail tables. US hides the feature.
+- Added regression coverage in:
+  `tests/test_investor_flow_scoring.py`
+  `tests/test_krx_investor_flow_data_source.py`
+  `tests/test_warehouse_investor_flow.py`
+  updated `tests/test_dashboard_tabs.py`
+  updated `tests/test_dashboard_runtime.py`
+  updated `tests/test_dashboard_state.py`
+- Verification:
+  `python -m py_compile app.py src\data_sources\warehouse.py src\data_sources\krx_investor_flow.py src\signals\matrix.py src\signals\flow.py src\dashboard\data.py src\dashboard\runtime.py src\dashboard\tabs.py src\dashboard\state.py src\dashboard\types.py src\ui\base.py src\ui\copy.py src\ui\panels.py tests\test_dashboard_tabs.py tests\test_dashboard_runtime.py tests\test_dashboard_state.py tests\test_investor_flow_scoring.py tests\test_warehouse_investor_flow.py tests\test_krx_investor_flow_data_source.py`
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests\test_signals.py tests\test_signal_pipeline_integration.py tests\test_investor_flow_scoring.py tests\test_warehouse_investor_flow.py tests\test_krx_investor_flow_data_source.py tests\krx\krx_investor_flow\test_normalize.py tests\krx\krx_investor_flow\test_probe_payload_contract.py` -> `19 passed`
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests\test_dashboard_state.py tests\test_warehouse_multimarket.py` -> `9 passed`
+  `python -m compileall app.py src tests`
+- Residual risk:
+  Streamlit-importing tests (`tests/test_dashboard_tabs.py`, `tests/test_dashboard_runtime.py`, and broader UI suites) could not be executed in this Windows session because importing `streamlit` hits the current `asyncio/_overlapped` environment failure (`WinError 10106`). Syntax/import compilation passed, but runtime UI verification remains blocked by that environment issue.
+
 # 2026-04-07 - Stabilization Wave: UI Locale Contract, App Orchestration, Repo Hygiene
 
 Status: Completed

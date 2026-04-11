@@ -16,7 +16,7 @@ import duckdb
 import pandas as pd
 
 
-WarehouseDataset = Literal["market_prices", "macro_data"]
+WarehouseDataset = Literal["market_prices", "macro_data", "investor_flow"]
 
 WAREHOUSE_PATH = Path("data/warehouse.duckdb")
 DEFAULT_PRICE_EXPORT_PATH = Path("data/curated/sector_prices.parquet")
@@ -442,6 +442,41 @@ def ensure_warehouse_schema(connection: duckdb.DuckDBPyConnection | None = None)
                 FROM {legacy_table}
             """,
         )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fact_investor_flow_daily (
+                market VARCHAR NOT NULL,
+                trade_date DATE NOT NULL,
+                ticker VARCHAR NOT NULL,
+                ticker_name VARCHAR,
+                investor_type VARCHAR NOT NULL,
+                buy_amount BIGINT,
+                sell_amount BIGINT,
+                net_buy_amount BIGINT,
+                provider VARCHAR NOT NULL,
+                loaded_at TIMESTAMPTZ NOT NULL,
+                PRIMARY KEY (market, trade_date, ticker, investor_type)
+            )
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fact_investor_flow_sector_daily (
+                market VARCHAR NOT NULL,
+                trade_date DATE NOT NULL,
+                sector_code VARCHAR NOT NULL,
+                sector_name VARCHAR,
+                investor_type VARCHAR NOT NULL,
+                buy_amount BIGINT,
+                sell_amount BIGINT,
+                net_buy_amount BIGINT,
+                net_flow_ratio DOUBLE,
+                provider VARCHAR NOT NULL,
+                loaded_at TIMESTAMPTZ NOT NULL,
+                PRIMARY KEY (market, trade_date, sector_code, investor_type)
+            )
+            """
+        )
     finally:
         if owns_connection:
             con.close()
@@ -760,6 +795,219 @@ def export_market_parquet(path: Path | None = None, *, market: str = "KR") -> Pa
     out.index = pd.DatetimeIndex(out.index)
     out[["index_code", "index_name", "close"]].to_parquet(export_path)
     return export_path
+
+
+def upsert_investor_flow_raw(frame: pd.DataFrame, *, provider: str, market: str = "KR") -> None:
+    if frame.empty:
+        return
+
+    normalized_market = _normalize_market_id(market)
+    normalized = frame.copy()
+    if "trade_date" in normalized.columns:
+        normalized["trade_date"] = pd.to_datetime(normalized["trade_date"]).dt.normalize()
+    else:
+        normalized.index = pd.DatetimeIndex(normalized.index)
+        normalized["trade_date"] = normalized.index.normalize()
+    normalized["market"] = normalized_market
+    normalized["ticker"] = normalized["ticker"].astype(str)
+    if "ticker_name" not in normalized.columns:
+        normalized["ticker_name"] = normalized["ticker"]
+    normalized["ticker_name"] = normalized["ticker_name"].astype(str)
+    normalized["investor_type"] = normalized["investor_type"].astype(str)
+    for column in ("buy_amount", "sell_amount", "net_buy_amount"):
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce").fillna(0).astype("int64")
+    normalized["provider"] = str(provider or "").strip().upper() or "UNKNOWN"
+    normalized["loaded_at"] = _utc_now()
+
+    payload = normalized[
+        [
+            "market",
+            "trade_date",
+            "ticker",
+            "ticker_name",
+            "investor_type",
+            "buy_amount",
+            "sell_amount",
+            "net_buy_amount",
+            "provider",
+            "loaded_at",
+        ]
+    ]
+
+    con = _connect()
+    try:
+        ensure_warehouse_schema(con)
+        _register_frame(con, "investor_flow_raw_upsert", payload)
+        con.execute(
+            """
+            INSERT INTO fact_investor_flow_daily AS fact
+            SELECT
+                market,
+                CAST(trade_date AS DATE) AS trade_date,
+                ticker,
+                ticker_name,
+                investor_type,
+                buy_amount,
+                sell_amount,
+                net_buy_amount,
+                provider,
+                loaded_at
+            FROM investor_flow_raw_upsert
+            ON CONFLICT (market, trade_date, ticker, investor_type) DO UPDATE SET
+                ticker_name = excluded.ticker_name,
+                buy_amount = excluded.buy_amount,
+                sell_amount = excluded.sell_amount,
+                net_buy_amount = excluded.net_buy_amount,
+                provider = excluded.provider,
+                loaded_at = excluded.loaded_at
+            """
+        )
+    finally:
+        con.close()
+
+
+def upsert_investor_flow_sector(frame: pd.DataFrame, *, provider: str, market: str = "KR") -> None:
+    if frame.empty:
+        return
+
+    normalized_market = _normalize_market_id(market)
+    normalized = frame.copy()
+    if "trade_date" in normalized.columns:
+        normalized["trade_date"] = pd.to_datetime(normalized["trade_date"]).dt.normalize()
+    else:
+        normalized.index = pd.DatetimeIndex(normalized.index)
+        normalized["trade_date"] = normalized.index.normalize()
+    normalized["market"] = normalized_market
+    normalized["sector_code"] = normalized["sector_code"].astype(str)
+    if "sector_name" not in normalized.columns:
+        normalized["sector_name"] = normalized["sector_code"]
+    normalized["sector_name"] = normalized["sector_name"].astype(str)
+    normalized["investor_type"] = normalized["investor_type"].astype(str)
+    for column in ("buy_amount", "sell_amount", "net_buy_amount"):
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce").fillna(0).astype("int64")
+    normalized["net_flow_ratio"] = pd.to_numeric(normalized["net_flow_ratio"], errors="coerce").fillna(0.0).astype("float64")
+    normalized["provider"] = str(provider or "").strip().upper() or "UNKNOWN"
+    normalized["loaded_at"] = _utc_now()
+
+    payload = normalized[
+        [
+            "market",
+            "trade_date",
+            "sector_code",
+            "sector_name",
+            "investor_type",
+            "buy_amount",
+            "sell_amount",
+            "net_buy_amount",
+            "net_flow_ratio",
+            "provider",
+            "loaded_at",
+        ]
+    ]
+
+    con = _connect()
+    try:
+        ensure_warehouse_schema(con)
+        _register_frame(con, "investor_flow_sector_upsert", payload)
+        con.execute(
+            """
+            INSERT INTO fact_investor_flow_sector_daily AS fact
+            SELECT
+                market,
+                CAST(trade_date AS DATE) AS trade_date,
+                sector_code,
+                sector_name,
+                investor_type,
+                buy_amount,
+                sell_amount,
+                net_buy_amount,
+                net_flow_ratio,
+                provider,
+                loaded_at
+            FROM investor_flow_sector_upsert
+            ON CONFLICT (market, trade_date, sector_code, investor_type) DO UPDATE SET
+                sector_name = excluded.sector_name,
+                buy_amount = excluded.buy_amount,
+                sell_amount = excluded.sell_amount,
+                net_buy_amount = excluded.net_buy_amount,
+                net_flow_ratio = excluded.net_flow_ratio,
+                provider = excluded.provider,
+                loaded_at = excluded.loaded_at
+            """
+        )
+    finally:
+        con.close()
+
+
+def read_sector_investor_flow(
+    sector_codes: list[str],
+    start: str,
+    end: str,
+    *,
+    market: str = "KR",
+) -> pd.DataFrame:
+    if not warehouse_exists() or not sector_codes:
+        return pd.DataFrame()
+
+    _ensure_schema_for_readers()
+    normalized_market = _normalize_market_id(market)
+    codes_frame = pd.DataFrame({"sector_code": [str(code) for code in sector_codes]})
+    start_date = _normalize_market_date(start)
+    end_date = _normalize_market_date(end)
+    con = _connect_ro()
+    try:
+        if not _table_exists(con, "fact_investor_flow_sector_daily"):
+            return pd.DataFrame()
+        _register_frame(con, "requested_sector_codes", codes_frame)
+        result = con.execute(
+            """
+            SELECT
+                fact.trade_date,
+                fact.sector_code,
+                fact.sector_name,
+                fact.investor_type,
+                fact.buy_amount,
+                fact.sell_amount,
+                fact.net_buy_amount,
+                fact.net_flow_ratio
+            FROM fact_investor_flow_sector_daily AS fact
+            INNER JOIN requested_sector_codes AS req
+                ON req.sector_code = fact.sector_code
+            WHERE fact.market = ?
+              AND fact.trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+            ORDER BY fact.trade_date, fact.sector_code, fact.investor_type
+            """,
+            [normalized_market, start_date, end_date],
+        ).fetchdf()
+    finally:
+        con.close()
+
+    if result.empty:
+        return pd.DataFrame()
+    result["trade_date"] = pd.to_datetime(result["trade_date"])
+    result = result.set_index("trade_date")
+    result.index = pd.DatetimeIndex(result.index)
+    return result[
+        [
+            "sector_code",
+            "sector_name",
+            "investor_type",
+            "buy_amount",
+            "sell_amount",
+            "net_buy_amount",
+            "net_flow_ratio",
+        ]
+    ].astype(
+        {
+            "sector_code": "object",
+            "sector_name": "object",
+            "investor_type": "object",
+            "buy_amount": "int64",
+            "sell_amount": "int64",
+            "net_buy_amount": "int64",
+            "net_flow_ratio": "float64",
+        }
+    )
 
 
 def upsert_macro_dimension(rows: list[dict[str, Any]], *, market: str = "KR") -> None:
@@ -1265,7 +1513,12 @@ def probe_dataset_mode(dataset: WarehouseDataset, *, market: str = "KR") -> str:
     normalized_market = _normalize_market_id(market)
     con = _connect_ro()
     try:
-        table = "fact_krx_index_daily" if dataset == "market_prices" else "fact_macro_monthly"
+        if dataset == "market_prices":
+            table = "fact_krx_index_daily"
+        elif dataset == "macro_data":
+            table = "fact_macro_monthly"
+        else:
+            table = "fact_investor_flow_sector_daily"
         if not _table_exists(con, table):
             return "SAMPLE"
         count = int(

@@ -36,6 +36,22 @@ class SectorSignal:
     rsi_d: float            # daily RSI
     rsi_w: float            # weekly RSI
     action: str             # ACTION_VALUES member
+    base_action: str = ""
+    flow_adjusted_action: str = ""
+    flow_adjustment: str = "none"
+    flow_profile: str = "foreign_lead"
+    flow_state: str = "unavailable"
+    flow_score: float = 0.0
+    flow_reason: str = ""
+    foreign_flow_state: str = "unavailable"
+    institutional_flow_state: str = "unavailable"
+    retail_flow_state: str = "unavailable"
+    foreign_flow_ratio: float = float("nan")
+    institutional_flow_ratio: float = float("nan")
+    retail_flow_ratio: float = float("nan")
+    foreign_flow_z: float = float("nan")
+    institutional_flow_z: float = float("nan")
+    retail_flow_z: float = float("nan")
     alerts: list[str] = field(default_factory=list)   # e.g. ["Overheat", "Oversold", "FX Shock", "Benchmark Missing", "RS Data Insufficient"]
     returns: dict[str, float] = field(default_factory=dict)  # {1W, 1M, 3M, 6M, 12M}
     volatility_20d: float = float("nan")
@@ -47,6 +63,16 @@ class SectorSignal:
     def __post_init__(self) -> None:
         if self.action not in ACTION_VALUES:
             raise ValueError(f"Invalid action: {self.action!r}. Must be one of {ACTION_VALUES}")
+        if self.base_action and self.base_action not in ACTION_VALUES:
+            raise ValueError(f"Invalid base_action: {self.base_action!r}. Must be one of {ACTION_VALUES}")
+        if self.flow_adjusted_action and self.flow_adjusted_action not in ACTION_VALUES:
+            raise ValueError(
+                f"Invalid flow_adjusted_action: {self.flow_adjusted_action!r}. Must be one of {ACTION_VALUES}"
+            )
+        if not self.base_action:
+            self.base_action = self.action
+        if not self.flow_adjusted_action:
+            self.flow_adjusted_action = self.action
 
 
 def compute_action(macro_fit: bool, momentum_strong: bool) -> str:
@@ -81,6 +107,9 @@ def build_signal_table(
     sector_map: dict,
     settings: dict,
     fx_change_pct: float | None = None,
+    sector_investor_flow: pd.DataFrame | None = None,
+    flow_profile: str = "foreign_lead",
+    flow_enabled: bool = False,
 ) -> list[SectorSignal]:
     """Build complete signal table for all sectors.
 
@@ -113,6 +142,7 @@ def build_signal_table(
     )
     from src.indicators.rsi import compute_rsi, compute_weekly_rsi
     from src.macro.regime import get_regime_sectors
+    from src.signals.flow import apply_flow_overlay
     from src.signals.scoring import apply_fx_shock_filter, apply_rsi_alerts
 
     # Validate inputs
@@ -352,4 +382,15 @@ def build_signal_table(
             len(unique_sectors),
         )
 
+    flow_frame = sector_investor_flow if sector_investor_flow is not None else pd.DataFrame()
+    flow_short_window = int(settings.get("investor_flow_short_window", 20))
+    flow_long_window = int(settings.get("investor_flow_long_window", 60))
+    signals, _flow_summary_map = apply_flow_overlay(
+        signals,
+        flow_frame=flow_frame,
+        flow_profile=flow_profile,
+        enabled=flow_enabled,
+        short_window=flow_short_window,
+        long_window=flow_long_window,
+    )
     return signals

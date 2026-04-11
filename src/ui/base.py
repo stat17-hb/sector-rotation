@@ -15,6 +15,7 @@ from src.dashboard.metrics import compute_rs_divergence_pct
 from src.ui.copy import (
     ALL_ACTION_KEY,
     DEFAULT_UI_LOCALE,
+    FLOW_PROFILE_IDS,
     UiLocale,
     get_action_filter_label,
     get_action_label,
@@ -22,6 +23,8 @@ from src.ui.copy import (
     get_cycle_palette_items,
     get_cycle_phase_label,
     get_decision_label,
+    get_flow_profile_label,
+    get_flow_state_label,
     get_heatmap_palette_label,
     get_position_mode_label,
     get_range_preset_label,
@@ -276,6 +279,10 @@ def describe_signal_decision(
     held = is_signal_held(signal, held_sectors)
     action = str(getattr(signal, "action", "N/A"))
     decision = get_decision_label(action, held=held, locale=locale)
+    base_action = str(getattr(signal, "base_action", action) or action)
+    flow_adjustment = str(getattr(signal, "flow_adjustment", "none") or "none")
+    flow_state = str(getattr(signal, "flow_state", "unavailable") or "unavailable")
+    flow_profile = str(getattr(signal, "flow_profile", "foreign_lead") or "foreign_lead")
 
     rs_div = _rs_divergence_pct(signal)
     ret_3m = _pct_value(getattr(signal, "returns", {}).get("3M"))
@@ -291,6 +298,14 @@ def describe_signal_decision(
         positive_parts.append(get_ui_text("reason_trend_intact", locale))
     if ret_3m is not None:
         positive_parts.append(get_ui_text("reason_return_3m", locale, value=ret_3m))
+    if flow_adjustment == "upgrade":
+        positive_parts.append(
+            f"{base_action} -> {action} ({get_flow_state_label(flow_state, locale)} · {get_flow_profile_label(flow_profile, locale)})"
+        )
+    elif flow_adjustment == "none" and flow_state == "supportive":
+        positive_parts.append(
+            f"{get_flow_state_label(flow_state, locale)} ({get_flow_profile_label(flow_profile, locale)})"
+        )
     reason = " | ".join(positive_parts[:3]) if positive_parts else get_ui_text("reason_need_confirming_strength", locale)
 
     risk_parts: list[str] = []
@@ -302,6 +317,16 @@ def describe_signal_decision(
         risk_parts.append(get_ui_text("risk_trend_weakened", locale))
     if volatility is not None and volatility >= 25.0:
         risk_parts.append(get_ui_text("risk_volatility", locale, value=volatility))
+    if flow_adjustment == "downgrade":
+        risk_parts.append(
+            f"{base_action} -> {action} ({get_flow_state_label(flow_state, locale)} · {get_flow_profile_label(flow_profile, locale)})"
+        )
+    elif flow_adjustment == "experimental unavailable":
+        risk_parts.append(get_ui_text("flow_unavailable", locale))
+    elif flow_adjustment == "none" and flow_state == "adverse":
+        risk_parts.append(
+            f"{get_flow_state_label(flow_state, locale)} ({get_flow_profile_label(flow_profile, locale)})"
+        )
     risk_parts.extend(alerts[:2])
     deduped_risks: list[str] = []
     for item in risk_parts:
@@ -329,7 +354,10 @@ def describe_signal_decision(
     )
     return_3m = f"{ret_3m:+.1f}%" if ret_3m is not None else "N/A"
     volatility_20d = f"{volatility:.1f}%" if volatility is not None else "N/A"
-    alerts_text = ", ".join(alerts) if alerts else get_ui_text("alerts_none", locale)
+    alerts_display = list(alerts)
+    if flow_adjustment in {"upgrade", "downgrade"}:
+        alerts_display.append(f"{base_action} -> {action}")
+    alerts_text = ", ".join(alerts_display) if alerts_display else get_ui_text("alerts_none", locale)
     regime_fit = get_ui_text("regime_fit_yes", locale) if bool(getattr(signal, "macro_fit", False)) else get_ui_text("regime_fit_no", locale)
     conclusion = get_ui_text(
         "conclusion_template",
@@ -415,6 +443,7 @@ __all__ = [
     "get_theme_tokens",
     "UiLocale",
     "DEFAULT_UI_LOCALE",
+    "FLOW_PROFILE_IDS",
     "ALL_ACTION_KEY",
     "ALL_ACTION_OPTION",
     "LEGACY_ALL_ACTION_OPTIONS",
@@ -432,6 +461,8 @@ __all__ = [
     "get_cycle_palette_items",
     "get_regime_subtitle",
     "get_ui_text",
+    "get_flow_profile_label",
+    "get_flow_state_label",
     "normalize_action_filter",
     "format_action_label",
     "format_cycle_phase_label",

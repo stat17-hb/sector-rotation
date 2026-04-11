@@ -11,17 +11,22 @@ from config.theme import set_theme_mode
 from src.dashboard.analysis import _extract_heatmap_selection
 from src.ui.components import (
     DEFAULT_UI_LOCALE,
+    FLOW_PROFILE_IDS,
     HEATMAP_PALETTE_OPTIONS,
     build_sector_strength_heatmap,
     describe_signal_decision,
     get_action_filter_label,
     format_cycle_phase_label,
+    get_flow_profile_label,
+    get_flow_state_label,
     format_heatmap_palette_label,
+    get_ui_text,
     normalize_range_preset,
     render_action_summary,
     render_cycle_timeline_panel,
     render_decision_hero,
     render_investor_decision_boards,
+    render_investor_flow_summary,
     render_panel_header,
     render_returns_heatmap,
     render_rs_momentum_bar,
@@ -44,8 +49,10 @@ def render_sidebar_controls(
     probe_macro_status: str,
     btn_states: dict[str, bool],
     asof_default: date,
+    probe_investor_flow_status: str = "SAMPLE",
+    flow_profile: str = "foreign_lead",
     ui_locale: str = DEFAULT_UI_LOCALE,
-) -> tuple[str, date, bool, bool, bool]:
+) -> tuple[str, date, str, bool, bool, bool, bool]:
     market_options = ["KR", "US"]
     selected_market = st.radio(
         ui_labels.get("market_selector", "시장"),
@@ -140,8 +147,24 @@ def render_sidebar_controls(
             st.rerun()
 
     st.divider()
+    if market_id == "KR":
+        st.subheader(get_ui_text("flow_profile_label", ui_locale))
+        selected_flow_profile = st.selectbox(
+            get_ui_text("flow_profile_label", ui_locale),
+            options=list(FLOW_PROFILE_IDS),
+            index=list(FLOW_PROFILE_IDS).index(str(flow_profile or "foreign_lead")),
+            format_func=lambda value: get_flow_profile_label(value, ui_locale),
+            help=get_ui_text("flow_sidebar_caption", ui_locale),
+        )
+    else:
+        selected_flow_profile = str(flow_profile or "foreign_lead")
+
+    st.divider()
     st.subheader("데이터 작업")
-    st.caption(f"시장: {probe_price_status} · 매크로: {probe_macro_status}")
+    if market_id == "KR":
+        st.caption(f"시장: {probe_price_status} · 매크로: {probe_macro_status} · 수급: {probe_investor_flow_status}")
+    else:
+        st.caption(f"시장: {probe_price_status} · 매크로: {probe_macro_status}")
     refresh_market = st.button(
         "시장데이터 갱신",
         disabled=not btn_states["refresh_market"],
@@ -152,6 +175,12 @@ def render_sidebar_controls(
         disabled=not btn_states["refresh_macro"],
         width="stretch",
     )
+    refresh_flow = False
+    if market_id == "KR":
+        refresh_flow = st.button(
+            get_ui_text("flow_refresh_button", ui_locale),
+            width="stretch",
+        )
     recompute = st.button(
         "전체 재계산",
         disabled=not btn_states["recompute"],
@@ -160,7 +189,7 @@ def render_sidebar_controls(
     )
 
     st.caption(ui_labels.get("sidebar_title", "섹터 로테이션"))
-    return selected_market, asof_date, refresh_market, refresh_macro, recompute
+    return selected_market, asof_date, selected_flow_profile, refresh_market, refresh_macro, refresh_flow, recompute
 
 
 def render_analysis_canvas(
@@ -363,6 +392,9 @@ def render_decision_first_sections(
     theme_mode: str,
     price_status: str,
     macro_status: str,
+    investor_flow_status: str,
+    investor_flow_fresh: bool,
+    investor_flow_profile: str,
     yield_curve_status: str | None,
     signals: list[Any],
     held_sector_options: list[str],
@@ -391,6 +423,16 @@ def render_decision_first_sections(
         yield_curve_status=yield_curve_status,
         locale=ui_locale,
     )
+    if investor_flow_status != "SAMPLE" or any(
+        str(getattr(signal, "flow_state", "unavailable")) != "unavailable" for signal in signals
+    ):
+        render_investor_flow_summary(
+            signals=signals,
+            investor_flow_status=investor_flow_status,
+            investor_flow_fresh=investor_flow_fresh,
+            investor_flow_profile=investor_flow_profile,
+            locale=ui_locale,
+        )
     held_sectors = render_investor_decision_boards(
         signals=signals,
         held_sector_options=held_sector_options,
@@ -804,6 +846,88 @@ def render_screening_tab(
         )
 
 
+def render_investor_flow_tab(
+    *,
+    tab,
+    signals: list[Any],
+    investor_flow_frame: pd.DataFrame,
+    investor_flow_status: str,
+    investor_flow_fresh: bool,
+    investor_flow_profile: str,
+    ui_locale: str = DEFAULT_UI_LOCALE,
+) -> None:
+    with tab:
+        render_panel_header(
+            eyebrow=get_ui_text("flow_status_label", ui_locale),
+            title=get_ui_text("flow_summary_title", ui_locale),
+            description=get_ui_text("flow_summary_description", ui_locale),
+            badge=f"{investor_flow_status} · {get_flow_profile_label(investor_flow_profile, ui_locale)}",
+        )
+        st.warning(get_ui_text("flow_tab_warning", ui_locale))
+
+        if investor_flow_frame.empty:
+            st.info(get_ui_text("flow_tab_empty", ui_locale))
+            return
+
+        latest_rows = []
+        for signal in sorted(signals, key=lambda item: float(getattr(item, "flow_score", 0.0)), reverse=True):
+            latest_rows.append(
+                {
+                    "Sector": str(getattr(signal, "sector_name", "")),
+                    "Profile": get_flow_profile_label(str(getattr(signal, "flow_profile", investor_flow_profile)), ui_locale),
+                    "Flow state": get_flow_state_label(str(getattr(signal, "flow_state", "unavailable")), ui_locale),
+                    "Flow score": float(getattr(signal, "flow_score", 0.0)),
+                    "Action change": f"{getattr(signal, 'base_action', getattr(signal, 'action', 'N/A'))} -> {getattr(signal, 'action', 'N/A')}",
+                    "Foreign": get_flow_state_label(str(getattr(signal, "foreign_flow_state", "unavailable")), ui_locale),
+                    "Institutional": get_flow_state_label(str(getattr(signal, "institutional_flow_state", "unavailable")), ui_locale),
+                    "Retail": get_flow_state_label(str(getattr(signal, "retail_flow_state", "unavailable")), ui_locale),
+                }
+            )
+
+        latest_df = pd.DataFrame(latest_rows)
+        st.dataframe(
+            latest_df,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Sector": st.column_config.TextColumn(get_ui_text("col_sector", ui_locale), width="medium"),
+                "Profile": st.column_config.TextColumn(get_ui_text("flow_col_profile", ui_locale), width="medium"),
+                "Flow state": st.column_config.TextColumn(get_ui_text("flow_col_state", ui_locale), width="small"),
+                "Flow score": st.column_config.NumberColumn(get_ui_text("flow_col_score", ui_locale), format="%.2f"),
+                "Action change": st.column_config.TextColumn(get_ui_text("flow_col_adjustment", ui_locale), width="medium"),
+                "Foreign": st.column_config.TextColumn(get_ui_text("flow_col_foreign", ui_locale), width="small"),
+                "Institutional": st.column_config.TextColumn(get_ui_text("flow_col_institutional", ui_locale), width="small"),
+                "Retail": st.column_config.TextColumn(get_ui_text("flow_col_retail", ui_locale), width="small"),
+            },
+        )
+
+        latest_date = investor_flow_frame.index.max()
+        latest_snapshot = investor_flow_frame.loc[investor_flow_frame.index == latest_date].copy()
+        if not latest_snapshot.empty:
+            latest_snapshot["state_label"] = latest_snapshot["investor_type"].astype(str)
+            latest_snapshot = latest_snapshot.rename(
+                columns={
+                    "sector_name": "Sector",
+                    "investor_type": "Investor",
+                    "net_flow_ratio": "Latest ratio",
+                }
+            )
+            st.dataframe(
+                latest_snapshot[["Sector", "Investor", "Latest ratio", "net_buy_amount"]].reset_index(drop=True),
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Sector": st.column_config.TextColumn(get_ui_text("col_sector", ui_locale), width="medium"),
+                    "Investor": st.column_config.TextColumn(get_ui_text("flow_status_label", ui_locale), width="small"),
+                    "Latest ratio": st.column_config.NumberColumn(get_ui_text("flow_col_latest", ui_locale), format="%.4f"),
+                    "net_buy_amount": st.column_config.NumberColumn("Net", format="%d"),
+                },
+            )
+
+        if not investor_flow_fresh:
+            st.caption(get_ui_text("flow_unavailable", ui_locale))
+
+
 def _build_etf_map(sector_map: dict | None) -> dict[str, list]:
     """Build {index_code: [{"code":..., "name":...}, ...]} from sector_map config."""
     if not sector_map:
@@ -841,16 +965,26 @@ def render_dashboard_tabs(
     show_alerted_only: bool,
     settings: dict[str, Any],
     is_mobile_client: bool,
+    market_id: str = "KR",
+    investor_flow_status: str = "SAMPLE",
+    investor_flow_fresh: bool = False,
+    investor_flow_profile: str = "foreign_lead",
+    investor_flow_frame: pd.DataFrame | None = None,
     sector_map: dict[str, Any] | None = None,
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
     etf_map = _build_etf_map(sector_map)
-    tab_summary, tab_charts, tab_all_signals, tab_screening = st.tabs([
+    tab_labels = [
         "대시보드 요약",
         "모멘텀/차트 분석",
         "전체 종목 데이터",
         "종목 스크리닝",
-    ])
+    ]
+    include_flow_tab = str(market_id).strip().upper() == "KR"
+    if include_flow_tab:
+        tab_labels.append("투자자 수급")
+    tabs = st.tabs(tab_labels)
+    tab_summary, tab_charts, tab_all_signals, tab_screening = tabs[:4]
     render_summary_tab(
         tab=tab_summary,
         current_regime=current_regime,
@@ -895,3 +1029,13 @@ def render_dashboard_tabs(
         settings=settings,
         benchmark_code=str(settings.get("benchmark_code", "1001")),
     )
+    if include_flow_tab:
+        render_investor_flow_tab(
+            tab=tabs[4],
+            signals=signals,
+            investor_flow_frame=investor_flow_frame if investor_flow_frame is not None else pd.DataFrame(),
+            investor_flow_status=investor_flow_status,
+            investor_flow_fresh=investor_flow_fresh,
+            investor_flow_profile=investor_flow_profile,
+            ui_locale=ui_locale,
+        )

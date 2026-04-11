@@ -23,6 +23,11 @@ CYCLE_PHASE_IDS: tuple[str, ...] = (
     "CONTRACTION_LATE",
 )
 HEATMAP_PALETTE_IDS: tuple[str, ...] = ("classic", "contrast", "blue_orange")
+FLOW_PROFILE_IDS: tuple[str, ...] = (
+    "foreign_lead",
+    "institutional_confirmation",
+    "contrarian_retail",
+)
 
 _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
     "all_action_label": {"ko": "전체", "en": "All"},
@@ -150,6 +155,41 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
         "ko": "{decision} | 국면: {regime_fit} | RS 추세: {rs_trend} | 3개월: {return_3m} | 변동성: {volatility_20d} | 알림: {alerts_text}",
         "en": "{decision} | Regime: {regime_fit} | RS trend: {rs_trend} | 3M: {return_3m} | Volatility: {volatility_20d} | Alerts: {alerts_text}",
     },
+    "flow_unavailable": {
+        "ko": "실험적 수급 데이터 없음",
+        "en": "Experimental flow data unavailable",
+    },
+    "flow_supportive": {"ko": "수급 우호", "en": "Flow supportive"},
+    "flow_neutral": {"ko": "수급 중립", "en": "Flow neutral"},
+    "flow_adverse": {"ko": "수급 역풍", "en": "Flow adverse"},
+    "flow_profile_label": {"ko": "수급 해석 프로필", "en": "Flow profile"},
+    "flow_status_label": {"ko": "투자자 수급", "en": "Investor flow"},
+    "flow_refresh_button": {"ko": "투자자수급 갱신", "en": "Refresh investor flow"},
+    "flow_sidebar_caption": {
+        "ko": "비공식/실험 데이터는 수동 갱신 후 캐시로만 읽습니다.",
+        "en": "Unofficial experimental data is refreshed manually and read from cache only.",
+    },
+    "flow_summary_title": {"ko": "투자자 수급 스냅샷", "en": "Investor-flow snapshot"},
+    "flow_summary_description": {
+        "ko": "기존 액션은 유지한 채 수급 후처리 결과만 요약합니다.",
+        "en": "Summarize post-processed investor-flow adjustments without changing the base matrix.",
+    },
+    "flow_tab_warning": {
+        "ko": "Unofficial / Experimental: 비공식 KRX 수급 데이터는 수동 갱신 후 캐시에서만 읽습니다.",
+        "en": "Unofficial / Experimental: investor-flow data is read from the local cache after manual refresh only.",
+    },
+    "flow_tab_empty": {
+        "ko": "표시할 투자자 수급 데이터가 없습니다. 사이드바에서 투자자수급 갱신을 실행하세요.",
+        "en": "No investor-flow data is available yet. Run the manual refresh from the sidebar.",
+    },
+    "flow_col_profile": {"ko": "프로필", "en": "Profile"},
+    "flow_col_state": {"ko": "수급 상태", "en": "Flow state"},
+    "flow_col_score": {"ko": "수급 점수", "en": "Flow score"},
+    "flow_col_adjustment": {"ko": "액션 변화", "en": "Action change"},
+    "flow_col_foreign": {"ko": "외국인", "en": "Foreign"},
+    "flow_col_institutional": {"ko": "기관", "en": "Institutional"},
+    "flow_col_retail": {"ko": "개인", "en": "Retail"},
+    "flow_col_latest": {"ko": "최근 비율", "en": "Latest ratio"},
 }
 
 _ACTION_LABELS: dict[str, dict[UiLocale, str]] = {
@@ -215,6 +255,19 @@ _HEATMAP_PALETTE_LABELS: dict[str, dict[UiLocale, str]] = {
     "classic": {"ko": "기본 빨강/초록", "en": "Classic red/green"},
     "contrast": {"ko": "고대비 빨강/초록", "en": "High-contrast red/green"},
     "blue_orange": {"ko": "파랑/주황 발산형", "en": "Blue/orange diverging"},
+}
+
+_FLOW_PROFILE_LABELS: dict[str, dict[UiLocale, str]] = {
+    "foreign_lead": {"ko": "외국인 주도형", "en": "Foreign-led"},
+    "institutional_confirmation": {"ko": "기관 확인형", "en": "Institutional confirmation"},
+    "contrarian_retail": {"ko": "개인 역지표형", "en": "Contrarian retail"},
+}
+
+_FLOW_STATE_LABELS: dict[str, dict[UiLocale, str]] = {
+    "supportive": {"ko": "수급 우호", "en": "Supportive"},
+    "neutral": {"ko": "수급 중립", "en": "Neutral"},
+    "adverse": {"ko": "수급 역풍", "en": "Adverse"},
+    "unavailable": {"ko": "실험 데이터 없음", "en": "Unavailable"},
 }
 
 _CYCLE_PALETTE_ITEMS: tuple[tuple[str, str], ...] = (
@@ -300,6 +353,16 @@ def get_heatmap_palette_label(palette: str, locale: str | None = DEFAULT_UI_LOCA
     return _HEATMAP_PALETTE_LABELS.get(palette, {}).get(normalized_locale, palette)
 
 
+def get_flow_profile_label(profile: str, locale: str | None = DEFAULT_UI_LOCALE) -> str:
+    normalized_locale = normalize_locale(locale)
+    return _FLOW_PROFILE_LABELS.get(profile, {}).get(normalized_locale, profile)
+
+
+def get_flow_state_label(state: str, locale: str | None = DEFAULT_UI_LOCALE) -> str:
+    normalized_locale = normalize_locale(locale)
+    return _FLOW_STATE_LABELS.get(state, {}).get(normalized_locale, state)
+
+
 def get_cycle_palette_items(locale: str | None = DEFAULT_UI_LOCALE) -> list[tuple[str, str]]:
     normalized_locale = normalize_locale(locale)
     return [
@@ -313,6 +376,7 @@ __all__ = [
     "ALL_ACTION_KEY",
     "CYCLE_PHASE_IDS",
     "DEFAULT_UI_LOCALE",
+    "FLOW_PROFILE_IDS",
     "HEATMAP_PALETTE_IDS",
     "POSITION_MODE_IDS",
     "RANGE_PRESET_IDS",
@@ -323,6 +387,8 @@ __all__ = [
     "get_cycle_palette_items",
     "get_cycle_phase_label",
     "get_decision_label",
+    "get_flow_profile_label",
+    "get_flow_state_label",
     "get_heatmap_palette_label",
     "get_position_mode_label",
     "get_range_preset_label",
