@@ -401,6 +401,7 @@ def render_decision_first_sections(
     action_options: list[str],
     is_mobile_client: bool,
     analysis_canvas_kwargs: dict[str, Any],
+    market_id: str = "KR",
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> tuple[list[str], str, bool, str, bool]:
     """Render the decision-first main-page stack and return the active filters."""
@@ -423,8 +424,10 @@ def render_decision_first_sections(
         yield_curve_status=yield_curve_status,
         locale=ui_locale,
     )
-    if investor_flow_status != "SAMPLE" or any(
+    if str(market_id).strip().upper() == "KR" and (
+        investor_flow_status != "SAMPLE" or any(
         str(getattr(signal, "flow_state", "unavailable")) != "unavailable" for signal in signals
+        )
     ):
         render_investor_flow_summary(
             signals=signals,
@@ -854,9 +857,191 @@ def render_investor_flow_tab(
     investor_flow_status: str,
     investor_flow_fresh: bool,
     investor_flow_profile: str,
+    investor_flow_detail: dict[str, Any] | None = None,
+    market_id: str = "KR",
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
     with tab:
+        normalized_market = str(market_id).strip().upper() or "KR"
+        if normalized_market == "US":
+            state_labels = {
+                "elevated": "활동 확대",
+                "normal": "보통",
+                "subdued": "활동 둔화",
+                "unavailable": "사용 불가",
+            }
+            render_panel_header(
+                eyebrow="Flow Proxies",
+                title="US Flow Proxies",
+                description="공개 ETF 데이터 기반 프록시입니다. 한국식 투자자별 수급과 1:1 대응이 아니라, 섹터 ETF 자금/거래 압력 확인 레이어로 보세요.",
+                badge=investor_flow_status,
+            )
+            st.info("이 탭은 `ETF wrapper-flow proxy`를 보여 줍니다. participant-segmented 현물 순매수 데이터는 아닙니다.")
+            if investor_flow_frame.empty:
+                st.info("US flow proxy 데이터를 불러오지 못했습니다.")
+                return
+
+            latest_snapshot = investor_flow_frame.sort_values(
+                by=["activity_zscore", "dollar_volume"],
+                ascending=[False, False],
+            ).copy()
+            latest_snapshot["state_label"] = latest_snapshot["activity_state"].astype(str).map(
+                lambda value: state_labels.get(str(value), str(value))
+            )
+            st.dataframe(
+                latest_snapshot[
+                    [
+                        "sector_name",
+                        "state_label",
+                        "activity_zscore",
+                        "dollar_volume",
+                        "dollar_volume_short_mean",
+                        "dollar_volume_long_mean",
+                        "shares_outstanding",
+                        "assets_under_management",
+                        "nav",
+                        "net_cash_amount",
+                    ]
+                ].rename(
+                    columns={
+                        "sector_name": "Sector",
+                        "state_label": "Activity state",
+                        "activity_zscore": "Activity z-score",
+                        "dollar_volume": "Latest $Vol",
+                        "dollar_volume_short_mean": "5D avg $Vol",
+                        "dollar_volume_long_mean": "20D avg $Vol",
+                        "shares_outstanding": "Shares Out",
+                        "assets_under_management": "AUM",
+                        "nav": "NAV",
+                        "net_cash_amount": "Net Cash",
+                    }
+                ),
+                width="stretch",
+                hide_index=True,
+                column_config={
+                    "Sector": st.column_config.TextColumn("Sector", width="medium"),
+                    "Activity state": st.column_config.TextColumn("Activity state", width="small"),
+                    "Activity z-score": st.column_config.NumberColumn("Activity z-score", format="%.2f"),
+                    "Latest $Vol": st.column_config.NumberColumn("Latest $Vol", format="%.0f"),
+                    "5D avg $Vol": st.column_config.NumberColumn("5D avg $Vol", format="%.0f"),
+                    "20D avg $Vol": st.column_config.NumberColumn("20D avg $Vol", format="%.0f"),
+                    "Shares Out": st.column_config.NumberColumn("Shares Out", format="%.0f"),
+                    "AUM": st.column_config.NumberColumn("AUM", format="%.0f"),
+                    "NAV": st.column_config.NumberColumn("NAV", format="%.2f"),
+                    "Net Cash": st.column_config.NumberColumn("Net Cash", format="%.0f"),
+                },
+            )
+            latest_date = investor_flow_frame.index.max()
+            ref_date_str = pd.Timestamp(latest_date).strftime("%Y-%m-%d")
+            source_label = {"LIVE": "실시간", "CACHED": "캐시", "SAMPLE": "샘플"}.get(
+                str(investor_flow_status).upper(), investor_flow_status
+            )
+            st.caption(f"데이터 기준일: {ref_date_str} · 소스: {source_label}")
+            missing_tickers = [str(code) for code in investor_flow_frame.attrs.get("missing_tickers", []) if str(code).strip()]
+            if missing_tickers:
+                preview = ", ".join(missing_tickers[:4])
+                suffix = "" if len(missing_tickers) <= 4 else ", ..."
+                st.caption(f"누락 섹터: {preview}{suffix}")
+            if not investor_flow_fresh:
+                st.caption("최근 영업일까지 완전 커버된 값이 아닐 수 있습니다.")
+
+            ownership_context = dict((investor_flow_detail or {}).get("ownership_context") or {})
+            ici_context = dict(ownership_context.get("ici_weekly_flows") or {})
+            ici_table = ici_context.get("table")
+            if isinstance(ici_table, pd.DataFrame) and not ici_table.empty:
+                render_panel_header(
+                    eyebrow="ICI",
+                    title="Weekly ETF Net Issuance",
+                    description="ICI 주간 ETF 순발행 추정치입니다. 섹터별 flow가 아니라 미국 ETF 시장 전체 흐름 컨텍스트입니다.",
+                    badge=str(ici_context.get("as_of", "")),
+                )
+                st.dataframe(
+                    ici_table.rename(columns={"category": "Category", "value": "Net issuance (USD mn)"}),
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        "Category": st.column_config.TextColumn("Category", width="medium"),
+                        "Net issuance (USD mn)": st.column_config.NumberColumn("Net issuance (USD mn)", format="%.0f"),
+                    },
+                )
+
+            positions_context = dict(ownership_context.get("sec_13f_positions") or {})
+            positions_table = positions_context.get("table")
+            if isinstance(positions_table, pd.DataFrame) and not positions_table.empty:
+                render_panel_header(
+                    eyebrow="SEC 13F",
+                    title="Latest 13F Sector ETF Positioning",
+                    description="최신 SEC 13F dataset에서 sector ETF 자체에 대한 institutional position을 집계한 값입니다. 분기 지연이 있는 ownership context입니다.",
+                    badge=str(positions_context.get("dataset_label", "Latest 13F")),
+                )
+                st.dataframe(
+                    positions_table.rename(
+                        columns={
+                            "sector_code": "ETF",
+                            "sector_name": "Sector",
+                            "filing_count": "Filings",
+                            "manager_value_total_usd": "Reported value (USD)",
+                            "manager_shares_total": "Reported shares",
+                        }
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        "ETF": st.column_config.TextColumn("ETF", width="small"),
+                        "Sector": st.column_config.TextColumn("Sector", width="medium"),
+                        "cusip": st.column_config.TextColumn("CUSIP", width="small"),
+                        "Filings": st.column_config.NumberColumn("Filings", format="%d"),
+                        "Reported value (USD)": st.column_config.NumberColumn("Reported value (USD)", format="%.0f"),
+                        "Reported shares": st.column_config.NumberColumn("Reported shares", format="%.0f"),
+                    },
+                )
+
+            events_context = dict(ownership_context.get("sec_13dg_events") or {})
+            events_table = events_context.get("table")
+            if isinstance(events_table, pd.DataFrame) and not events_table.empty:
+                render_panel_header(
+                    eyebrow="SEC 13D/13G",
+                    title="Recent 13D/13G Events",
+                    description="최근 13D/13G 이벤트입니다. sector ETF top holdings 기준의 event-driven beneficial ownership context이며, participant flow가 아닙니다.",
+                    badge=f"{int(events_context.get('lookback_days', 0))}D",
+                )
+                st.dataframe(
+                    events_table.rename(
+                        columns={
+                            "sector_code": "ETF",
+                            "sector_name": "Sector",
+                            "matched_top_holdings": "Matched holdings",
+                            "recent_13dg_events": "13D/G events",
+                            "sample_events": "Examples",
+                        }
+                    ),
+                    width="stretch",
+                    hide_index=True,
+                    column_config={
+                        "ETF": st.column_config.TextColumn("ETF", width="small"),
+                        "Sector": st.column_config.TextColumn("Sector", width="medium"),
+                        "Matched holdings": st.column_config.NumberColumn("Matched holdings", format="%d"),
+                        "13D/G events": st.column_config.NumberColumn("13D/G events", format="%d"),
+                        "Examples": st.column_config.TextColumn("Examples", width="large"),
+                    },
+                )
+
+            form_sho_context = dict(ownership_context.get("form_sho_context") or {})
+            if form_sho_context:
+                render_panel_header(
+                    eyebrow="Form SHO",
+                    title="Form SHO Context",
+                    description="SEC short-position transparency 레이어입니다. 현재는 공식 정책/availability 컨텍스트만 표시합니다.",
+                    badge=str(form_sho_context.get("status", "")),
+                )
+                st.caption(str(form_sho_context.get("note", "")))
+
+            context_errors = dict(ownership_context.get("errors") or {})
+            if context_errors:
+                preview = "; ".join(f"{key}: {value}" for key, value in sorted(context_errors.items()))
+                st.caption(f"추가 컨텍스트 일부 로드 실패: {preview}")
+            return
+
         render_panel_header(
             eyebrow=get_ui_text("flow_status_label", ui_locale),
             title=get_ui_text("flow_summary_title", ui_locale),
@@ -924,6 +1109,15 @@ def render_investor_flow_tab(
                 },
             )
 
+        # Data reference date and freshness caption
+        try:
+            ref_date_str = pd.Timestamp(latest_date).strftime("%Y-%m-%d")
+        except Exception:
+            ref_date_str = str(latest_date)
+        source_label = {"LIVE": "실시간", "CACHED": "캐시", "SAMPLE": "샘플"}.get(
+            str(investor_flow_status).upper(), investor_flow_status
+        )
+        st.caption(f"데이터 기준일: {ref_date_str} · 소스: {source_label}")
         if not investor_flow_fresh:
             st.caption(get_ui_text("flow_unavailable", ui_locale))
 
@@ -940,6 +1134,151 @@ def _build_etf_map(sector_map: dict | None) -> dict[str, list]:
             if code and etfs:
                 etf_map[code] = [{"code": str(e["code"]), "name": str(e["name"])} for e in etfs]
     return etf_map
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _cached_monitoring_data(market_id: str) -> dict:
+    """Load investor flow monitoring data with a 60-second TTL cache."""
+    from src.data_sources.krx_investor_flow import read_warm_status
+    from src.data_sources.warehouse import (
+        read_investor_flow_raw_date_bounds,
+        read_investor_flow_run_history,
+    )
+    warm = read_warm_status()
+    bounds = read_investor_flow_raw_date_bounds(market=market_id)
+    history = read_investor_flow_run_history(market=market_id, limit=15)
+    return {"warm": warm, "bounds": bounds, "history": history}
+
+
+def render_monitoring_tab(
+    *,
+    tab,
+    market_id: str = "KR",
+    ui_locale: str = DEFAULT_UI_LOCALE,
+) -> None:
+    """Render the '데이터 모니터링' tab for investor-flow ingestion health."""
+    with tab:
+        render_panel_header(
+            eyebrow="운영 현황",
+            title="투자자 수급 데이터 수집 모니터링",
+            description="KRX 투자자 수급 데이터의 수집 상태, 커버리지, 오류 이력을 확인합니다.",
+            badge=market_id,
+        )
+
+        data = _cached_monitoring_data(str(market_id).strip().upper())
+        warm: dict = data["warm"]
+        bounds: dict = data["bounds"]
+        history: pd.DataFrame = data["history"]
+
+        # ── 섹션 1: 수집 상태 요약 ──────────────────────────────────────────
+        st.subheader("수집 상태 요약")
+        status_val = str(warm.get("status", "")).upper() or "UNKNOWN"
+        watermark = str(warm.get("watermark_key", warm.get("end", "")) or "")
+        coverage_ok = bool(warm.get("coverage_complete", False))
+        predicted = int(warm.get("predicted_requests", 0) or 0)
+        processed = int(warm.get("processed_requests", 0) or 0)
+        completion_pct = round(processed / predicted * 100, 1) if predicted > 0 else 0.0
+
+        status_label = {"LIVE": "🟢 LIVE", "CACHED": "🟡 CACHED", "SAMPLE": "⚪ SAMPLE"}.get(
+            status_val, f"❓ {status_val}"
+        )
+        coverage_label = "✅ 완료" if coverage_ok else "❌ 미완료"
+        watermark_label = watermark if watermark else "—"
+        completion_label = f"{completion_pct}%" if predicted > 0 else "—"
+
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("상태", status_label)
+        col2.metric("워터마크 (마지막 성공일)", watermark_label)
+        col3.metric("커버리지", coverage_label)
+        col4.metric("최근 수집 완료율", completion_label)
+
+        # ── 섹션 2: 데이터 커버리지 범위 ────────────────────────────────────
+        st.subheader("데이터 커버리지 범위")
+        min_date = str(bounds.get("min_trade_date", "") or "")
+        max_date = str(bounds.get("max_trade_date", "") or "")
+        if min_date and max_date:
+            try:
+                min_dt = pd.Timestamp(min_date)
+                max_dt = pd.Timestamp(max_date)
+                days = (max_dt - min_dt).days
+                st.info(
+                    f"수집 시작: **{min_dt.strftime('%Y-%m-%d')}** · "
+                    f"수집 최신: **{max_dt.strftime('%Y-%m-%d')}** · "
+                    f"보유 기간: **{days}일**"
+                )
+            except Exception:
+                st.info(f"수집 범위: {min_date} ~ {max_date}")
+        else:
+            st.info("warehouse에 저장된 원시 데이터가 없습니다.")
+
+        # ── 섹션 3: 미수집 날짜 / 오류 종목 ────────────────────────────────
+        st.subheader("미수집 현황")
+        failed_days: list = warm.get("failed_days") or []
+        failed_codes: dict = warm.get("failed_codes") or {}
+        aborted = bool(warm.get("aborted", False))
+        abort_reason = str(warm.get("abort_reason", "") or "")
+
+        if aborted and abort_reason:
+            st.error(f"마지막 수집 중단됨: {abort_reason}")
+
+        if failed_days:
+            preview = ", ".join(failed_days[:10])
+            suffix = f" 외 {len(failed_days) - 10}건" if len(failed_days) > 10 else ""
+            st.warning(f"미수집 날짜 {len(failed_days)}건: {preview}{suffix}")
+        if failed_codes:
+            err_df = pd.DataFrame(
+                [{"섹터코드": k, "오류": v} for k, v in failed_codes.items()]
+            )
+            st.warning(f"오류 섹터 {len(failed_codes)}건")
+            st.dataframe(err_df, hide_index=True, use_container_width=True)
+        if not failed_days and not failed_codes and not aborted:
+            st.success("최근 수집 실행에서 미수집 항목 없음")
+
+        # ── 섹션 4: 수집 이력 테이블 ────────────────────────────────────────
+        st.subheader("수집 이력 (최근 15건)")
+        if history.empty:
+            st.info("수집 이력이 없습니다.")
+        else:
+            display = history.copy()
+            display["요청범위"] = display["requested_start"].fillna("") + " ~ " + display["requested_end"].fillna("")
+            display = display.rename(
+                columns={
+                    "created_at": "수집일시",
+                    "reason": "이유",
+                    "status": "상태",
+                    "coverage_complete": "커버리지완료",
+                    "aborted": "중단",
+                    "predicted_requests": "예상요청",
+                    "processed_requests": "처리요청",
+                    "row_count": "저장행수",
+                    "completion_pct": "완료율(%)",
+                }
+            )
+            cols_ordered = [
+                "수집일시", "이유", "요청범위", "상태",
+                "커버리지완료", "중단", "완료율(%)", "예상요청", "처리요청", "저장행수",
+            ]
+            st.dataframe(
+                display[cols_ordered].reset_index(drop=True),
+                hide_index=True,
+                use_container_width=True,
+                column_config={
+                    "수집일시": st.column_config.DatetimeColumn("수집일시", format="YYYY-MM-DD HH:mm:ss"),
+                    "이유": st.column_config.TextColumn("이유", width="small"),
+                    "요청범위": st.column_config.TextColumn("요청범위", width="medium"),
+                    "상태": st.column_config.TextColumn("상태", width="small"),
+                    "커버리지완료": st.column_config.CheckboxColumn("커버리지완료"),
+                    "중단": st.column_config.CheckboxColumn("중단"),
+                    "완료율(%)": st.column_config.NumberColumn("완료율(%)", format="%.1f"),
+                    "예상요청": st.column_config.NumberColumn("예상요청", format="%d"),
+                    "처리요청": st.column_config.NumberColumn("처리요청", format="%d"),
+                    "저장행수": st.column_config.NumberColumn("저장행수", format="%d"),
+                },
+            )
+
+        if warm:
+            provider = str(warm.get("provider", "") or "")
+            st.caption(f"데이터 소스: {provider or '—'} · 60초 캐시")
 
 
 def render_dashboard_tabs(
@@ -970,6 +1309,7 @@ def render_dashboard_tabs(
     investor_flow_fresh: bool = False,
     investor_flow_profile: str = "foreign_lead",
     investor_flow_frame: pd.DataFrame | None = None,
+    investor_flow_detail: dict[str, Any] | None = None,
     sector_map: dict[str, Any] | None = None,
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
@@ -980,9 +1320,13 @@ def render_dashboard_tabs(
         "전체 종목 데이터",
         "종목 스크리닝",
     ]
-    include_flow_tab = str(market_id).strip().upper() == "KR"
+    normalized_market = str(market_id).strip().upper() or "KR"
+    include_flow_tab = normalized_market in {"KR", "US"}
+    include_monitoring_tab = str(market_id).strip().upper() == "KR"
     if include_flow_tab:
-        tab_labels.append("투자자 수급")
+        tab_labels.append("투자자 수급" if normalized_market == "KR" else "US Flow Proxies")
+    if include_monitoring_tab:
+        tab_labels.append("데이터 모니터링")
     tabs = st.tabs(tab_labels)
     tab_summary, tab_charts, tab_all_signals, tab_screening = tabs[:4]
     render_summary_tab(
@@ -1037,5 +1381,14 @@ def render_dashboard_tabs(
             investor_flow_status=investor_flow_status,
             investor_flow_fresh=investor_flow_fresh,
             investor_flow_profile=investor_flow_profile,
+            investor_flow_detail=investor_flow_detail,
+            market_id=normalized_market,
+            ui_locale=ui_locale,
+        )
+    if include_monitoring_tab:
+        monitoring_tab_idx = 4 + (1 if include_flow_tab else 0)
+        render_monitoring_tab(
+            tab=tabs[monitoring_tab_idx],
+            market_id=str(market_id),
             ui_locale=ui_locale,
         )

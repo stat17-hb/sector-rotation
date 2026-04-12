@@ -20,6 +20,8 @@ from typing import Literal
 
 import pandas as pd
 
+from src.data_sources.krx_constituents import candidate_reference_dates, lookup_index_constituents
+
 logger = logging.getLogger(__name__)
 
 DataStatus = Literal["LIVE", "CACHED", "UNAVAILABLE"]
@@ -135,25 +137,13 @@ def _fetch_and_score(
 
 def _get_constituents(stock_module, trade_date: str, sector_code: str) -> list[str]:
     """Get constituent ticker codes for a sector index."""
-    try:
-        result = stock_module.get_index_portfolio_deposit_file(trade_date, sector_code)
-        if isinstance(result, pd.DataFrame) and not result.empty:
-            return result.index.tolist() if result.index.dtype == object else result.iloc[:, 0].tolist()
-        if isinstance(result, (list, tuple)) and result:
-            return list(result)
-    except Exception as exc:
-        logger.debug("get_index_portfolio_deposit_file failed for %s: %s", sector_code, exc)
-
-    # Fallback: try one business day earlier
-    try:
-        prev_date = (datetime.strptime(trade_date, "%Y%m%d") - timedelta(days=1)).strftime("%Y%m%d")
-        result = stock_module.get_index_portfolio_deposit_file(prev_date, sector_code)
-        if isinstance(result, pd.DataFrame) and not result.empty:
-            return result.index.tolist() if result.index.dtype == object else result.iloc[:, 0].tolist()
-    except Exception:
-        pass
-
-    return []
+    lookup = lookup_index_constituents(
+        stock_module,
+        sector_code=sector_code,
+        candidate_dates=candidate_reference_dates(trade_date, periods=5),
+        logger=logger,
+    )
+    return list(lookup.tickers)
 
 
 def _score_stock(

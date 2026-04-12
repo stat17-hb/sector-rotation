@@ -2,11 +2,13 @@ from __future__ import annotations
 
 from argparse import Namespace
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import duckdb
 import pandas as pd
 import pytest
 
+import scripts.backfill_investor_flow_history as backfill_flow_script
 import scripts.bootstrap_warehouse as bootstrap_script
 import scripts.sync_warehouse as sync_script
 import src.data_sources.warehouse as warehouse
@@ -285,6 +287,45 @@ def test_sync_warehouse_cli_reports_success(monkeypatch):
     )
 
     assert sync_script.main() == 0
+
+
+def test_backfill_investor_flow_history_cli_reports_success(monkeypatch):
+    monkeypatch.setattr(
+        backfill_flow_script,
+        "_parse_args",
+        lambda: Namespace(
+            market="KR",
+            mode="full",
+            end_date="20260306",
+            oldest_date="20250102",
+            earliest_candidate="19900101",
+            chunk_business_days=20,
+            retry_attempts=3,
+            retry_sleep_sec=30.0,
+            assume_non_regression_passed=True,
+        ),
+    )
+    monkeypatch.setattr(
+        backfill_flow_script,
+        "_load_configs",
+        lambda *args, **kwargs: (
+            {"benchmark_code": "1001"},
+            {"regimes": {"Recovery": {"sectors": [{"code": "5044", "name": "KRX 반도체"}]}}},
+            {},
+            SimpleNamespace(benchmark_code="1001"),
+        ),
+    )
+    monkeypatch.setattr(
+        backfill_flow_script,
+        "_run_phase2_full_backfill",
+        lambda **kwargs: {
+            "status": "LIVE",
+            "requested_end": "20260306",
+            "passed": True,
+        },
+    )
+
+    assert backfill_flow_script.main() == 0
 
 
 def test_sync_warehouse_cli_uses_incremental_market_start(monkeypatch):

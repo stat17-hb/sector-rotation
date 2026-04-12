@@ -405,11 +405,10 @@ if context.market_id == "KR":
         context.investor_flow_artifact_key,
     )
 else:
-    investor_flow_status, investor_flow_fresh, investor_flow_detail, investor_flow_frame = (
-        "SAMPLE",
-        False,
-        {},
-        pd.DataFrame(),
+    investor_flow_status, investor_flow_fresh, investor_flow_detail, investor_flow_frame = cached_investor_flow(
+        context.market_id,
+        context.market_end_date_str,
+        context.investor_flow_artifact_key,
     )
 
 render_page_header(
@@ -609,6 +608,7 @@ held_sectors, filter_action_global, filter_regime_only_global, position_mode, sh
         "signal_lookup": signal_lookup,
         "ui_locale": context.ui_locale,
     },
+    market_id=context.market_id,
     ui_locale=context.ui_locale,
 )
 signals_filtered = filter_signals_for_display(
@@ -689,6 +689,7 @@ render_dashboard_tabs(
     investor_flow_fresh=bundle.investor_flow_fresh,
     investor_flow_profile=bundle.investor_flow_profile,
     investor_flow_frame=bundle.investor_flow_frame,
+    investor_flow_detail=bundle.investor_flow_detail,
     sector_map=sector_map,
     ui_locale=context.ui_locale,
 )

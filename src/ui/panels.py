@@ -514,7 +514,9 @@ def render_investor_flow_summary(
             {
                 "Sector": str(getattr(signal, "sector_name", "")),
                 "Flow": get_flow_state_label(flow_state, locale),
-                "Action": f"{getattr(signal, 'base_action', getattr(signal, 'action', 'N/A'))} -> {getattr(signal, 'action', 'N/A')}",
+                "FlowStateRaw": flow_state,
+                "Action": getattr(signal, "action", "N/A"),
+                "BaseAction": getattr(signal, "base_action", getattr(signal, "action", "N/A")),
                 "Score": _safe_float(getattr(signal, "flow_score", None)),
                 "Reason": str(getattr(signal, "flow_reason", "")),
             }
@@ -533,19 +535,64 @@ def render_investor_flow_summary(
             st.info(get_ui_text("flow_tab_empty", locale))
             return
 
-        top_rows = pd.DataFrame(rows).sort_values(by=["Score", "Sector"], ascending=[False, True]).head(5)
-        st.dataframe(
-            top_rows,
-            width="stretch",
-            hide_index=True,
-            column_config={
-                "Sector": st.column_config.TextColumn(get_ui_text("col_sector", locale), width="medium"),
-                "Flow": st.column_config.TextColumn(get_ui_text("flow_col_state", locale), width="small"),
-                "Action": st.column_config.TextColumn(get_ui_text("flow_col_adjustment", locale), width="medium"),
-                "Score": st.column_config.NumberColumn(get_ui_text("flow_col_score", locale), format="%.2f"),
-                "Reason": st.column_config.TextColumn(get_ui_text("col_reason", locale), width="large"),
-            },
-        )
+        rows.sort(key=lambda x: (x["Score"] or 0.0, x["Sector"]), reverse=True)
+        top_rows = rows[:5]
+
+        html_chunks = ['<div class="flow-container">']
+        for i, row in enumerate(top_rows, start=1):
+            sector = html.escape(str(row["Sector"]))
+            flow_label = html.escape(str(row["Flow"]))
+            raw_state = str(row["FlowStateRaw"])
+
+            if "supportive" in raw_state or "buy" in raw_state:
+                badge_tone = "success"
+            elif "adverse" in raw_state or "sell" in raw_state:
+                badge_tone = "warning"
+            else:
+                badge_tone = "neutral"
+
+            badge_class = f"flow-card__badge flow-card__badge--{badge_tone}"
+
+            action = str(row["Action"])
+            base_action = str(row["BaseAction"])
+            action_html = f"{html.escape(base_action)} &rarr; {html.escape(action)}" if base_action != action else html.escape(action)
+            score = row["Score"]
+            score_str = f"{score:+.2f}" if score is not None else "N/A"
+            reason = html.escape(str(row["Reason"]))
+
+            lbl_adj = get_ui_text("flow_col_adjustment", locale)
+            lbl_score = get_ui_text("flow_col_score", locale)
+            lbl_reason = get_ui_text("col_reason", locale)
+
+            card = (
+                '<div class="flow-card">'
+                '<div class="flow-card__header">'
+                '<div class="flow-card__title">'
+                f'<span class="flow-card__rank">{i}.</span> {sector} '
+                f'<span class="{badge_class}">{flow_label}</span>'
+                '</div>'
+                '</div>'
+                '<div class="flow-card__body">'
+                '<div class="flow-card__row">'
+                f'<div class="flow-card__label">{html.escape(lbl_adj)}</div>'
+                f'<div class="flow-card__value"><strong>{action_html}</strong></div>'
+                '</div>'
+                '<div class="flow-card__row">'
+                f'<div class="flow-card__label">{html.escape(lbl_score)}</div>'
+                f'<div class="flow-card__value">{score_str}</div>'
+                '</div>'
+                '<div class="flow-card__row">'
+                f'<div class="flow-card__label">{html.escape(lbl_reason)}</div>'
+                f'<div class="flow-card__value">{reason}</div>'
+                '</div>'
+                '</div>'
+                '</div>'
+            )
+            html_chunks.append(card)
+        
+        html_chunks.append('</div>')
+        st.markdown("".join(html_chunks), unsafe_allow_html=True)
+        
         if not investor_flow_fresh:
             st.caption(get_ui_text("flow_unavailable", locale))
 

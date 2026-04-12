@@ -1,3 +1,635 @@
+# 2026-04-12 - Ralph: Windows Child-Process Launch Recovery
+
+Status: In progress
+Owner: Codex
+
+## Execution Checklist
+- [x] Capture a fresh Ralph context snapshot for the child-process launch failure
+- [x] Create PRD and test-spec artifacts before implementation
+- [x] Reproduce the current shell environment and isolate the failing contract
+- [x] Apply the smallest safe fix in user Codex configuration
+- [x] Run post-fix verification for nested `python.exe`, `pytest`, `wsl.exe`, and `powershell.exe`
+- [x] Record review evidence and architect-style sign-off
+- [ ] Clean Ralph state
+
+## Review
+- Working hypothesis:
+  the failure is not repo code.
+  the active Codex shell is launched with `shell_environment_policy inherit = "core"` and is missing Windows baseline variables such as `ComSpec`, `SystemRoot`, `windir`, and `PROCESSOR_ARCHITECTURE`.
+- Evidence gathered:
+  `Get-Command` resolves `python.exe`, `pytest.exe`, `wsl.exe`, `cmd.exe`, and `powershell.exe`.
+  however, the shell environment reports `ComSpec=`, `SystemRoot=`, `windir=`, and `PROCESSOR_ARCHITECTURE=` as empty.
+  a nested `powershell.exe -NoProfile -Command "$PSVersionTable.PSVersion.ToString()"` fails with `Internal Windows PowerShell error ... 8009001d`.
+  the same nested PowerShell call succeeds immediately when those four variables are supplied in the child env.
+- Intended fix:
+  patch `C:\Users\k1190\.codex\config.toml` so `shell_environment_policy.set` explicitly restores the missing Windows baseline variables.
+  keep the change minimal and user-scope only.
+- Fix applied:
+  kept the durable Codex fix at user config level and reduced it to the smallest proven Windows vars:
+  `SystemRoot` plus `windir` in `C:\Users\k1190\.codex\config.toml`.
+  added a narrow guard to `C:\Users\k1190\OneDrive\Documents\PowerShell\Microsoft.PowerShell_profile.ps1` so new PowerShell shells restore `SystemRoot` and `windir` when Codex starts them with the stripped environment.
+- Verification:
+  fresh shell after the profile fix reports
+  `SystemRoot=C:\Windows`
+  `windir=C:\Windows`
+  while `ComSpec` and `PROCESSOR_ARCHITECTURE` remain unset, confirming they are not required for the reproduced failure.
+  direct probes now succeed:
+  `python.exe --version` -> `Python 3.13.12`
+  `pytest --version` -> `pytest 9.0.2`
+  `wsl.exe --status` -> exit code `0`
+  `powershell.exe -NoLogo -NoProfile -Command '$PSVersionTable.PSVersion.ToString()'` -> `5.1.26100.8115`
+  nested Python `subprocess.run(...)` probes also succeed for all four commands with exit code `0`.
+- Simplifications made:
+  no repo application code changed.
+  trimmed the original broader env patch after architect review.
+  avoided wrapper scripts, PATH rewriting, or OMX package patching.
+- Architect review:
+  approved the direction but required trimming the patch.
+  review conclusion:
+  `SystemRoot` is the actual root-cause variable for the reproduced `powershell.exe` child-launch failure.
+  `PROCESSOR_ARCHITECTURE` was removed because it was unnecessary and wrong on non-AMD64 shells.
+- Residual risk:
+  the already-running parent Codex host still carries the old stripped env.
+  the user-config fix covers future Codex sessions, while the PowerShell profile guard covers new PowerShell shells spawned from the current session.
+  the profile workaround does not help non-PowerShell parents launched with `-NoProfile`, but the durable config fix does.
+
+# 2026-04-12 - Ralph: KRX Investor-Flow Warehouse Lock Recovery
+
+Status: In progress
+Owner: Codex
+
+## Execution Checklist
+- [x] Capture a fresh Ralph context snapshot for the warehouse-lock variant of the investor-flow issue
+- [x] Trace the reported warehouse-lock warning into the current investor-flow refresh/runtime path
+- [x] Decide the smallest safe degradation contract for investor-flow under DuckDB write-lock conflicts
+- [x] Implement the fix and add focused regression coverage
+- [ ] Run targeted verification, architect review, deslop pass, and post-deslop regression
+
+## Review
+- Working hypothesis:
+  the warning came from `krx_indices`, but the same DuckDB configuration-lock pattern can still affect `krx_investor_flow` because both flows write through the shared warehouse helpers.
+- Immediate evidence:
+  `src/dashboard/runtime.py` already closes the cached RO connection before manual refreshes.
+  however, `run_manual_investor_flow_refresh()` still has no lock-specific regression coverage, so a write-lock degrade can silently collapse into the generic fallback/error path.
+- Implementation:
+  `src/data_sources/krx_investor_flow.py` now treats warehouse write-locks as a persistence-only failure after successful live collection.
+  The refresh summary keeps the collected row count, marks the warehouse write as skipped, and returns the live sector frame instead of dropping into the generic refresh-failure fallback.
+  `src/dashboard/data.py` now shows a dedicated warehouse-lock notice so the UI no longer implies the collection itself failed.
+- Tests added:
+  `tests/test_krx_investor_flow_data_source.py`
+  `tests/test_dashboard_runtime.py`
+- Simplifications made:
+  kept the change local to the investor-flow refresh/write path and notice mapping.
+  avoided changing warehouse cursor semantics or adding new persistence/storage layers.
+- Verification blocker:
+  this Windows shell cannot start `python.exe`, `pytest`, or `wsl.exe` child processes (`지정된 모듈을 찾을 수 없습니다`), so automated verification and the Ralph deslop / post-deslop reruns remain blocked in this session.
+- Verification blocker:
+  this Codex shell currently cannot start `python`, `pytest`, `cmd`, `wsl`, or `powershell.exe` child processes, so focused runtime verification could not be executed from this session.
+
+# 2026-04-12 - Ralph: KRX Investor-Flow Write-Lock Refresh Recovery
+
+Status: In progress
+Owner: Codex
+
+## Execution Checklist
+- [x] Ground the current warning, warehouse lock path, and investor-flow refresh write path
+- [x] Create a Ralph context snapshot for the write-lock refresh issue
+- [ ] Reproduce the investor-flow write-lock behavior in a focused regression
+- [ ] Implement the smallest safe fix for investor-flow persistence under warehouse lock conflict
+- [ ] Run focused verification, architect review, deslop pass, and post-deslop regression
+
+## Review
+- User evidence points at a `warehouse.duckdb` write-lock warning already handled in `src/data_sources/krx_indices.py`.
+- `src/data_sources/krx_investor_flow.py` still lacks an explicit write-lock regression even though it persists through the same warehouse connection layer.
+- The refresh path currently has a broad fallback on any exception, which risks collapsing a persistence conflict into a misleading generic refresh failure.
+
+# 2026-04-12 - Ralplan: US Investor-Flow Analog Research
+
+Status: Completed
+Owner: Codex
+
+## Planning Checklist
+- [x] Ground the current US-market code path and confirm investor-flow is KR-only today
+- [x] Create a ralplan context snapshot plus lightweight PRD / test spec for this research task
+- [x] Gather primary-source evidence for US datasets analogous to Korean investor-type supply-demand
+- [x] Separate direct equivalents from partial proxies and record timeliness / granularity limits
+- [x] Produce a project-fit recommendation for future US investor-flow support
+
+## Review
+- Local context:
+  `config/markets.py` shows the US market profile currently uses `YFINANCE` + `FRED`.
+  `src/dashboard/data.py` returns an empty investor-flow artifact/status outside `KR`.
+  `src/data_sources/krx_investor_flow.py` remains KR-specific, so any US version would need a new data contract rather than a simple provider swap.
+- Research framing:
+  this task is not asking for code yet.
+  The key question is whether the US market has a true public equivalent to Korean investor-type net buying, and if not, which proxy stack is most decision-useful for sector rotation.
+- Verification plan:
+  use primary sources first.
+  For each candidate dataset, record publisher, granularity, cadence/lag, investor segmentation, and practical fit.
+- Research outcome:
+  미국 주식에는 한국의 `개인/기관/외국인`별 일별 순매수처럼
+  `public, standardized, daily participant-segmented` 현물 수급 데이터가 공개 표준으로 존재하지 않는다.
+  SEC large trader reporting (`Form 13H`)은 규제용으로 존재하지만 confidential이라 공개 대체재가 아니다.
+  따라서 US 쪽은 단일 정답 데이터가 아니라
+  `wrapper-flow proxy + ownership confirmation + short-pressure + microstructure diagnostics`
+  구조로 봐야 한다.
+- Primary-source grounded layers:
+  `ICI weekly ETF net issuance / fund flows` + ETF issuer `shares outstanding`는 가장 빠른 섹터-level wrapper flow proxy다.
+  다만 ETF creation/redemption plumbing 영향이 커서 한국식 수급의 직접 대체가 아니라 보조 확인 레이어로 써야 한다.
+  `SEC 13F`는 분기 보유 보고(분기말 후 45일 이내)라 느리지만 기관 ownership confirmation에는 유용하다.
+  `SEC 13D/13G`는 event-driven beneficial ownership 레이어다.
+  `SEC Form 4`는 내부자 거래 레이어다.
+  `FINRA short interest`와 SEC `Form SHO` 계열은 flow가 아니라 crowding / short-pressure 해석용이다.
+  `FINRA daily short sale volume`, `ATS transparency`, `Nasdaq NOII`는 allocation trend보다는 episode / microstructure diagnostics로 분류하는 편이 정확하다.
+  `CFTC COT`는 주식 현물 수급이 아니라 macro regime overlay다.
+- Recommended framing for this repo:
+  미국판 `투자자 수급`을 만들겠다면 이름부터 한국식 1:1 대응으로 두지 말고
+  `US capital-flow confirmation stack` 또는 `US flow proxies` 수준으로 정의를 낮추는 편이 맞다.
+  우선순위는
+  1) sector ETF shares outstanding + ICI weekly flows,
+  2) 13F + 13D/13G ownership confirmation,
+  3) short-interest / Form SHO pressure overlay,
+  4) NOII / ATS / daily short sale volume / Form 4 diagnostics
+  순서가 가장 실용적이다.
+
+# 2026-04-12 - Ralph: US Flow Proxy MVP
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Ground the current US dashboard/data-source structure and create implementation context artifacts
+- [x] Add a public-data US flow-proxy data source with deterministic parsing / normalization tests
+- [x] Integrate US flow-proxy status/frame loading into dashboard data/runtime
+- [x] Render a US market flow-proxy tab without reusing KR participant labels incorrectly
+- [x] Run focused verification and record remaining gaps versus the broader research plan
+
+## Review
+- Implementation scope:
+  이번 턴은 research plan 전체를 완성하지 않는다.
+  `13F`, `13D/13G`, `ICI weekly flow`는 후속 작업으로 남기고,
+  현재 의존성과 공개 웹 데이터만으로 가능한 `US flow proxy` 1차 레이어를 구현한다.
+- Chosen MVP:
+  `sector ETF price/volume-derived pressure` + `official SSGA current fund snapshot`
+  조합으로 US 섹터 ETF 프록시 테이블을 만든다.
+  KR의 `외국인/기관/개인` semantics는 US에 강제로 매핑하지 않는다.
+- Reasoning:
+  리서치상 가장 이상적인 1차 레이어는 `ETF shares outstanding + ICI flows`지만,
+  현재 코드/환경 제약에서는 공식 페이지 snapshot과 기존 `yfinance` 히스토리를 묶는 방식이 가장 작고 검증 가능하다.
+  shell live-network가 Winsock/DNS 문제로 깨져 있으므로 테스트는 synthetic fixture 기반으로 잠근다.
+- Implementation outcome:
+  `src/data_sources/us_flow_proxies.py`를 추가했다.
+  이 모듈은 `yfinance`의 sector ETF `Close/Volume` 히스토리로 `dollar_volume` 기반 프록시 상태를 만들고,
+  SSGA 공식 ETF 페이지에서 `NAV`, `Shares Outstanding`, `AUM`, `Net Cash Amount` 최신 snapshot을 파싱한다.
+  결과는 한국식 participant flow가 아니라 `US wrapper-flow activity proxy`로 명시된다.
+  방향성 과장을 피하기 위해 US 값은 `flow_state`가 아니라 `activity_state` / `activity_zscore`로 표현한다.
+  completeness도 최신일 일치뿐 아니라 `missing_tickers == 0`을 같이 요구하도록 보수적으로 잠갔다.
+- Dashboard integration:
+  `src/dashboard/data.py`는 US 시장에서도 `cached_investor_flow()`를 통해 flow-proxy 프레임을 읽는다.
+  artifact key는 market-price artifact에 연동시켜 market refresh와 함께 invalidation되도록 맞췄다.
+  `src/dashboard/runtime.py`는 market cache invalidation 때 flow cache도 같이 비우도록 바꿨다.
+  `app.py`는 US에서도 investor-flow bundle을 채우게 바뀌었다.
+- UI behavior:
+  `src/dashboard/tabs.py`는 KR에서만 기존 investor-flow summary 카드를 유지한다.
+  US에서는 그 summary를 억지로 재사용하지 않고,
+  별도 `US Flow Proxies` 탭에서 섹터별 proxy state / score / latest dollar volume / 5D vs 20D 평균 / shares outstanding / AUM / NAV / net cash를 보여 준다.
+  copy도 한국식 `투자자별 수급`과 동일 개념이 아님을 명시한다.
+- Simplifications made:
+  KR `외국인/기관/개인` overlay contract는 건드리지 않았다.
+  US는 같은 이름의 cache/data lane을 재사용하되, signal overlay는 비활성으로 유지했다.
+  즉 공통 dashboard plumbing은 재사용하고, semantics가 다른 신호 해석은 분리했다.
+- Changed files:
+  `src/data_sources/us_flow_proxies.py`
+  `src/dashboard/data.py`
+  `src/dashboard/runtime.py`
+  `src/dashboard/tabs.py`
+  `app.py`
+  `tests/test_us_flow_proxies.py`
+  `tests/test_dashboard_runtime.py`
+  `tests/test_dashboard_tabs.py`
+  `tasks/todo.md`
+  `.omx/context/us-flow-proxy-mvp-20260412T130500Z.md`
+  `.omx/plans/prd-us-flow-proxy-mvp.md`
+  `.omx/plans/test-spec-us-flow-proxy-mvp.md`
+- Verification:
+  `python -m py_compile src\data_sources\us_flow_proxies.py src\dashboard\data.py src\dashboard\runtime.py src\dashboard\tabs.py app.py tests\test_us_flow_proxies.py tests\test_dashboard_runtime.py tests\test_dashboard_tabs.py`
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests\test_us_flow_proxies.py tests\test_dashboard_runtime.py tests\test_dashboard_tabs.py tests\test_yfinance_sectors.py tests\test_investor_flow_scoring.py tests\test_dashboard_analysis.py tests\test_dashboard_state.py tests\test_cache_keys.py tests\test_preflight.py` -> `51 passed`
+  Architect review after the semantic/completeness fixes -> `APPROVE`
+- Deslop pass:
+  changed-file 범위에서 중복/과한 generalization 여부를 다시 점검했다.
+  이번 diff는 source module 1개 추가 + dashboard 분기 최소 확장으로 이미 좁게 유지돼 있어 추가 cleanup edit은 하지 않았다.
+- Remaining gaps:
+  아직 `ICI weekly ETF flows`, `13F`, `13D/13G`, `Form SHO`는 구현하지 않았다.
+  현재 shell 환경에서는 live 네트워크 검증을 못 했기 때문에, 실제 배포 환경에서 한 번은 end-to-end smoke가 필요하다.
+ - Risk closure follow-up:
+  SSGA snapshot 수집은 이제 HTML 본문 파싱만 의존하지 않는다.
+  공식 페이지에서 core metric이 안 잡히면 `.xlsx` 링크를 추출해 workbook fallback으로 다시 파싱한다.
+  이 경로도 synthetic test로 잠갔다.
+  semantic risk도 정리했다:
+  US 값은 더 이상 directional `flow_state`가 아니라 `activity_state` / `activity_zscore`로 표시된다.
+  freshness/completeness는 `latest_date == requested_end` 뿐 아니라 `missing_tickers == 0`까지 요구한다.
+ - Final verification:
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests\test_us_flow_proxies.py tests\test_dashboard_runtime.py tests\test_dashboard_tabs.py tests\test_yfinance_sectors.py tests\test_investor_flow_scoring.py tests\test_dashboard_analysis.py tests\test_dashboard_state.py tests\test_cache_keys.py tests\test_preflight.py` -> `52 passed`
+  Architect re-review after workbook fallback -> `APPROVE`
+
+# 2026-04-12 - Ralph: US Ownership Context Follow-up
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Ground the current US flow-proxy lane and create follow-up context / plan artifacts
+- [x] Add official ICI weekly ETF-flow context parsing
+- [x] Add official SEC 13F sector-ETF positioning context
+- [x] Add official SEC 13D/13G event context with honest scope labels
+- [x] Add honest Form SHO availability / context handling
+- [x] Integrate the new sections into the US dashboard and verify regressions
+
+## Review
+- Scope:
+  이번 턴은 `US ownership/short context` 추가다.
+  기존 US activity proxy를 대체하지 않고, 그 아래에 market-context / ownership-context 레이어를 붙인다.
+- Design choice:
+  `13F`는 constituent 전체가 아니라 sector ETF 자체(XLF/XLK 등)에 대한 latest institutional positioning으로 먼저 구현한다.
+  이렇게 해야 공식 SEC 13F dataset과 현재 ETF-level dashboard contract를 가장 작게 연결할 수 있다.
+- Design caution:
+  `13D/13G`와 `Form SHO`는 성격이 다르다.
+  `13D/13G`는 event-driven beneficial ownership 레이어,
+  `Form SHO`는 short-position transparency 레이어다.
+  둘 다 directional participant flow로 포장하지 않는다.
+- Implementation outcome:
+  `src/data_sources/us_ownership_context.py`를 추가했다.
+  여기서
+  `ICI weekly ETF flows`,
+  `SEC latest 13F dataset -> sector ETF positioning`,
+  `SEC submissions API -> recent 13D/13G events`,
+  `Form SHO policy/availability context`
+  를 공식 소스 기준으로 읽는다.
+  `13F`는 constituent 전체가 아니라 sector ETF 자체(XLF/XLK 등)의 CUSIP 기준으로 집계해 scope를 작게 유지했다.
+- SSGA profile expansion:
+  `src/data_sources/us_flow_proxies.py`는 이제 snapshot만이 아니라
+  `CUSIP`과 `top_holdings`까지 추출하는 `fetch_ssga_fund_profile()`를 가진다.
+  HTML 파싱 실패/빈값에는 기존 workbook fallback을 계속 사용한다.
+- Dashboard integration:
+  US 탭은 activity proxy 표 아래에
+  `ICI Weekly ETF Net Issuance`,
+  `Latest 13F Sector ETF Positioning`,
+  `Recent 13D/13G Events`,
+  `Form SHO Context`
+  섹션을 추가로 렌더링한다.
+  copy는 `activity`, `ownership`, `event`, `policy context`를 분리해 과장 없이 표기한다.
+- Changed files:
+  `src/data_sources/us_ownership_context.py`
+  `src/data_sources/us_flow_proxies.py`
+  `src/dashboard/tabs.py`
+  `app.py`
+  `tests/test_us_flow_proxies.py`
+  `tests/test_dashboard_tabs.py`
+  `tasks/todo.md`
+  `.omx/context/us-ownership-context-followup-20260412T133500Z.md`
+  `.omx/plans/prd-us-ownership-context-followup.md`
+  `.omx/plans/test-spec-us-ownership-context-followup.md`
+- Verification:
+  `python -m py_compile src\data_sources\us_ownership_context.py src\data_sources\us_flow_proxies.py src\dashboard\tabs.py src\dashboard\data.py app.py tests\test_us_flow_proxies.py tests\test_dashboard_tabs.py tests\test_dashboard_runtime.py`
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests\test_us_flow_proxies.py tests\test_dashboard_tabs.py tests\test_dashboard_runtime.py tests\test_yfinance_sectors.py tests\test_dashboard_analysis.py tests\test_dashboard_state.py tests\test_cache_keys.py tests\test_preflight.py` -> `54 passed`
+  Architect review -> `APPROVE`
+- Remaining risks:
+  `13F`는 최신 dataset ZIP 전체를 읽기 때문에 live 환경에서는 느릴 수 있다.
+  `13D/13G`는 sector ETF top holdings 기준 이벤트 집계라서 full constituent coverage는 아니다.
+  `Form SHO`는 아직 public aggregated feed 경로를 확정하지 못해 policy/context only 상태다.
+  현재 shell의 Winsock/DNS 문제 때문에 live network smoke는 여전히 이 환경에서 못 했다.
+
+# 2026-04-12 - Ralplan: KRX Investor-Flow oldest_collectable_date Contract Fix
+
+Status: Completed
+Owner: Codex
+
+## Planning Checklist
+- [x] Ground the current discovery/backfill path, tests, and local validation artifacts
+- [x] Isolate why the current tests cannot lock the true first collectable date
+- [x] Run a ralplan consensus loop and resolve the open decisions
+- [x] Write task-specific context snapshot, PRD, and test spec
+- [x] Record the agreed implementation and verification sequence below
+
+## Execution Checklist
+- [x] Add explicit discovery-details schema and collector-contract floor helper
+- [x] Tighten oldest-date discovery to require requested-day raw alignment and exclude cached constituent fallback
+- [x] Replace the false-positive discovery tests with contract truth-table tests
+- [x] Keep backfill orchestration tests focused on retry/abort/progress semantics
+- [x] Align runbook wording with the new minimal-existence discovery contract
+- [x] Run focused verification, architect review, deslop pass, and post-deslop regression
+
+## Review
+- Root cause:
+  현재 테스트는 `non-empty raw frame`을 곧바로 `that requested day is collectable`로 취급한다.
+  이 때문에 `discover_oldest_collectable_date()`의 실제 contract가 아니라 빈약한 proxy만 잠그고 있다.
+  대표 false positive는 `tests/test_krx_investor_flow_data_source.py`의 clamp 테스트다.
+  모든 호출에서 `trade_date=2014-05-02` raw를 반환하면서도 `20140501`을 기대한다.
+- Key evidence:
+  `discover_oldest_collectable_date()`는 day probe에서 `day_raw.empty`만 보고 성공 처리한다.
+  그런데 실제 collector path는 constituent resolution까지 포함한다.
+  현재 floor 상수도 분리돼 있다:
+  `KRX_INVESTOR_FLOW_WEB_HISTORY_FLOOR = 20140501`
+  vs
+  `PYKRX_CONSTITUENT_HISTORY_FLOOR = 20140502`.
+  로컬 artifact `.tmp_backfill_validate.json`도 실제 discovered oldest date를 `20140502`로 기록한다.
+- Consensus decisions:
+  `oldest_collectable_date`는 completeness contract가 아니라 minimal existence contract로 유지한다.
+  즉 requested day에 대해 normalized raw row를 최소 1개 얻을 수 있으면 discovery 성공이다.
+  대신 requested-day alignment는 필수다.
+  `coverage_complete`는 discovery 성공 조건에서 제외한다.
+  `CACHED_FALLBACK(...)` constituent recovery는 discovery 성공으로 인정하지 않는다.
+  effective floor는 값 고정이 아니라
+  `max(KRX_INVESTOR_FLOW_WEB_HISTORY_FLOOR, PYKRX_CONSTITUENT_HISTORY_FLOOR)`
+  공식을 source of truth로 쓴다.
+- Execution plan:
+  `src/data_sources/krx_investor_flow.py`에서 discovery predicate와 effective floor를 명시한다.
+  `tests/test_krx_investor_flow_data_source.py`는 discovery contract truth table 중심으로 재구성한다.
+  `tests/test_backfill_investor_flow_history.py`는 retry/abort/progress semantics만 검증하도록 역할을 얇게 만든다.
+  discovery details / report에는 requested day, effective floor, cached fallback 사용 여부를 남긴다.
+- Verification plan:
+  discovery-focused pytest
+  backfill orchestration pytest
+  warehouse/backfill 관련 focused regression
+  local artifact wording 대조
+- Implementation outcome:
+  `src/data_sources/krx_investor_flow.py`에 `DiscoveryDetails` schema, `collector_contract_floor` helper, requested-day alignment check, cached constituent fallback exclusion을 추가했다.
+  discovery ingest run은 더 이상 completeness를 hardcode하지 않고 실제 day summary의 `coverage_complete` / failure evidence를 기록한다.
+  `tests/test_krx_investor_flow_data_source.py`는 false-positive clamp 기대를 제거하고 floor, requested-day mismatch, partial coverage 허용, cached fallback exclusion을 직접 잠그는 discovery truth-table tests로 바뀌었다.
+  `docs/krx-investor-flow-backfill-runbook.md`는 discovery를 minimal existence contract로 명시하고 cached fallback exclusion을 문서화했다.
+- Simplifications made:
+  `effective_earliest_candidate` 같은 애매한 naming 대신 `collector_contract_floor`와 `requested_day` 중심 schema로 정리했다.
+  `CACHED_FALLBACK` 문자열 센티널은 상수 하나로 묶어 producer/consumer가 같은 prefix를 재사용하게 했다.
+  discovery test raw-frame 생성은 helper로 묶어 반복을 줄였다.
+- Changed files:
+  `src/data_sources/krx_investor_flow.py`
+  `tests/test_krx_investor_flow_data_source.py`
+  `docs/krx-investor-flow-backfill-runbook.md`
+  `tasks/todo.md`
+- Verification:
+  `python -m py_compile src\data_sources\krx_investor_flow.py tests\test_krx_investor_flow_data_source.py tests\test_backfill_investor_flow_history.py`
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests\test_krx_investor_flow_data_source.py -k "discover_oldest_collectable_date"` -> `5 passed, 23 deselected`
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests\test_backfill_investor_flow_history.py` -> `10 passed`
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests\test_warehouse_investor_flow.py tests\test_krx_investor_flow_data_source.py tests\test_backfill_investor_flow_history.py` -> `44 passed`
+  Architect verification -> approved
+  Post-deslop regression rerun remained green
+- Remaining risks:
+  cached fallback exclusion은 여전히 구조화 field가 아니라 failure sentinel prefix에 기대지만, 이제 producer/consumer가 같은 상수를 공유해 drift 위험은 줄었다.
+  live KRX auth/network 환경에서의 empirical earliest-date validation 필요성 자체는 남아 있다.
+
+# 2026-04-12 - Ralph: App Investor-Flow Refresh Bootstrap Preview Recovery
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Reproduce the app-path investor-flow refresh failure and capture the exact summary
+- [x] Confirm whether the dashboard hides partial sector rows when no complete cursor exists
+- [x] Add a narrow bootstrap partial-preview fallback without weakening normal complete-cursor capping
+- [x] Update refresh notice copy so bootstrap partial preview is explained separately
+- [x] Add focused regression coverage for data-source and dashboard paths
+- [x] Run focused verification and record remaining risks
+
+## Review
+- Root cause:
+  문제는 두 층이었다.
+  현재 shell은 여전히 `WinError 10106`으로 live 수집이 막힌다.
+  그런데 그와 별개로 앱은 `investor_flow_operational_complete` cursor가 없으면 partial로 저장된 섹터 수급도 읽지 않았다.
+  그래서 버튼으로 partial rows가 warehouse에 써져도 화면은 0건으로 보였다.
+- Key evidence:
+  `run_manual_investor_flow_refresh(..., end_date_str='20260410')` 재현 결과는 live failure 후에도 `rows=2640` partial sector rows가 warehouse에 남아 있었다.
+  하지만 `cached_investor_flow()`는 complete cursor가 없다는 이유로 `SAMPLE`, `rows=0`을 반환했다.
+  즉 사용자가 본 “하나도 못 가져옴”은 live fetch 실패와 product read cap empty-case가 결합된 UX 문제였다.
+- Fix:
+  `src/data_sources/krx_investor_flow.py`의 `load_sector_investor_flow()`에 `allow_bootstrap_partial_preview` 옵션을 추가했다.
+  complete cursor가 없고 capped read가 비어 있을 때만 uncapped sector rows를 bootstrap partial preview로 허용한다.
+  정상 complete cursor가 존재하는 운영 구간은 기존 cap semantics를 그대로 유지한다.
+  `run_manual_investor_flow_refresh()`도 partial success / refresh failure 뒤 이 preview fallback을 사용하게 바꿨다.
+  `src/dashboard/data.py`의 `_cached_investor_flow()`는 이 fallback을 실제 앱 로드 경로에서 사용하고, `bootstrap_partial_preview` marker를 detail에 싣는다.
+  `_build_investor_flow_refresh_notice()`는 bootstrap partial preview일 때 기존 “complete cursor 기준 기존 데이터 유지” 문구 대신 partial preview 안내를 띄운다.
+  architect 재검증 후 `_cached_signals()`도 bootstrap partial preview일 때만 별도 usable flag로 overlay를 켜도록 보강했다.
+  `flow_fresh` 의미 자체는 바꾸지 않았고, no-cursor bootstrap preview 케이스만 좁게 확장했다.
+  추가로 KR investor-flow 내부 날짜축 계산을 `pd.bdate_range` 중심에서 `_requested_trading_days()` helper 중심으로 바꿨다.
+  benchmark index OHLCV 거래일이 있으면 그 날짜축을 우선 사용하고, 실패 시에만 weekday fallback으로 내려간다.
+  이 변경은 holiday를 failed day로 오판정하던 문제와 cursor 다음 영업일 계산 오류를 줄인다.
+- Changed files:
+  `src/data_sources/krx_investor_flow.py`
+  `src/dashboard/data.py`
+  `tests/test_krx_investor_flow_data_source.py`
+  `tests/test_dashboard_runtime.py`
+  `tasks/todo.md`
+- Verification:
+  `python -m py_compile src\data_sources\krx_investor_flow.py src\dashboard\data.py tests\test_krx_investor_flow_data_source.py tests\test_dashboard_runtime.py`
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests\test_krx_investor_flow_data_source.py -k "bootstrap_partial_preview or run_manual_investor_flow_refresh or load_sector_investor_flow"` -> `5 passed, 24 deselected`
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests\test_dashboard_runtime.py -k "investor_flow or bootstrap_partial_preview or cached_signals"` -> `6 passed, 4 deselected, 1 warning`
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests\test_krx_investor_flow_data_source.py` -> `31 passed, 1 warning`
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests\test_warehouse_investor_flow.py tests\test_krx_investor_flow_data_source.py tests\test_dashboard_runtime.py` -> `47 passed, 1 warning`
+  app-like 재현:
+  `run_manual_investor_flow_refresh(..., end_date_str='20260410')` -> `status='CACHED'`, `rows=2640`
+  `cached_investor_flow('KR', '20260410', ...)` -> `status='CACHED'`, `rows=2640`, `bootstrap_partial_preview=True`, date range `2025-12-11 .. 2026-04-10`
+  architect verification -> approved
+- Environment diagnosis:
+  Python `socket.socket(...)` 생성이 일반 호스트에서도 `WinError 10106`으로 실패한다.
+  `requests`는 `data.krx.co.kr`와 `www.google.com` 모두 DNS resolution 실패다.
+  `curl.exe -I https://www.google.com`도 `getaddrinfo() thread failed to start`로 실패한다.
+  즉 남은 live fetch blocker는 repo 코드보다 현재 process/system Winsock/DNS 계층 문제로 분리된다.
+- Remaining risks:
+  live fetch 자체를 막는 `WinError 10106` 환경 문제는 여전히 남아 있다.
+  이번 수정은 app-path code blocker들은 해결했지만, Windows socket stack 문제 자체를 repo 코드만으로 복구한 것은 아니다.
+  다음 정리 지점으로는 `src/data_sources/krx_constituents.py`의 candidate 날짜 계산도 KR holiday strictness로 맞추는 작업이 남아 있다.
+
+# 2026-04-11 - KRX Investor-Flow Constituent Refresh Recovery
+
+Status: In progress
+Owner: Codex + User
+
+## Execution Checklist
+- [x] Ground the failure with a Ralph context snapshot and task-specific PRD/test spec
+- [x] Inspect current investor-flow constituent lookup, pykrx wrapper behavior, and warehouse snapshot state
+- [x] Implement a resilient constituent lookup path that survives pykrx empty-response/schema drift
+- [x] Reuse the same protection in the stock-screening constituent path
+- [x] Add regression tests for raw KRX payload fallback, snapshot fallback, and connectivity classification
+- [x] Run focused verification and record results
+
+## Review
+- Updated root cause:
+  `pykrx` wrapper의 `output` 키 가정도 취약점이었지만, 이번 실제 장애의 상위 원인은 2026년 KRX Data Marketplace 로그인 의무화였다. 비로그인 세션에서는 구성종목 endpoint가 JSON 대신 HTML/빈 본문을 반환했고, 기존 코드는 이를 `Expecting value` 또는 `empty constituent list`로 오진했다.
+- Functional fix:
+  `src/data_sources/pykrx_compat.py`에 optional KRX 로그인 세션 지원을 추가했다. `KRX_ID` / `KRX_PW`가 환경변수 또는 Streamlit secrets에 있으면 로그인 후 shared session으로 pykrx/직접 요청을 보낸다.
+  `src/data_sources/krx_constituents.py`는 raw constituent 요청을 직접 보내 status/content-type/body snippet을 보고 `AUTH_REQUIRED`, `ACCESS_DENIED`, `NON_JSON_EMPTY`, `NON_JSON_RESPONSE`로 분류한다. auth-gated HTML/blank 응답은 날짜 후보 전체를 반복하지 않고 즉시 `AUTH_REQUIRED`로 단락한다.
+  `src/data_sources/krx_investor_flow.py`와 `src/dashboard/data.py`는 이 auth failure를 사용자에게 직접적인 설정 안내(`KRX_ID / KRX_PW`)로 노출한다.
+- Scope fix:
+  `src/data_sources/krx_stock_screening.py`는 공통 constituent helper를 계속 사용한다.
+  `src/data_sources/warehouse.py`의 snapshot reader는 섹터별 최신일 기준 fallback을 유지한다.
+- Verification:
+  `python -m pytest -q tests\test_pykrx_compat.py tests\test_krx_constituents.py tests\test_krx_investor_flow_data_source.py tests\test_krx_stock_screening.py tests\test_warehouse_investor_flow.py tests\test_dashboard_runtime.py -k "investor_flow or constituents or pykrx or warehouse"` -> `32 passed, 4 deselected`
+  추가 auth 분류 재검증:
+  `python -m pytest -q tests\test_krx_constituents.py tests\test_krx_investor_flow_data_source.py tests\test_pykrx_compat.py tests\test_dashboard_runtime.py -k "constituents or investor_flow or pykrx"` -> `29 passed, 4 deselected`
+  `python -m py_compile src\data_sources\pykrx_compat.py src\data_sources\krx_constituents.py src\data_sources\krx_investor_flow.py src\dashboard\data.py tests\test_pykrx_compat.py tests\test_krx_constituents.py tests\test_krx_investor_flow_data_source.py tests\test_dashboard_runtime.py`
+  LSP diagnostics on affected source files -> `0 errors`
+  Actual refresh call in the current shell:
+  `run_manual_investor_flow_refresh(..., end_date_str='20260410')` -> `status SAMPLE`, `failed {'refresh': 'Windows socket stack is unavailable ...'}`.
+  This confirms the local runtime no longer leaks `JSONDecodeError`; it now surfaces the real environment blocker directly.
+- Residual blocker:
+  `KRX_ID / KRX_PW`는 이제 secrets/env에서 정상 인식된다.
+  하지만 이 shell은 여전히 Winsock/DNS가 깨져 있어 live KRX smoke를 끝까지 수행할 수 없다.
+  실제 확인값:
+  `get_krx_login_state()` -> `configured=True`, `authenticated=False`, `detail='session warmup/login failed: ... Failed to resolve data.krx.co.kr ...'`
+  `run_manual_investor_flow_refresh(...)` -> `status SAMPLE`, `failed {'refresh': 'Windows socket stack is unavailable ... WinError 10106 ...'}`
+
+# 2026-04-12 - Ralplan: KRX Investor-Flow Historical Backfill + Incremental Refresh
+
+Status: Planned
+Owner: Codex
+
+## Planning Checklist
+- [x] Ground the current investor-flow refresh path, warehouse schema, and recorded ingest behavior
+- [x] Confirm why the current warehouse starts at `2025-12-11`
+- [x] Capture a fresh context snapshot for the backfill + incremental-refresh task
+- [x] Produce a consensus plan for full-history backfill via KRX web collection
+- [x] Produce a consensus plan for app refresh changing from fixed lookback to warehouse-based incremental sync
+- [x] Rewrite PRD and test spec for execution handoff
+- [x] Record risks, open questions, and implementation sequencing in the review section
+
+## Review
+- Current refresh behavior is not historical-limit driven. It is configuration-driven: both the data source and dashboard helper default to a 120-day lookback, so `2026-04-10` yields `2025-12-11`.
+- Current runtime refresh calls `run_manual_investor_flow_refresh()` with only `end_date_str`, so the warehouse start point is a by-product of the default lookback rather than KRX endpoint history limits.
+- Existing code already has a separate unofficial KRX web probe prototype, which is the likely starting point for “collect the oldest web-accessible history” planning.
+- Consensus outcome:
+  use a split-cursor model.
+  `investor_flow_operational_complete` is the only product cursor.
+  `investor_flow_backfill_progress` is a separate historical resume cursor.
+- v1 historical backfill is intentionally raw-only:
+  it writes `fact_investor_flow_daily` but not historical `fact_investor_flow_sector_daily`, avoiding survivorship bias from current end-date constituent aggregation.
+- Product behavior is intentionally cursor-based, not latest-row-based:
+  refresh start, freshness, and read visibility must all be bounded by operational complete coverage, even when newer partial rows exist in the warehouse.
+- Empty warehouse behavior is fixed:
+  the app button seeds only the most recent 120 calendar days.
+  full history remains CLI-only.
+- Residual risks:
+  `oldest_collectable_date` is a runtime-discovered fact, not a permanent constant.
+  historical sector history remains out of scope for v1.
+  long-range backfill may require conservative chunk sizing and retry tuning.
+
+# 2026-04-12 - Implementation: KRX Investor-Flow Historical Backfill + Incremental Refresh
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Add dedicated operational-complete and backfill-progress cursor semantics in warehouse helpers
+- [x] Keep product-facing investor-flow reads capped by operational complete coverage
+- [x] Change app refresh to resolve start date from warehouse state instead of fixed trailing 120-day helper
+- [x] Preserve partial operational raw/sector rows without advancing the authoritative complete cursor
+- [x] Add raw-only historical backfill path with dedicated resume cursor
+- [x] Add regression tests for cursor semantics, partial persistence, read capping, backfill progress, and CLI wiring
+- [x] Run focused verification
+
+## Review
+- Warehouse changes:
+  `src/data_sources/warehouse.py` now has separate investor-flow cursors:
+  `investor_flow_operational_complete` for product truth and
+  `investor_flow_backfill_progress` for historical resume.
+  Added helpers to read those cursors, read the latest investor-flow run with reason filters, cap sector reads to the operational cursor, and shared write orchestrators for operational refresh vs historical backfill.
+- Refresh changes:
+  `src/data_sources/krx_investor_flow.py` now resolves refresh windows from warehouse state.
+  Empty warehouse still seeds the latest 120 calendar days.
+  Once an operational complete cursor exists, refresh starts at the next uncovered business day, or at the earliest failed day after the cursor if the latest operational run was incomplete.
+  Product-facing warm status now reports the operational complete cursor rather than latest stored rows.
+- Historical backfill:
+  added `run_historical_investor_flow_backfill(...)` and
+  `scripts/backfill_investor_flow_history.py`.
+  v1 backfill is raw-only and writes `fact_investor_flow_daily` day-by-day, recording `historical_backfill` runs and advancing only the backfill progress cursor.
+  It does not write historical sector facts, intentionally avoiding survivorship-biased sector aggregation.
+- UI/runtime:
+  `src/dashboard/runtime.py` no longer derives refresh start from `_investor_flow_range_strings`.
+  `src/dashboard/data.py` now surfaces an `info` notice when the investor-flow cache is already current and clarifies that partial refreshes keep complete-cursor data visible.
+- Verification:
+  `python -m py_compile src\data_sources\warehouse.py src\data_sources\krx_investor_flow.py src\dashboard\runtime.py src\dashboard\data.py scripts\backfill_investor_flow_history.py tests\test_warehouse_investor_flow.py tests\test_krx_investor_flow_data_source.py tests\test_dashboard_runtime.py tests\test_warehouse_cli.py`
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests\test_warehouse_investor_flow.py tests\test_krx_investor_flow_data_source.py tests\test_dashboard_runtime.py tests\test_warehouse_cli.py` -> `44 passed`
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests\test_dashboard_tabs.py tests\test_data_status.py -k "investor or flow or status"` -> `17 passed, 1 deselected`
+- Residual risks:
+  `oldest_collectable_date` still needs live KRX discovery in an environment with working network/auth.
+  historical sector-level investor-flow remains intentionally out of scope for this v1.
+  because partial operational rows are now allowed to exist beyond the complete cursor, future read paths must continue honoring the operational cursor cap.
+
+# 2026-04-12 - Ralplan: KRX Investor-Flow Remaining Risk Closure
+
+Status: Planned
+Owner: Codex
+
+## Planning Checklist
+- [x] Re-ground the two residual risks from the implemented investor-flow work
+- [x] Capture a focused context snapshot for risk-closure planning
+- [x] Produce a consensus plan for live earliest-date validation and long-range raw-backfill operationalization
+- [x] Produce a consensus plan for trustworthy historical sector-level investor-flow design
+- [x] Rewrite PRD and test spec for execution handoff
+- [x] Record sequencing, gates, and residual uncertainties below
+
+## Review
+- Risk 1:
+  current code can discover and backfill historical raw investor-flow, but `oldest_collectable_date` and large-scale backfill behavior are not yet empirically validated in a working KRX auth/network environment.
+- Risk 2:
+  historical sector-level investor-flow is still intentionally absent because the current sector aggregation path would apply end-date constituents to long history and introduce survivorship bias.
+- Consensus outcome:
+  Risk 1 closure is explicitly scoped to the current tracked-sector historical raw-backfill collector contract, not generic KRX raw-endpoint viability.
+- Phase 1 is now objectively testable:
+  retry ceiling `3`, fixed backoff `30s`, explicit abort criteria, fixed 5-sample-chunk protocol, and non-regression requirements are all frozen.
+- Phase 2 now has an exact closure standard:
+  full raw backfill progress must reach target end, cumulative failed trading day ratio must be `<= 2%`, unresolved hard failures must be zero, and warehouse `min(trade_date)` must match the validated `oldest_collectable_date`.
+- Gate policy is split cleanly:
+  historical sector design may start after Phase 1 pass,
+  but historical sector implementation/pilot may start only after Phase 2 closes Risk 1.
+- Risk 2 target architecture is fixed:
+  use a separate materialized historical sector fact table with date-aware constituent semantics and explicit provenance/versioning;
+  do not auto-union it with the current operational sector fact table.
+
+# 2026-04-12 - Ralph: KRX Investor-Flow Risk Closure Execution
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Reuse the approved risk-closure PRD/test spec as the execution contract
+- [x] Inspect current historical backfill/discovery implementation and fix the exact Phase 1/2 automation slice
+- [x] Implement sample-window validation, retry/backoff/abort rules, and full-run quality checks for historical raw backfill
+- [x] Improve CLI/reporting/runbook so Risk 1 can be executed and judged consistently in a live KRX environment
+- [x] Add regression tests for the new orchestration/reporting logic
+- [x] Run focused verification
+- [x] Run architect verification
+- [x] Run deslop pass on changed files and re-verify
+
+## Review
+- Goal of this execution turn:
+  close the automatable part of Risk 1 first.
+  That means codifying the Phase 1/2 rules in code and docs, not pretending the current local shell can complete live KRX validation itself.
+- Implementation outcome:
+  added a real Phase 1/2 operator lane on top of the existing raw-only historical backfill path.
+  `scripts/backfill_investor_flow_history.py` now supports `validate-samples` vs `full` modes, sample-window selection, retry/backoff rules, abort criteria, failure classification, persisted closure checks, and explicit manual non-regression gate acknowledgement.
+- Product-safety fixes:
+  `src/data_sources/krx_investor_flow.py` now keeps warm-status reporting operational-only, preserves validation/backfill reasons in ingest runs, and rejects partial historical-backfill days as non-authoritative so progress cannot advance past unresolved failures.
+  `src/data_sources/warehouse.py` now exposes raw investor-flow date bounds so the full-backfill closure contract is checked against actual warehouse state.
+- Operator documentation:
+  added `docs/krx-investor-flow-backfill-runbook.md` with the exact live validation procedure, retry/abort thresholds, closure standard, spot checks, and Risk 2 gate.
+- Tests added/updated:
+  `tests/test_backfill_investor_flow_history.py`
+  `tests/test_krx_investor_flow_data_source.py`
+  `tests/test_warehouse_cli.py`
+  plus existing warehouse/runtime/status suites re-run as product non-regression coverage.
+- Architect verification:
+  final architect pass approved the changed scope after the warm-status, validation-reason, closure-check, and partial-day-failure fixes.
+- Verification:
+  `python -m py_compile scripts\backfill_investor_flow_history.py src\data_sources\krx_investor_flow.py src\data_sources\warehouse.py tests\test_backfill_investor_flow_history.py tests\test_krx_investor_flow_data_source.py tests\test_warehouse_cli.py`
+  `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests\test_backfill_investor_flow_history.py tests\test_krx_investor_flow_data_source.py tests\test_warehouse_cli.py tests\test_warehouse_investor_flow.py tests\test_dashboard_runtime.py tests\test_dashboard_tabs.py tests\test_data_status.py` -> `75 passed`
+- Deslop pass:
+  bounded to changed files.
+  removed duplicated historical-backfill failure-summary construction in `src/data_sources/krx_investor_flow.py`.
+  post-deslop regression remained green.
+- Residual risks:
+  live KRX auth/network execution is still required to actually close Risk 1.
+  the `oldest_collectable_date` contract remains intentionally minimal.
+  historical sector implementation remains deferred until the separate-table, date-aware provenance lane is started.
+
 # 2026-04-11 - KRX Experimental Investor Flow Dashboard Integration
 
 Status: In progress

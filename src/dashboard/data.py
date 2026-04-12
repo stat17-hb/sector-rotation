@@ -36,6 +36,7 @@ market_id = "KR"
 market_profile: Any | None = None
 CACHE_TTL = 21600
 CURATED_SECTOR_PRICES_PATH = Path("data/curated/sector_prices.parquet")
+INVESTOR_FLOW_TRANSIENT_OVERRIDE_KEY = "_investor_flow_transient_override"
 
 
 def configure_dashboard_env(
@@ -57,6 +58,73 @@ def configure_dashboard_env(
     market_profile = market_profile_obj
     CACHE_TTL = int(cache_ttl)
     CURATED_SECTOR_PRICES_PATH = Path(curated_sector_prices_path)
+
+
+def clear_investor_flow_transient_override() -> None:
+    try:
+        st.session_state.pop(INVESTOR_FLOW_TRANSIENT_OVERRIDE_KEY, None)
+    except Exception:
+        pass
+
+
+def set_investor_flow_transient_override(
+    *,
+    market_id_arg: str,
+    requested_end: str,
+    status: str,
+    summary: dict[str, Any],
+    frame: pd.DataFrame,
+) -> None:
+    try:
+        st.session_state[INVESTOR_FLOW_TRANSIENT_OVERRIDE_KEY] = {
+            "market": str(market_id_arg or market_id).strip().upper() or market_id,
+            "requested_end": str(requested_end or "").strip(),
+            "status": str(status or "LIVE").strip().upper() or "LIVE",
+            "summary": dict(summary),
+            "frame": frame.copy(),
+        }
+    except Exception:
+        pass
+
+
+def _load_investor_flow_transient_override(
+    *,
+    market_id_arg: str,
+    start_str: str,
+    end_str: str,
+) -> tuple[str, dict[str, Any], pd.DataFrame] | None:
+    try:
+        payload = st.session_state.get(INVESTOR_FLOW_TRANSIENT_OVERRIDE_KEY)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    normalized_market = str(market_id_arg or market_id).strip().upper() or market_id
+    if str(payload.get("market", "")).strip().upper() != normalized_market:
+        return None
+
+    requested_end = "".join(ch for ch in str(payload.get("requested_end", "")) if ch.isdigit())[:8]
+    if requested_end != str(end_str):
+        return None
+
+    frame = payload.get("frame")
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return None
+
+    filtered = frame.copy()
+    filtered.index = pd.DatetimeIndex(filtered.index)
+    filtered = filtered.loc[
+        (filtered.index >= pd.Timestamp(start_str)) & (filtered.index <= pd.Timestamp(end_str))
+    ].copy()
+    if filtered.empty:
+        return None
+
+    status_detail = dict(payload.get("summary") or {})
+    status_detail["warehouse_write_skipped"] = True
+    status_detail.setdefault("end", requested_end)
+    status_detail.setdefault("requested_end", requested_end)
+    return str(payload.get("status", "LIVE")).strip().upper() or "LIVE", status_detail, filtered
 
 def _parquet_key(path: str) -> tuple:
     """Return (mtime_ns, size) for a parquet file, or (0, 0) if missing.
@@ -185,7 +253,9 @@ def _price_artifact_key() -> tuple:
 
 
 def _investor_flow_artifact_key() -> tuple:
-    """Return a cache-busting key for the KR investor-flow warehouse state."""
+    """Return a cache-busting key for investor-flow / flow-proxy state."""
+    if market_id == "US":
+        return _price_artifact_key()
     if market_id != "KR":
         return (0, 0, "", "", "")
     from src.data_sources.krx_investor_flow import get_investor_flow_artifact_key
@@ -339,14 +409,50 @@ def _build_investor_flow_refresh_notice(summary: dict[str, object]) -> tuple[str
     status = str(summary.get("status", "")).strip().upper()
     coverage_complete = bool(summary.get("coverage_complete"))
     rows = int(summary.get("rows", 0) or 0)
+    collected_rows = int(summary.get("collected_rows", rows) or 0)
+    warehouse_write_skipped = bool(summary.get("warehouse_write_skipped"))
+    failed_codes: dict[str, str] = dict(summary.get("failed_codes") or {})
+    window: dict[str, object] = dict(summary.get("window") or {})
+    bootstrap_partial_preview = rows > 0 and not str(window.get("complete_cursor", "")).strip()
+    sector_fail_count = sum(1 for k in failed_codes if k.startswith("sector:"))
+    ticker_fail_count = sum(1 for k in failed_codes if not k.startswith("sector:"))
+    auth_fail_count = sum(1 for v in failed_codes.values() if str(v).startswith("AUTH_REQUIRED:"))
 
+    if warehouse_write_skipped and rows > 0:
+        return (
+            "warning",
+            f"투자자수급 실시간 수집 {collected_rows}건은 완료됐지만 warehouse write lock으로 저장하지 못했습니다. 현재 세션에서 임시 preview만 표시하며, 이번 결과는 warehouse에 반영되지 않았습니다.",
+        )
+    if warehouse_write_skipped:
+        return ("error", "투자자수급 실시간 수집은 완료됐지만 warehouse write lock으로 결과를 저장하지 못했습니다.")
     if status == "LIVE" and coverage_complete:
-        return ("success", f"Investor-flow refresh completed ({rows} sector-investor rows cached).")
+        return ("success", f"투자자수급 갱신 완료 ({rows}건 저장).")
     if status == "LIVE":
-        return ("warning", "Investor-flow refresh completed with partial coverage; unchanged actions stay on the base matrix.")
+        parts: list[str] = []
+        if sector_fail_count:
+            parts.append(f"섹터 {sector_fail_count}개 구성종목 조회 실패")
+        if ticker_fail_count:
+            parts.append(f"종목 {ticker_fail_count}개 수급 수집 실패")
+        detail = f" ({', '.join(parts)})" if parts else ""
+        if bootstrap_partial_preview:
+            return ("warning", f"투자자수급 갱신 완료 (부분 커버리지{detail}). complete cursor가 없어 이번 partial preview를 표시합니다.")
+        return ("warning", f"투자자수급 갱신 완료 (부분 커버리지{detail}). complete cursor 기준 기존 데이터를 유지합니다.")
     if status == "CACHED":
-        return ("warning", "Investor-flow refresh fell back to the local cache.")
-    return ("error", "Investor-flow refresh did not complete successfully.")
+        if coverage_complete:
+            return ("info", "투자자수급 데이터가 이미 최신 complete cursor까지 반영되어 있습니다.")
+        if auth_fail_count:
+            return (
+                "error",
+                "투자자수급 갱신 실패: KRX 데이터마켓 로그인 세션이 필요합니다. "
+                "환경변수 또는 Streamlit secrets에 KRX_ID / KRX_PW를 설정한 뒤 다시 시도하세요.",
+            )
+        if bootstrap_partial_preview:
+            return ("warning", "실시간 투자자수급 갱신은 완료되지 않았지만, bootstrap partial preview 데이터를 표시합니다.")
+        snap_detail = ""
+        if failed_codes:
+            snap_detail = f" — {len(failed_codes)}개 항목 실패로 캐시 사용"
+        return ("warning", f"투자자수급 갱신 실패 → 캐시 데이터 사용{snap_detail}.")
+    return ("error", "투자자수급 갱신이 완료되지 않았습니다.")
 
 
 def _legacy_show_notice_toast(notice: tuple[str, str] | None) -> None:
@@ -559,22 +665,43 @@ def _cached_investor_flow(
     end_date_str: str,
     flow_artifact_key: tuple,
 ):
-    """Load KR investor-flow sector aggregates from the warehouse only."""
+    """Load KR investor-flow or US flow-proxy data for the dashboard."""
     _ = flow_artifact_key
     normalized_market = str(market_id_arg or market_id).strip().upper() or market_id
+    start_str, end_str = _investor_flow_range_strings(end_date_str)
+    if normalized_market == "US":
+        from src.data_sources.us_flow_proxies import load_us_flow_proxies
+
+        status, frame, status_detail = load_us_flow_proxies(
+            sector_map=sector_map,
+            start=start_str,
+            end=end_str,
+        )
+        return status, _investor_flow_is_fresh(status_detail, market_end_date_str=end_str), status_detail, frame
     if normalized_market != "KR":
         return "SAMPLE", False, {}, pd.DataFrame()
 
     from src.data_sources.krx_investor_flow import load_sector_investor_flow, read_warm_status
 
-    start_str, end_str = _investor_flow_range_strings(end_date_str)
+    transient = _load_investor_flow_transient_override(
+        market_id_arg=normalized_market,
+        start_str=start_str,
+        end_str=end_str,
+    )
+    if transient is not None:
+        status, status_detail, frame = transient
+        return status, _investor_flow_is_fresh(status_detail, market_end_date_str=end_str), status_detail, frame
+
     status, frame = load_sector_investor_flow(
         sector_map=sector_map,
         start=start_str,
         end=end_str,
         market=normalized_market,
+        allow_bootstrap_partial_preview=True,
     )
-    status_detail = read_warm_status()
+    status_detail = dict(read_warm_status())
+    if status == "CACHED" and not frame.empty and not bool(status_detail.get("coverage_complete")):
+        status_detail["bootstrap_partial_preview"] = True
     return status, _investor_flow_is_fresh(status_detail, market_end_date_str=end_str), status_detail, frame
 
 
@@ -659,6 +786,10 @@ def _cached_signals(
 
     normalized_market = str(market_id_arg or market_id).strip().upper() or market_id
     market_blocking_error = ""
+    flow_preview_enabled = False
+    flow_status = "SAMPLE"
+    flow_fresh = False
+    sector_flow = pd.DataFrame()
     if normalized_market == "KR":
         from src.data_sources.krx_indices import (
             KRXInteractiveRangeLimitError,
@@ -683,6 +814,7 @@ def _cached_signals(
             market_end_date_str,
             flow_artifact_key,
         )
+        flow_preview_enabled = bool(_flow_detail.get("bootstrap_partial_preview"))
     else:
         price_status, sector_prices = _cached_sector_prices(
             normalized_market,
@@ -692,7 +824,11 @@ def _cached_signals(
             price_cache_token,
             price_artifact_key,
         )
-        flow_status, flow_fresh, sector_flow = "SAMPLE", False, pd.DataFrame()
+        flow_status, flow_fresh, _flow_detail, sector_flow = _cached_investor_flow(
+            normalized_market,
+            market_end_date_str,
+            flow_artifact_key,
+        )
 
     macro_status, macro_df = _cached_macro(normalized_market, macro_cache_token, market_end_date_str)
 
@@ -821,7 +957,11 @@ def _cached_signals(
             fx_change_pct=fx_change_pct,
             sector_investor_flow=sector_flow,
             flow_profile=flow_profile,
-            flow_enabled=bool(flow_fresh and flow_status in {"LIVE", "CACHED"}),
+            flow_enabled=bool(
+                normalized_market == "KR"
+                and flow_status in {"LIVE", "CACHED"}
+                and (flow_fresh or flow_preview_enabled)
+            ),
         )
 
     return signals, macro_result, price_status, macro_status, market_blocking_error
@@ -871,6 +1011,7 @@ __all__ = [
     "cached_macro",
     "cached_sector_prices",
     "cached_signals",
+    "clear_investor_flow_transient_override",
     "configure_dashboard_env",
     "get_all_sector_codes",
     "get_investor_flow_artifact_key",
@@ -894,5 +1035,6 @@ __all__ = [
     "probe_market_status",
     "render_dashboard_status_banner",
     "resolve_market_end_date",
+    "set_investor_flow_transient_override",
     "show_notice_toast",
 ]

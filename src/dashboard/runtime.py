@@ -18,9 +18,10 @@ from src.dashboard.data import (
     cached_macro,
     cached_sector_prices,
     cached_signals,
+    clear_investor_flow_transient_override,
     get_all_sector_codes,
-    get_investor_flow_range_strings,
     get_market_range_strings,
+    set_investor_flow_transient_override,
 )
 from src.dashboard.types import DashboardContext
 from src.data_sources.warehouse import close_cached_read_only_connection
@@ -45,6 +46,7 @@ def invalidate_dashboard_caches(scope: CacheScope) -> None:
         cached_api_preflight.clear()
         cached_sector_prices.clear()
         cached_analysis_sector_prices.clear()
+        cached_investor_flow.clear()
         cached_signals.clear()
         return
     if scope == "macro":
@@ -128,17 +130,27 @@ def run_investor_flow_refresh(context: DashboardContext) -> tuple[str, str] | No
 
     from src.data_sources.krx_investor_flow import run_manual_investor_flow_refresh
 
-    _, end_str = get_investor_flow_range_strings(context.market_end_date_str)
     try:
         close_cached_read_only_connection()
-        (_, _), refresh_summary = run_manual_investor_flow_refresh(
+        (status, frame), refresh_summary = run_manual_investor_flow_refresh(
             sector_map=context.sector_map,
-            end_date_str=end_str,
+            end_date_str=context.market_end_date_str,
             market=context.market_id,
         )
+        if bool(refresh_summary.get("warehouse_write_skipped")) and isinstance(frame, pd.DataFrame) and not frame.empty:
+            set_investor_flow_transient_override(
+                market_id_arg=context.market_id,
+                requested_end=context.market_end_date_str,
+                status=status,
+                summary=refresh_summary,
+                frame=frame,
+            )
+        else:
+            clear_investor_flow_transient_override()
         invalidate_dashboard_caches("flow")
         return build_investor_flow_refresh_notice(refresh_summary)
     except Exception as exc:
+        clear_investor_flow_transient_override()
         logger.exception("Manual investor-flow refresh failed")
         return ("error", f"Investor-flow refresh failed: {exc}")
 

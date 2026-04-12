@@ -103,6 +103,98 @@ def test_transport_patch_is_idempotent(monkeypatch):
     assert webio.Post.__init__ is first_post_init
 
 
+def test_parse_login_response_handles_non_json_html():
+    import src.data_sources.pykrx_compat as compat
+
+    class _Resp:
+        status_code = 200
+        headers = {"content-type": "text/html"}
+        text = "<html><title>로그인</title></html>"
+
+        @staticmethod
+        def json():
+            raise ValueError("no json")
+
+    ok, detail = compat._parse_login_response(_Resp())
+    assert ok is False
+    assert "HTML" in detail or "login" in detail.lower()
+
+
+def test_request_krx_data_uses_shared_session_headers(monkeypatch):
+    import src.data_sources.pykrx_compat as compat
+
+    captured: dict[str, object] = {}
+
+    class _Session:
+        def post(self, url, headers=None, data=None, timeout=None):
+            captured["url"] = url
+            captured["headers"] = dict(headers or {})
+            captured["data"] = dict(data or {})
+            captured["timeout"] = timeout
+            return object()
+
+    monkeypatch.setattr(compat, "_get_shared_session", lambda: _Session())
+    response = compat.request_krx_data({"foo": "bar"})
+    assert response is not None
+    assert captured["url"] == compat.KRX_JSON_URL
+    assert captured["headers"]["X-Requested-With"] == "XMLHttpRequest"
+    assert captured["data"] == {"foo": "bar"}
+
+
+def test_get_shared_session_records_login_failure_detail(monkeypatch):
+    import src.data_sources.pykrx_compat as compat
+
+    monkeypatch.setattr(compat, "_SHARED_SESSION", None)
+    monkeypatch.setattr(compat, "_SESSION_AUTHENTICATED", None)
+    monkeypatch.setattr(compat, "_SESSION_AUTH_DETAIL", "KRX_ID/KRX_PW not configured")
+    monkeypatch.setattr(compat, "_load_secret_or_env", lambda name: "x" if name in {"KRX_ID", "KRX_PW"} else "")
+    monkeypatch.setattr(compat, "_warmup_krx_login_session", lambda session: (_ for _ in ()).throw(RuntimeError("dns fail")))
+
+    session = compat._get_shared_session()
+
+    assert session is not None
+    state = compat.get_krx_login_state()
+    assert state["configured"] is True
+    assert state["authenticated"] is False
+    assert "dns fail" in state["detail"]
+
+
+def test_login_krx_session_retries_after_access_denied(monkeypatch):
+    import src.data_sources.pykrx_compat as compat
+
+    class _RespDenied:
+        status_code = 200
+        headers = {"content-type": "text/html"}
+        text = "<html><body>Access Denied</body></html>"
+
+        @staticmethod
+        def json():
+            raise ValueError("not json")
+
+    class _RespOk:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+        text = '{"_error_code":"CD001"}'
+
+        @staticmethod
+        def json():
+            return {"_error_code": "CD001"}
+
+    class _Session:
+        def __init__(self):
+            self.calls = 0
+
+        def post(self, url, data=None, headers=None, timeout=None):
+            self.calls += 1
+            return _RespDenied() if self.calls == 1 else _RespOk()
+
+    session = _Session()
+    ok, detail = compat._login_krx_session(session, "id", "pw")
+    assert ok is True
+    assert detail == "authenticated"
+    assert session.calls == 2
+
+
 def test_resolve_close_column_prefers_named_column():
     from src.data_sources.pykrx_compat import resolve_ohlcv_close_column
 

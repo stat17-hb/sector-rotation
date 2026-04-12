@@ -1109,6 +1109,116 @@ def inject_css(theme_mode: str) -> None:
         margin-right: 0.25rem;
     }}
 
+    .flow-container {{
+        display: flex;
+        flex-direction: column;
+        gap: 0.7rem;
+        margin-bottom: 0.6rem;
+    }}
+
+    .flow-card {{
+        border: 1px solid var(--border);
+        background: color-mix(in srgb, var(--surface) 96%, var(--bg) 4%);
+        border-radius: var(--radius-md);
+        padding: 1rem 1.1rem;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+    }}
+
+    .flow-card:hover {{
+        transform: translateY(-2px);
+        box-shadow: 0 4px 12px color-mix(in srgb, var(--primary) 10%, transparent);
+    }}
+
+    .flow-card__header {{
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        margin-bottom: 0.7rem;
+        padding-bottom: 0.5rem;
+        border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
+    }}
+
+    .flow-card__title {{
+        color: var(--text);
+        font-size: 1.05rem;
+        font-weight: 700;
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 0.45rem;
+    }}
+
+    .flow-card__rank {{
+        color: var(--text-muted);
+        font-size: 0.95rem;
+        font-weight: 600;
+        display: inline-block;
+        min-width: 1.2rem;
+    }}
+
+    .flow-card__badge {{
+        font-size: 0.75rem;
+        font-weight: 750;
+        border: 1px solid transparent;
+        padding: 0.25rem 0.65rem;
+        border-radius: 999px;
+        white-space: nowrap;
+        margin-left: 0.5rem;
+    }}
+
+    .flow-card__badge--success {{
+        color: var(--success);
+        background: color-mix(in srgb, var(--success) 12%, transparent);
+        border-color: color-mix(in srgb, var(--success) 25%, transparent);
+    }}
+
+    .flow-card__badge--neutral {{
+        color: var(--info);
+        background: color-mix(in srgb, var(--info) 12%, transparent);
+        border-color: color-mix(in srgb, var(--info) 25%, transparent);
+    }}
+
+    .flow-card__badge--warning {{
+        color: var(--warning);
+        background: color-mix(in srgb, var(--warning) 12%, transparent);
+        border-color: color-mix(in srgb, var(--warning) 25%, transparent);
+    }}
+
+    .flow-card__badge--danger {{
+        color: var(--danger);
+        background: color-mix(in srgb, var(--danger) 12%, transparent);
+        border-color: color-mix(in srgb, var(--danger) 25%, transparent);
+    }}
+
+    .flow-card__body {{
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }}
+
+    .flow-card__row {{
+        display: flex;
+        align-items: baseline;
+        gap: 0.65rem;
+        font-size: 0.9rem;
+    }}
+
+    .flow-card__label {{
+        color: var(--text-muted);
+        min-width: 75px;
+        max-width: 75px;
+        font-weight: 700;
+        font-size: 0.84rem;
+        flex-shrink: 0;
+    }}
+
+    .flow-card__value {{
+        color: var(--text);
+        flex: 1;
+        line-height: 1.5;
+    }}
+
+
     [data-testid="stDataFrame"] {{
         border: 1px solid {table_tokens['grid']};
         border-radius: 12px;

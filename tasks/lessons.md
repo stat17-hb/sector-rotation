@@ -65,3 +65,9 @@
 - Pattern: A KRX data-path change passed focused integration tests but still broke unrelated shared UI tests in CI because the final verification skipped full `pytest -q`.
 - Rule: Before pushing any change that touches shared UI exports or modules re-exported through compatibility barrels (for example `src/ui/components.py` -> `src/ui/tables.py`), always run full `pytest -q`, not only targeted tests.
 - Rule: When tests describe a renderer as using "native dataframe", keep the `st.dataframe` payload as a plain `DataFrame`; do not switch to `pandas.Styler` unless the test contract is intentionally updated in the same change.
+
+## 2026-04-11
+- Pattern: A new KRX investor-flow failure looked at first like another response-key/schema drift, but the stronger root cause was 2026 KRX Data Marketplace login gating that returned non-JSON HTML to unauthenticated requests.
+- Rule: When KRX raw endpoints start failing with `JSONDecodeError` / `Expecting value`, treat login/auth gating as a first-class hypothesis before iterating on payload keys or date candidates.
+- Rule: For KRX non-JSON responses, always capture and classify the body as `AUTH_REQUIRED`, `ACCESS_DENIED`, `NON_JSON_EMPTY`, or `NON_JSON_RESPONSE`; never reduce it to a generic "empty constituent list".
+- Rule: If a third-party source becomes login-gated, add optional authenticated-session support and a precise blocker message in the same change; do not present it as a completed data fix while credentials are still unsupported.

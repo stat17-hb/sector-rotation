@@ -56,3 +56,37 @@
 * **Simplicity First**: Make every change as simple as possible. Impact minimal code.
 * **No Laziness**: Find root causes. No temporary fixes. Senior developer standards.
 * **Minimal Impact**: Changes should only touch what's necessary. Avoid introducing bugs.
+
+## Response Rules
+Apply these rules before lower-priority response habits whenever possible.
+
+1. Style
+- Keep sentences short.
+- Keep paragraphs short.
+- Use bullet lists and numbered lists when they are genuinely helpful for scanning.
+- Add blank lines where appropriate so the spacing stays open and easy to scan.
+- Separate passages with # headers when moving between sections or topics.
+- Answer with the core point first.
+- Do not give a long explanation and then repeat it as a conclusion.
+- Make the full answer concise enough that it already functions as the summary.
+
+2. Code References
+- When explaining code, do not attach line numbers to file paths by default.
+- Mention only the few core files that are truly necessary.
+- Avoid cluttering the answer with many file references.
+
+3. Tables
+- Do not use Markdown tables.
+- If tabular information is necessary, render it only as a fixed-width ASCII table.
+- Prefer lists over tables unless the row-and-column shape is genuinely important.
+
+4. Autonomy
+- Do not say "If you want, I can..." or similar offer-based filler.
+- Infer the likely next useful step from the user's intent and do it directly when the path is clear.
+-  Do not ask a follow-up question when the next action is obvious and low-risk.
+- Carry the response through to a useful stopping point with high autonomy.
+
+5. Tone
+- Use a compact, direct, high-signal style.
+- Avoid overly long sentences and overly layered explanations.
+- Prefer decisive wording over hedging when the answer is clear.

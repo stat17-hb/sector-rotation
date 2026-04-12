@@ -16,13 +16,22 @@ import duckdb
 import pandas as pd
 
 
-WarehouseDataset = Literal["market_prices", "macro_data", "investor_flow"]
+WarehouseDataset = Literal[
+    "market_prices",
+    "macro_data",
+    "investor_flow",
+    "investor_flow_operational_complete",
+    "investor_flow_backfill_progress",
+]
 
 WAREHOUSE_PATH = Path("data/warehouse.duckdb")
 DEFAULT_PRICE_EXPORT_PATH = Path("data/curated/sector_prices.parquet")
 DEFAULT_MACRO_EXPORT_PATH = Path("data/curated/macro_monthly.parquet")
 DEFAULT_PRICE_EXPORT_PATH_US = Path("data/curated/sector_prices_us.parquet")
 DEFAULT_MACRO_EXPORT_PATH_US = Path("data/curated/macro_monthly_us.parquet")
+INVESTOR_FLOW_DATASET = "investor_flow"
+INVESTOR_FLOW_OPERATIONAL_COMPLETE_DATASET = "investor_flow_operational_complete"
+INVESTOR_FLOW_BACKFILL_PROGRESS_DATASET = "investor_flow_backfill_progress"
 
 # ---------------------------------------------------------------------------
 # Read-only connection cache
@@ -168,6 +177,8 @@ def _default_macro_export_path(market: str) -> Path:
 _READ_SCHEMA_REQUIREMENTS: dict[str, frozenset[str]] = {
     "dim_index": frozenset({"market", "index_code", "index_name"}),
     "fact_krx_index_daily": frozenset({"market", "trade_date", "index_code", "close"}),
+    "fact_investor_flow_daily": frozenset({"market", "trade_date", "ticker", "investor_type"}),
+    "fact_investor_flow_sector_daily": frozenset({"market", "trade_date", "sector_code", "investor_type"}),
     "dim_macro_series": frozenset({"market", "series_alias"}),
     "fact_macro_monthly": frozenset({"market", "period_month", "series_alias"}),
     "ingest_runs": frozenset({"market", "dataset", "created_at"}),
@@ -474,6 +485,22 @@ def ensure_warehouse_schema(connection: duckdb.DuckDBPyConnection | None = None)
                 provider VARCHAR NOT NULL,
                 loaded_at TIMESTAMPTZ NOT NULL,
                 PRIMARY KEY (market, trade_date, sector_code, investor_type)
+            )
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS sector_constituents_snapshot (
+                market VARCHAR NOT NULL,
+                snapshot_date DATE NOT NULL,
+                sector_code VARCHAR NOT NULL,
+                ticker VARCHAR NOT NULL,
+                reference_date DATE NOT NULL,
+                resolved_from VARCHAR NOT NULL,
+                provider VARCHAR NOT NULL,
+                is_fallback BOOLEAN NOT NULL DEFAULT FALSE,
+                loaded_at TIMESTAMPTZ NOT NULL,
+                PRIMARY KEY (market, snapshot_date, sector_code, ticker)
             )
             """
         )
@@ -797,10 +824,13 @@ def export_market_parquet(path: Path | None = None, *, market: str = "KR") -> Pa
     return export_path
 
 
-def upsert_investor_flow_raw(frame: pd.DataFrame, *, provider: str, market: str = "KR") -> None:
-    if frame.empty:
-        return
-
+def _build_investor_flow_raw_payload(
+    frame: pd.DataFrame,
+    *,
+    provider: str,
+    market: str,
+    loaded_at: datetime | None = None,
+) -> pd.DataFrame:
     normalized_market = _normalize_market_id(market)
     normalized = frame.copy()
     if "trade_date" in normalized.columns:
@@ -817,9 +847,9 @@ def upsert_investor_flow_raw(frame: pd.DataFrame, *, provider: str, market: str 
     for column in ("buy_amount", "sell_amount", "net_buy_amount"):
         normalized[column] = pd.to_numeric(normalized[column], errors="coerce").fillna(0).astype("int64")
     normalized["provider"] = str(provider or "").strip().upper() or "UNKNOWN"
-    normalized["loaded_at"] = _utc_now()
+    normalized["loaded_at"] = loaded_at or _utc_now()
 
-    payload = normalized[
+    return normalized[
         [
             "market",
             "trade_date",
@@ -834,7 +864,72 @@ def upsert_investor_flow_raw(frame: pd.DataFrame, *, provider: str, market: str 
         ]
     ]
 
-    con = _connect()
+
+def _build_investor_flow_sector_payload(
+    frame: pd.DataFrame,
+    *,
+    provider: str,
+    market: str,
+    loaded_at: datetime | None = None,
+) -> pd.DataFrame:
+    normalized_market = _normalize_market_id(market)
+    normalized = frame.copy()
+    if "trade_date" in normalized.columns:
+        normalized["trade_date"] = pd.to_datetime(normalized["trade_date"]).dt.normalize()
+    else:
+        normalized.index = pd.DatetimeIndex(normalized.index)
+        normalized["trade_date"] = normalized.index.normalize()
+    normalized["market"] = normalized_market
+    normalized["sector_code"] = normalized["sector_code"].astype(str)
+    if "sector_name" not in normalized.columns:
+        normalized["sector_name"] = normalized["sector_code"]
+    normalized["sector_name"] = normalized["sector_name"].astype(str)
+    normalized["investor_type"] = normalized["investor_type"].astype(str)
+    for column in ("buy_amount", "sell_amount", "net_buy_amount"):
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce").fillna(0).astype("int64")
+    normalized["net_flow_ratio"] = (
+        pd.to_numeric(normalized["net_flow_ratio"], errors="coerce").fillna(0.0).astype("float64")
+    )
+    normalized["provider"] = str(provider or "").strip().upper() or "UNKNOWN"
+    normalized["loaded_at"] = loaded_at or _utc_now()
+
+    return normalized[
+        [
+            "market",
+            "trade_date",
+            "sector_code",
+            "sector_name",
+            "investor_type",
+            "buy_amount",
+            "sell_amount",
+            "net_buy_amount",
+            "net_flow_ratio",
+            "provider",
+            "loaded_at",
+        ]
+    ]
+
+
+def upsert_investor_flow_raw(
+    frame: pd.DataFrame,
+    *,
+    provider: str,
+    market: str = "KR",
+    connection: duckdb.DuckDBPyConnection | _WritingConn | None = None,
+    loaded_at: datetime | None = None,
+) -> None:
+    if frame.empty:
+        return
+
+    payload = _build_investor_flow_raw_payload(
+        frame,
+        provider=provider,
+        market=market,
+        loaded_at=loaded_at,
+    )
+
+    owns_connection = connection is None
+    con = connection or _connect()
     try:
         ensure_warehouse_schema(con)
         _register_frame(con, "investor_flow_raw_upsert", payload)
@@ -863,49 +958,30 @@ def upsert_investor_flow_raw(frame: pd.DataFrame, *, provider: str, market: str 
             """
         )
     finally:
-        con.close()
+        if owns_connection:
+            con.close()
 
 
-def upsert_investor_flow_sector(frame: pd.DataFrame, *, provider: str, market: str = "KR") -> None:
+def upsert_investor_flow_sector(
+    frame: pd.DataFrame,
+    *,
+    provider: str,
+    market: str = "KR",
+    connection: duckdb.DuckDBPyConnection | _WritingConn | None = None,
+    loaded_at: datetime | None = None,
+) -> None:
     if frame.empty:
         return
 
-    normalized_market = _normalize_market_id(market)
-    normalized = frame.copy()
-    if "trade_date" in normalized.columns:
-        normalized["trade_date"] = pd.to_datetime(normalized["trade_date"]).dt.normalize()
-    else:
-        normalized.index = pd.DatetimeIndex(normalized.index)
-        normalized["trade_date"] = normalized.index.normalize()
-    normalized["market"] = normalized_market
-    normalized["sector_code"] = normalized["sector_code"].astype(str)
-    if "sector_name" not in normalized.columns:
-        normalized["sector_name"] = normalized["sector_code"]
-    normalized["sector_name"] = normalized["sector_name"].astype(str)
-    normalized["investor_type"] = normalized["investor_type"].astype(str)
-    for column in ("buy_amount", "sell_amount", "net_buy_amount"):
-        normalized[column] = pd.to_numeric(normalized[column], errors="coerce").fillna(0).astype("int64")
-    normalized["net_flow_ratio"] = pd.to_numeric(normalized["net_flow_ratio"], errors="coerce").fillna(0.0).astype("float64")
-    normalized["provider"] = str(provider or "").strip().upper() or "UNKNOWN"
-    normalized["loaded_at"] = _utc_now()
+    payload = _build_investor_flow_sector_payload(
+        frame,
+        provider=provider,
+        market=market,
+        loaded_at=loaded_at,
+    )
 
-    payload = normalized[
-        [
-            "market",
-            "trade_date",
-            "sector_code",
-            "sector_name",
-            "investor_type",
-            "buy_amount",
-            "sell_amount",
-            "net_buy_amount",
-            "net_flow_ratio",
-            "provider",
-            "loaded_at",
-        ]
-    ]
-
-    con = _connect()
+    owns_connection = connection is None
+    con = connection or _connect()
     try:
         ensure_warehouse_schema(con)
         _register_frame(con, "investor_flow_sector_upsert", payload)
@@ -936,6 +1012,136 @@ def upsert_investor_flow_sector(frame: pd.DataFrame, *, provider: str, market: s
             """
         )
     finally:
+        if owns_connection:
+            con.close()
+
+
+def upsert_sector_constituents_snapshot(
+    rows: list[dict[str, Any]],
+    *,
+    snapshot_date: str,
+    provider: str,
+    market: str = "KR",
+) -> None:
+    """Persist sector constituent tickers for a given snapshot date.
+
+    Each row must have keys: sector_code, ticker, reference_date, resolved_from,
+    is_fallback (optional, defaults to False).
+    """
+    if not rows:
+        return
+
+    normalized_market = _normalize_market_id(market)
+    now = _utc_now()
+    snap_date = _normalize_market_date(snapshot_date)
+    frame = pd.DataFrame(rows).copy()
+    frame["market"] = normalized_market
+    frame["snapshot_date"] = pd.Timestamp(snap_date)
+    frame["sector_code"] = frame["sector_code"].astype(str)
+    frame["ticker"] = frame["ticker"].astype(str)
+    frame["reference_date"] = pd.to_datetime(frame["reference_date"]).dt.normalize()
+    frame["resolved_from"] = frame["resolved_from"].astype(str)
+    frame["provider"] = str(provider or "").strip().upper() or "UNKNOWN"
+    if "is_fallback" not in frame.columns:
+        frame["is_fallback"] = False
+    frame["is_fallback"] = frame["is_fallback"].astype(bool)
+    frame["loaded_at"] = now
+
+    payload = frame[
+        [
+            "market",
+            "snapshot_date",
+            "sector_code",
+            "ticker",
+            "reference_date",
+            "resolved_from",
+            "provider",
+            "is_fallback",
+            "loaded_at",
+        ]
+    ]
+
+    con = _connect()
+    try:
+        ensure_warehouse_schema(con)
+        _register_frame(con, "sector_constituents_snapshot_upsert", payload)
+        con.execute(
+            """
+            INSERT INTO sector_constituents_snapshot AS snap
+            SELECT
+                market,
+                CAST(snapshot_date AS DATE) AS snapshot_date,
+                sector_code,
+                ticker,
+                CAST(reference_date AS DATE) AS reference_date,
+                resolved_from,
+                provider,
+                is_fallback,
+                loaded_at
+            FROM sector_constituents_snapshot_upsert
+            ON CONFLICT (market, snapshot_date, sector_code, ticker) DO UPDATE SET
+                reference_date = excluded.reference_date,
+                resolved_from = excluded.resolved_from,
+                provider = excluded.provider,
+                is_fallback = excluded.is_fallback,
+                loaded_at = excluded.loaded_at
+            """
+        )
+    finally:
+        con.close()
+
+
+def read_latest_sector_constituents_snapshot(
+    sector_codes: list[str],
+    *,
+    market: str = "KR",
+) -> pd.DataFrame:
+    """Return the most recent constituent snapshot rows for the given sector codes.
+
+    Returns a DataFrame with columns:
+        snapshot_date, sector_code, ticker, reference_date, resolved_from,
+        provider, is_fallback
+    Returns an empty DataFrame if no snapshot exists.
+    """
+    if not warehouse_exists() or not sector_codes:
+        return pd.DataFrame()
+
+    _ensure_schema_for_readers()
+    normalized_market = _normalize_market_id(market)
+    codes_frame = pd.DataFrame({"sector_code": [str(c) for c in sector_codes]})
+
+    con = _connect_ro()
+    try:
+        if not _table_exists(con, "sector_constituents_snapshot"):
+            return pd.DataFrame()
+        _register_frame(con, "snap_sector_filter", codes_frame)
+        result = con.execute(
+            """
+            SELECT
+                snap.snapshot_date,
+                snap.sector_code,
+                snap.ticker,
+                snap.reference_date,
+                snap.resolved_from,
+                snap.provider,
+                snap.is_fallback
+            FROM sector_constituents_snapshot snap
+            INNER JOIN snap_sector_filter f ON snap.sector_code = f.sector_code
+            WHERE snap.market = ?
+              AND snap.snapshot_date = (
+                  SELECT MAX(s2.snapshot_date)
+                  FROM sector_constituents_snapshot s2
+                  WHERE s2.market = snap.market
+                    AND s2.sector_code = snap.sector_code
+              )
+            ORDER BY snap.sector_code, snap.ticker
+            """,
+            [normalized_market],
+        ).df()
+        return result
+    except duckdb.Error:
+        return pd.DataFrame()
+    finally:
         con.close()
 
 
@@ -945,6 +1151,7 @@ def read_sector_investor_flow(
     end: str,
     *,
     market: str = "KR",
+    cap_to_operational_cursor: bool = False,
 ) -> pd.DataFrame:
     if not warehouse_exists() or not sector_codes:
         return pd.DataFrame()
@@ -954,6 +1161,15 @@ def read_sector_investor_flow(
     codes_frame = pd.DataFrame({"sector_code": [str(code) for code in sector_codes]})
     start_date = _normalize_market_date(start)
     end_date = _normalize_market_date(end)
+    if cap_to_operational_cursor:
+        cursor = read_investor_flow_operational_complete_cursor(market=normalized_market)
+        if not cursor:
+            return pd.DataFrame()
+        cursor_date = _normalize_market_date(cursor)
+        if cursor_date < start_date:
+            return pd.DataFrame()
+        if cursor_date < end_date:
+            end_date = cursor_date
     con = _connect_ro()
     try:
         if not _table_exists(con, "fact_investor_flow_sector_daily"):
@@ -1007,6 +1223,175 @@ def read_sector_investor_flow(
             "net_buy_amount": "int64",
             "net_flow_ratio": "float64",
         }
+    )
+
+
+def write_investor_flow_operational_result(
+    *,
+    raw_frame: pd.DataFrame,
+    sector_frame: pd.DataFrame,
+    provider: str,
+    requested_start: str,
+    requested_end: str,
+    reason: str,
+    summary: dict[str, Any],
+    market: str = "KR",
+) -> None:
+    normalized_market = _normalize_market_id(market)
+    now = _utc_now()
+    con = _connect()
+    try:
+        ensure_warehouse_schema(con)
+        if not raw_frame.empty:
+            upsert_investor_flow_raw(
+                raw_frame,
+                provider=provider,
+                market=normalized_market,
+                connection=con,
+                loaded_at=now,
+            )
+        if not sector_frame.empty:
+            upsert_investor_flow_sector(
+                sector_frame,
+                provider=provider,
+                market=normalized_market,
+                connection=con,
+                loaded_at=now,
+            )
+        record_ingest_run(
+            dataset=INVESTOR_FLOW_DATASET,
+            reason=reason,
+            provider=provider,
+            requested_start=requested_start,
+            requested_end=requested_end,
+            status=str(summary.get("status", "")).strip().upper() or "LIVE",
+            coverage_complete=bool(summary.get("coverage_complete")),
+            failed_days=list(summary.get("failed_days", [])),
+            failed_codes=dict(summary.get("failed_codes") or {}),
+            delta_keys=list(summary.get("delta_keys", [])),
+            row_count=int(summary.get("rows", len(sector_frame)) or 0),
+            predicted_requests=int(summary.get("predicted_requests", 0) or 0),
+            processed_requests=int(summary.get("processed_requests", 0) or 0),
+            summary=summary,
+            market=normalized_market,
+            connection=con,
+            created_at=now,
+        )
+        if bool(summary.get("coverage_complete")):
+            update_ingest_watermark(
+                dataset=INVESTOR_FLOW_OPERATIONAL_COMPLETE_DATASET,
+                watermark_key=requested_end,
+                status=str(summary.get("status", "")).strip().upper() or "LIVE",
+                coverage_complete=True,
+                provider=provider,
+                details=summary,
+                market=normalized_market,
+                connection=con,
+                updated_at=now,
+            )
+    finally:
+        con.close()
+
+
+def write_investor_flow_backfill_chunk(
+    *,
+    raw_frame: pd.DataFrame,
+    chunk_start: str,
+    chunk_end: str,
+    provider: str,
+    summary: dict[str, Any],
+    oldest_collectable_date: str,
+    target_end_date: str,
+    market: str = "KR",
+    reason: str = "historical_backfill",
+    update_progress: bool = True,
+) -> None:
+    if raw_frame.empty:
+        raise ValueError("Historical backfill chunk requires non-empty raw_frame.")
+
+    normalized_market = _normalize_market_id(market)
+    now = _utc_now()
+    details = dict(summary)
+    details.update(
+        {
+            "oldest_collectable_date": str(oldest_collectable_date),
+            "target_end_date": str(target_end_date),
+            "chunk_start": str(chunk_start),
+            "chunk_end": str(chunk_end),
+            "mode": "raw_only_history",
+        }
+    )
+
+    con = _connect()
+    try:
+        ensure_warehouse_schema(con)
+        upsert_investor_flow_raw(
+            raw_frame,
+            provider=provider,
+            market=normalized_market,
+            connection=con,
+            loaded_at=now,
+        )
+        record_ingest_run(
+            dataset=INVESTOR_FLOW_DATASET,
+            reason=reason,
+            provider=provider,
+            requested_start=chunk_start,
+            requested_end=chunk_end,
+            status=str(summary.get("status", "")).strip().upper() or "LIVE",
+            coverage_complete=bool(not raw_frame.empty),
+            failed_days=list(summary.get("failed_days", [])),
+            failed_codes=dict(summary.get("failed_codes") or {}),
+            delta_keys=[],
+            row_count=int(len(raw_frame)),
+            predicted_requests=int(summary.get("predicted_requests", 0) or 0),
+            processed_requests=int(summary.get("processed_requests", 0) or 0),
+            summary=details,
+            market=normalized_market,
+            connection=con,
+            created_at=now,
+        )
+        if update_progress:
+            update_ingest_watermark(
+                dataset=INVESTOR_FLOW_BACKFILL_PROGRESS_DATASET,
+                watermark_key=chunk_end,
+                status=str(summary.get("status", "")).strip().upper() or "LIVE",
+                coverage_complete=True,
+                provider=provider,
+                details=details,
+                market=normalized_market,
+                connection=con,
+                updated_at=now,
+            )
+    finally:
+        con.close()
+
+
+def record_investor_flow_run_failure(
+    *,
+    reason: str,
+    provider: str,
+    requested_start: str,
+    requested_end: str,
+    summary: dict[str, Any],
+    market: str = "KR",
+) -> None:
+    record_ingest_run(
+        dataset=INVESTOR_FLOW_DATASET,
+        reason=reason,
+        provider=provider,
+        requested_start=requested_start,
+        requested_end=requested_end,
+        status=str(summary.get("status", "")).strip().upper() or "CACHED",
+        coverage_complete=bool(summary.get("coverage_complete")),
+        failed_days=list(summary.get("failed_days", [])),
+        failed_codes=dict(summary.get("failed_codes") or {}),
+        delta_keys=list(summary.get("delta_keys", [])),
+        row_count=int(summary.get("rows", 0) or 0),
+        predicted_requests=int(summary.get("predicted_requests", 0) or 0),
+        processed_requests=int(summary.get("processed_requests", 0) or 0),
+        summary=summary,
+        market=market,
     )
 
 
@@ -1313,9 +1698,11 @@ def record_ingest_run(
     processed_requests: int = 0,
     summary: dict[str, Any] | None = None,
     market: str = "KR",
+    connection: duckdb.DuckDBPyConnection | _WritingConn | None = None,
+    created_at: datetime | None = None,
 ) -> None:
     normalized_market = _normalize_market_id(market)
-    now = _utc_now()
+    now = created_at or _utc_now()
     frame = pd.DataFrame(
         [
             {
@@ -1342,13 +1729,15 @@ def record_ingest_run(
         ]
     )
 
-    con = _connect()
+    owns_connection = connection is None
+    con = connection or _connect()
     try:
         ensure_warehouse_schema(con)
         _register_frame(con, "ingest_run_insert", frame)
         con.execute("INSERT INTO ingest_runs SELECT * FROM ingest_run_insert")
     finally:
-        con.close()
+        if owns_connection:
+            con.close()
 
 
 def update_ingest_watermark(
@@ -1360,6 +1749,8 @@ def update_ingest_watermark(
     provider: str,
     details: dict[str, Any] | None = None,
     market: str = "KR",
+    connection: duckdb.DuckDBPyConnection | _WritingConn | None = None,
+    updated_at: datetime | None = None,
 ) -> None:
     normalized_market = _normalize_market_id(market)
     frame = pd.DataFrame(
@@ -1372,12 +1763,13 @@ def update_ingest_watermark(
                 "status": str(status).strip().upper(),
                 "provider": str(provider).strip().upper(),
                 "details_json": _serialize_json(dict(details or {})),
-                "updated_at": _utc_now(),
+                "updated_at": updated_at or _utc_now(),
             }
         ]
     )
 
-    con = _connect()
+    owns_connection = connection is None
+    con = connection or _connect()
     try:
         ensure_warehouse_schema(con)
         _register_frame(con, "ingest_watermark_upsert", frame)
@@ -1395,7 +1787,182 @@ def update_ingest_watermark(
             """
         )
     finally:
+        if owns_connection:
+            con.close()
+
+
+def _read_ingest_watermark(dataset: str, *, market: str = "KR") -> dict[str, Any]:
+    if not warehouse_exists():
+        return {}
+
+    _ensure_schema_for_readers()
+    normalized_market = _normalize_market_id(market)
+    con = _connect_ro()
+    try:
+        row = con.execute(
+            """
+            SELECT
+                watermark_key,
+                coverage_complete,
+                status,
+                provider,
+                details_json,
+                updated_at
+            FROM ingest_watermarks
+            WHERE dataset = ? AND market = ?
+            """,
+            [dataset, normalized_market],
+        ).fetchone()
+    finally:
         con.close()
+
+    if row is None:
+        return {}
+    return {
+        "watermark_key": str(row[0] or "").strip(),
+        "coverage_complete": bool(row[1]),
+        "status": str(row[2] or "").strip().upper(),
+        "provider": str(row[3] or "").strip().upper(),
+        "details": dict(_deserialize_json(row[4], {})),
+        "updated_at": row[5],
+    }
+
+
+def read_investor_flow_operational_complete_cursor(*, market: str = "KR") -> str | None:
+    watermark = _read_ingest_watermark(INVESTOR_FLOW_OPERATIONAL_COMPLETE_DATASET, market=market)
+    digits = "".join(ch for ch in str(watermark.get("watermark_key", "")) if ch.isdigit())[:8]
+    return digits or None
+
+
+def read_investor_flow_backfill_progress_cursor(*, market: str = "KR") -> str | None:
+    watermark = _read_ingest_watermark(INVESTOR_FLOW_BACKFILL_PROGRESS_DATASET, market=market)
+    digits = "".join(ch for ch in str(watermark.get("watermark_key", "")) if ch.isdigit())[:8]
+    return digits or None
+
+
+def read_latest_investor_flow_run(
+    *,
+    market: str = "KR",
+    reasons: tuple[str, ...] | list[str] | None = None,
+) -> dict[str, Any]:
+    if not warehouse_exists():
+        return {}
+
+    _ensure_schema_for_readers()
+    normalized_market = _normalize_market_id(market)
+    allowed_reasons = {str(reason).strip() for reason in (reasons or []) if str(reason).strip()}
+    con = _connect_ro()
+    try:
+        result = con.execute(
+            """
+            SELECT
+                dataset,
+                provider,
+                requested_start,
+                requested_end,
+                status,
+                coverage_complete,
+                failed_days_json,
+                failed_codes_json,
+                reason,
+                delta_keys_json,
+                aborted,
+                abort_reason,
+                predicted_requests,
+                processed_requests,
+                summary_json,
+                created_at
+            FROM ingest_runs
+            WHERE dataset = ? AND market = ?
+            ORDER BY created_at DESC
+            """,
+            [INVESTOR_FLOW_DATASET, normalized_market],
+        ).fetchdf()
+    finally:
+        con.close()
+
+    if result.empty:
+        return {}
+
+    for _, row in result.iterrows():
+        reason = str(row["reason"] or "").strip()
+        if allowed_reasons and reason not in allowed_reasons:
+            continue
+        requested_start = "".join(ch for ch in str(row["requested_start"] or "") if ch.isdigit())[:8]
+        requested_end = "".join(ch for ch in str(row["requested_end"] or "") if ch.isdigit())[:8]
+        return {
+            "dataset": str(row["dataset"] or "").strip(),
+            "provider": str(row["provider"] or "").strip().upper(),
+            "requested_start": requested_start,
+            "requested_end": requested_end,
+            "status": str(row["status"] or "").strip().upper(),
+            "coverage_complete": bool(row["coverage_complete"]),
+            "failed_days": [
+                str(item).strip()
+                for item in _deserialize_json(row["failed_days_json"], [])
+                if str(item).strip()
+            ],
+            "failed_codes": {
+                str(key).strip(): str(value).strip()
+                for key, value in _deserialize_json(row["failed_codes_json"], {}).items()
+                if str(key).strip() and str(value).strip()
+            },
+            "reason": reason,
+            "delta_codes": [
+                str(item).strip()
+                for item in _deserialize_json(row["delta_keys_json"], [])
+                if str(item).strip()
+            ],
+            "aborted": bool(row["aborted"]),
+            "abort_reason": str(row["abort_reason"] or "").strip(),
+            "predicted_requests": int(row["predicted_requests"] or 0),
+            "processed_requests": int(row["processed_requests"] or 0),
+            "summary": dict(_deserialize_json(row["summary_json"], {})),
+            "created_at": row["created_at"],
+        }
+    return {}
+
+
+def read_latest_investor_flow_failed_days(
+    *,
+    market: str = "KR",
+    reasons: tuple[str, ...] | list[str] | None = None,
+) -> list[str]:
+    latest = read_latest_investor_flow_run(market=market, reasons=reasons)
+    if not latest or bool(latest.get("coverage_complete")):
+        return []
+    return [str(item).strip() for item in latest.get("failed_days", []) if str(item).strip()]
+
+
+def read_investor_flow_raw_date_bounds(*, market: str = "KR") -> dict[str, str]:
+    if not warehouse_exists():
+        return {}
+
+    _ensure_schema_for_readers()
+    normalized_market = _normalize_market_id(market)
+    con = _connect_ro()
+    try:
+        if not _table_exists(con, "fact_investor_flow_daily"):
+            return {}
+        row = con.execute(
+            """
+            SELECT
+                STRFTIME(MIN(trade_date), '%Y%m%d') AS min_trade_date,
+                STRFTIME(MAX(trade_date), '%Y%m%d') AS max_trade_date
+            FROM fact_investor_flow_daily
+            WHERE market = ?
+            """,
+            [normalized_market],
+        ).fetchone()
+    finally:
+        con.close()
+
+    if row is None:
+        return {}
+    return {
+        "min_trade_date": str(row[0] or "").strip(),
+        "max_trade_date": str(row[1] or "").strip(),
+    }
 
 
 def read_dataset_status(dataset: WarehouseDataset, *, market: str = "KR") -> dict[str, Any]:
@@ -1566,3 +2133,58 @@ def macro_row_count(*, market: str = "KR") -> int:
         )
     finally:
         con.close()
+
+
+def read_investor_flow_run_history(
+    *,
+    market: str = "KR",
+    limit: int = 15,
+) -> "pd.DataFrame":
+    """Return the last *limit* ingest_runs rows for investor_flow as a DataFrame.
+
+    Columns returned:
+        created_at, reason, requested_start, requested_end, status,
+        coverage_complete, aborted, predicted_requests, processed_requests,
+        row_count, completion_pct
+    Returns an empty DataFrame when the warehouse does not exist.
+    """
+    if not warehouse_exists():
+        return pd.DataFrame()
+
+    _ensure_schema_for_readers()
+    normalized_market = _normalize_market_id(market)
+    con = _connect_ro()
+    try:
+        df = con.execute(
+            """
+            SELECT
+                created_at,
+                reason,
+                requested_start,
+                requested_end,
+                status,
+                coverage_complete,
+                aborted,
+                predicted_requests,
+                processed_requests,
+                row_count
+            FROM ingest_runs
+            WHERE dataset = ? AND market = ?
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            [INVESTOR_FLOW_DATASET, normalized_market, limit],
+        ).fetchdf()
+    finally:
+        con.close()
+
+    if df.empty:
+        return df
+
+    def _pct(row: "pd.Series") -> float:
+        pred = int(row["predicted_requests"] or 0)
+        proc = int(row["processed_requests"] or 0)
+        return round(proc / pred * 100, 1) if pred > 0 else 0.0
+
+    df["completion_pct"] = df.apply(_pct, axis=1)
+    return df

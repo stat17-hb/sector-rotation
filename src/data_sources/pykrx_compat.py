@@ -8,8 +8,10 @@ at runtime without changing dependency versions.
 from __future__ import annotations
 
 import logging
+import os
 import threading
 from functools import wraps
+from typing import Any
 
 import pandas as pd
 import requests as _requests
@@ -21,6 +23,9 @@ KRX_JSON_URL = "https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
 KRX_RESOURCE_URL = (
     "https://data.krx.co.kr/comm/bldAttendant/executeForResourceBundle.cmd"
 )
+KRX_LOGIN_PAGE = "https://data.krx.co.kr/contents/MDC/COMS/client/MDCCOMS001.cmd"
+KRX_LOGIN_JSP = "https://data.krx.co.kr/contents/MDC/COMS/client/view/login.jsp?site=mdc"
+KRX_LOGIN_URL = "https://data.krx.co.kr/contents/MDC/COMS/client/MDCCOMS001D1.cmd"
 
 _PATCH_APPLIED = False
 _PATCH_LOCK = threading.Lock()
@@ -28,12 +33,150 @@ _PATCH_ATTR = "__sector_rotation_pykrx_transport_patched__"
 
 _SHARED_SESSION: _requests.Session | None = None
 _SESSION_LOCK = threading.Lock()
+_SESSION_AUTHENTICATED: bool | None = None
+_SESSION_AUTH_DETAIL = "KRX_ID/KRX_PW not configured"
 
 _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/122.0.0.0 Safari/537.36"
 )
+
+
+def _load_secret_or_env(name: str) -> str:
+    try:
+        import streamlit as st  # type: ignore[import]
+
+        value = str(st.secrets.get(name, "")).strip()
+        if value:
+            return value
+    except Exception:
+        pass
+    return os.environ.get(name, "").strip()
+
+
+def get_krx_login_state() -> dict[str, Any]:
+    """Return the latest KRX login/session state for diagnostics."""
+    return {
+        "configured": bool(_load_secret_or_env("KRX_ID") and _load_secret_or_env("KRX_PW")),
+        "authenticated": _SESSION_AUTHENTICATED,
+        "detail": _SESSION_AUTH_DETAIL,
+    }
+
+
+def _set_krx_login_state(authenticated: bool | None, detail: str) -> None:
+    global _SESSION_AUTHENTICATED, _SESSION_AUTH_DETAIL
+    _SESSION_AUTHENTICATED = authenticated
+    _SESSION_AUTH_DETAIL = str(detail or "").strip() or "unknown"
+
+
+def _warmup_krx_login_session(session: _requests.Session) -> None:
+    session.get(
+        KRX_REFERER,
+        headers={
+            "User-Agent": _BROWSER_UA,
+            "Referer": "https://data.krx.co.kr",
+            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        },
+        timeout=15,
+    )
+    session.get(
+        KRX_LOGIN_PAGE,
+        headers={
+            "User-Agent": _BROWSER_UA,
+            "Referer": KRX_REFERER,
+            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        },
+        timeout=15,
+    )
+    session.get(
+        KRX_LOGIN_JSP,
+        headers={
+            "User-Agent": _BROWSER_UA,
+            "Referer": KRX_LOGIN_PAGE,
+            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        },
+        timeout=15,
+    )
+
+
+def _parse_login_response(response: _requests.Response) -> tuple[bool, str]:
+    content_type = str(response.headers.get("content-type", "")).lower()
+    text = response.text or ""
+    try:
+        payload = response.json()
+    except ValueError:
+        snippet = " ".join(text.split())[:160]
+        if "access denied" in text.lower():
+            return False, f"access denied during KRX login ({snippet})"
+        if "login" in text.lower() or "로그인" in text:
+            return False, f"login HTML returned instead of JSON ({snippet})"
+        return False, (
+            "non-JSON login response "
+            f"(status={response.status_code}, content_type={content_type or 'unknown'}, snippet={snippet!r})"
+        )
+
+    error_code = str(payload.get("_error_code", "")).strip()
+    error_msg = str(payload.get("_error_msg", "")).strip()
+    if error_code == "CD001":
+        return True, "authenticated"
+    if error_code:
+        return False, f"{error_code}: {error_msg or 'login failed'}"
+    return False, error_msg or "KRX login failed"
+
+
+def _login_krx_session(session: _requests.Session, login_id: str, login_pw: str) -> tuple[bool, str]:
+    payload = {
+        "mbrNm": "",
+        "telNo": "",
+        "di": "",
+        "certType": "",
+        "mbrId": login_id,
+        "pw": login_pw,
+    }
+    header_variants = [
+        {
+            "User-Agent": _BROWSER_UA,
+            "Referer": KRX_LOGIN_JSP,
+            "Origin": "https://data.krx.co.kr",
+            "X-Requested-With": "XMLHttpRequest",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        },
+        {
+            "User-Agent": _BROWSER_UA,
+            "Referer": KRX_LOGIN_PAGE,
+            "Origin": "https://data.krx.co.kr",
+            "Accept": "application/json, text/javascript, */*; q=0.01",
+            "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+            "Accept-Language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
+        },
+        {
+            "User-Agent": _BROWSER_UA,
+            "Referer": KRX_LOGIN_PAGE,
+        },
+    ]
+
+    last_detail = "KRX login failed"
+    for headers in header_variants:
+        response = session.post(KRX_LOGIN_URL, data=payload, headers=headers, timeout=15)
+        ok, detail = _parse_login_response(response)
+        if ok:
+            return True, detail
+
+        if detail.startswith("CD011"):
+            payload["skipDup"] = "Y"
+            response = session.post(KRX_LOGIN_URL, data=payload, headers=headers, timeout=15)
+            ok, detail = _parse_login_response(response)
+            if ok:
+                return True, detail
+
+        last_detail = detail
+        if "access denied" not in detail.lower():
+            break
+
+    return False, last_detail
 
 
 def _get_shared_session() -> _requests.Session:
@@ -50,14 +193,27 @@ def _get_shared_session() -> _requests.Session:
         if _SHARED_SESSION is not None:
             return _SHARED_SESSION
         session = _requests.Session()
+        login_id = _load_secret_or_env("KRX_ID")
+        login_pw = _load_secret_or_env("KRX_PW")
         try:
+            if login_id and login_pw:
+                _set_krx_login_state(False, "KRX login warmup not completed yet")
+                _warmup_krx_login_session(session)
+                authenticated, detail = _login_krx_session(session, login_id, login_pw)
+                _set_krx_login_state(authenticated, detail)
+                if not authenticated:
+                    logger.warning("KRX login failed; proceeding without authenticated session: %s", detail)
+            else:
+                _set_krx_login_state(None, "KRX_ID/KRX_PW not configured")
             session.get(
                 KRX_REFERER,
                 headers={"User-Agent": _BROWSER_UA, "Referer": "https://data.krx.co.kr"},
                 timeout=10,
             )
-            logger.debug("KRX shared session pre-warmed (cookies: %s).", list(session.cookies.keys()))
+            logger.debug("KRX shared session ready (cookies: %s).", list(session.cookies.keys()))
         except Exception as exc:
+            if login_id and login_pw:
+                _set_krx_login_state(False, f"session warmup/login failed: {exc}")
             logger.warning("KRX session pre-warm failed (will proceed anyway): %s", exc)
         _SHARED_SESSION = session
     return _SHARED_SESSION
@@ -74,6 +230,8 @@ def _wrap_init_with_referer(init_fn):
         headers = getattr(self, "headers", None)
         if isinstance(headers, dict):
             headers["Referer"] = KRX_REFERER
+            headers["X-Requested-With"] = "XMLHttpRequest"
+            headers.setdefault("Origin", "https://data.krx.co.kr")
 
     setattr(wrapped, _PATCH_ATTR, True)
     return wrapped
@@ -133,10 +291,19 @@ def ensure_pykrx_transport_compat() -> None:
         _session = _get_shared_session()
 
         def _shared_post_read(self, **params):
-            return _session.post(self.url, headers=self.headers, data=params)
+            headers = dict(getattr(self, "headers", {}) or {})
+            headers.setdefault("Referer", KRX_REFERER)
+            headers.setdefault("User-Agent", _BROWSER_UA)
+            headers.setdefault("X-Requested-With", "XMLHttpRequest")
+            headers.setdefault("Origin", "https://data.krx.co.kr")
+            return _session.post(self.url, headers=headers, data=params)
 
         def _shared_get_read(self, **params):
-            return _session.get(self.url, headers=self.headers, params=params)
+            headers = dict(getattr(self, "headers", {}) or {})
+            headers.setdefault("Referer", KRX_REFERER)
+            headers.setdefault("User-Agent", _BROWSER_UA)
+            headers.setdefault("X-Requested-With", "XMLHttpRequest")
+            return _session.get(self.url, headers=headers, params=params)
 
         webio.Post.read = _shared_post_read
         webio.Get.read = _shared_get_read
@@ -147,6 +314,23 @@ def ensure_pykrx_transport_compat() -> None:
     # Reset IndexTicker singleton if it was initialised before the patch,
     # or if KRX server returned an empty/broken response previously.
     _reset_index_ticker_singleton()
+
+
+def request_krx_data(
+    payload: dict[str, Any],
+    *,
+    referer: str = KRX_REFERER,
+    timeout: int = 15,
+) -> _requests.Response:
+    """Issue a raw KRX JSON-endpoint POST using the shared session."""
+    session = _get_shared_session()
+    headers = {
+        "User-Agent": _BROWSER_UA,
+        "Referer": referer,
+        "X-Requested-With": "XMLHttpRequest",
+        "Origin": "https://data.krx.co.kr",
+    }
+    return session.post(KRX_JSON_URL, headers=headers, data=payload, timeout=timeout)
 
 
 def resolve_ohlcv_close_column(df: pd.DataFrame) -> str:
