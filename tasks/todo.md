@@ -1,3 +1,61 @@
+# 2026-04-18 - Ralph: Dashboard Efficiency Implementation
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Reuse approved dashboard-efficiency context and plan artifacts
+- [x] Add a focused test spec artifact for the approved implementation scope
+- [x] Remove duplicated hero/status rendering from `render_summary_tab()`
+- [x] Add a focused regression test proving the summary tab remains additive without hero/status duplication
+- [x] Add a control-to-surface matrix artifact for current vs widened control scope
+- [x] Run compile, targeted tests, diagnostics, deslop pass, post-deslop regression, and architect verification
+
+## Review
+- Scope:
+  execute only the approved immediate pass from the dashboard-efficiency review.
+- In scope:
+  remove duplicated hero/status from the summary tab and add the control-to-surface matrix artifact.
+- Out of scope:
+  header pills cleanup, top status banner cleanup, lower command-bar relocation, analysis-canvas relocation, or scope widening of current filters.
+- Verification:
+  `python -m py_compile src\dashboard\tabs.py tests\test_dashboard_tabs.py`
+  `pytest -q tests\test_dashboard_tabs.py` -> `11 passed`
+  LSP diagnostics:
+  `src/dashboard/tabs.py` -> `0` errors
+  `tests/test_dashboard_tabs.py` -> `0` errors
+  post-deslop re-run:
+  `python -m py_compile src\dashboard\tabs.py tests\test_dashboard_tabs.py`
+  `pytest -q tests\test_dashboard_tabs.py` -> `11 passed`
+  final architect verification -> `APPROVE`
+
+# 2026-04-18 - Ralplan: Dashboard Decision Efficiency Review
+
+Status: Completed
+Owner: Codex
+
+## Planning Checklist
+- [x] Ground the current dashboard information architecture and decision-first flow from the live codepath
+- [x] Reuse nearby context on investment-judgment review and investor-flow glanceability
+- [x] Capture a fresh context snapshot for this dashboard-efficiency review
+- [x] Draft planner findings on inefficiencies, decision drivers, and viable improvement options
+- [x] Run architect review on structural tradeoffs and strongest counterarguments
+- [x] Run critic review, converge on approved recommendations, and report the final review
+
+## Review
+- Scope:
+  review the dashboard strictly as an investment decision surface and identify inefficiencies that slow or distort actual decision-making.
+- Grounded facts:
+  `app.py` renders a decision-first stack before the tab set.
+  `src/dashboard/tabs.py` then renders a separate summary tab that repeats hero/status content.
+  the main canvas currently places `보유/신규 보드` before the global filter bar and analysis canvas.
+  the KR investor-flow summary is now more scannable, but it still sits beside multiple other decision blocks competing for first-screen attention.
+- Working review lens:
+  minimize repeated context, keep reference-only evidence separate from action-driving evidence, and reduce the number of interactions required to compare sectors before acting.
+- Consensus outcome:
+  planner -> architect -> critic re-review converged on `APPROVE`.
+  the approved read is that the primary structural inefficiency is fragmented control ownership, while the first immediate cleanup should stay narrowly scoped to removing duplicated hero/status rendering from the summary tab and documenting a control-to-surface matrix.
+
 # 2026-04-18 - Ralplan: Investor-Flow Glanceability
 
 Status: Completed

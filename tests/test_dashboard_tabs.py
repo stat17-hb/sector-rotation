@@ -6,6 +6,7 @@ import pandas as pd
 
 from src.dashboard import tabs
 import src.data_sources.krx_stock_screening as screening_mod
+import src.ui.components as ui_components
 
 
 def test_render_decision_first_sections_orders_main_canvas(monkeypatch):
@@ -168,6 +169,58 @@ def test_render_dashboard_tabs_uses_market_specific_flow_tab(monkeypatch):
     tabs.render_dashboard_tabs(market_id="US", **common_kwargs)
     assert "US Flow Proxies" in tab_labels_seen[0]
     assert flow_calls == ["flow"]
+
+
+def test_render_summary_tab_keeps_summary_surfaces_without_hero_status_duplication(monkeypatch):
+    calls: list[str] = []
+
+    class _DummyTab:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _DummyBlock:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(tabs.st, "container", lambda **kwargs: _DummyBlock())
+    monkeypatch.setattr(tabs.st, "divider", lambda: calls.append("divider"))
+    monkeypatch.setattr(tabs.st, "subheader", lambda text: calls.append(f"subheader:{text}"))
+    monkeypatch.setattr(tabs, "render_panel_header", lambda **kwargs: calls.append(f"panel:{kwargs.get('title', '')}"))
+    monkeypatch.setattr(ui_components, "render_decision_hero", lambda **kwargs: calls.append("hero"))
+    monkeypatch.setattr(ui_components, "render_status_card_row", lambda **kwargs: calls.append("status"))
+    monkeypatch.setattr(ui_components, "render_top_picks_table", lambda *args, **kwargs: calls.append("top_picks"))
+    monkeypatch.setattr(ui_components, "render_action_summary", lambda *args, **kwargs: calls.append("action_summary"))
+
+    tabs.render_summary_tab(
+        tab=_DummyTab(),
+        current_regime="Recovery",
+        regime_is_confirmed=True,
+        growth_val=100.0,
+        inflation_val=2.0,
+        fx_change=1.0,
+        fx_label="FX move",
+        is_provisional=False,
+        theme_mode="dark",
+        price_status="LIVE",
+        macro_status="LIVE",
+        yield_curve_status=None,
+        top_pick_signals=[],
+        signals_filtered=[],
+        ui_locale="ko",
+    )
+
+    assert "hero" not in calls
+    assert "status" not in calls
+    assert "top_picks" in calls
+    assert "action_summary" in calls
+    assert "panel:상위 추천" in calls
+    assert "panel:액션 분포" in calls
 
 
 def test_render_investor_flow_tab_renders_us_context_sections(monkeypatch):

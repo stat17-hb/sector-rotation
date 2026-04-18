@@ -479,29 +479,7 @@ def render_summary_tab(
     with tab:
         from src.ui.components import (
             render_action_summary,
-            render_decision_hero,
-            render_status_card_row,
             render_top_picks_table,
-        )
-
-        render_decision_hero(
-            regime=current_regime,
-            regime_is_confirmed=regime_is_confirmed,
-            growth_val=growth_val,
-            inflation_val=inflation_val,
-            fx_change=fx_change,
-            fx_label=fx_label,
-            is_provisional=is_provisional,
-            theme_mode=theme_mode,
-            locale=ui_locale,
-        )
-        render_status_card_row(
-            current_regime=current_regime,
-            regime_is_confirmed=regime_is_confirmed,
-            price_status=price_status,
-            macro_status=macro_status,
-            yield_curve_status=yield_curve_status,
-            locale=ui_locale,
         )
 
         with st.container(border=True):
