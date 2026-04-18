@@ -1,4 +1,4 @@
-﻿# Lessons Learned
+# Lessons Learned
 
 ## 2026-02-22
 - Pattern: User asked to reconstruct a high-level evaluation into actionable execution.
@@ -71,3 +71,11 @@
 - Rule: When KRX raw endpoints start failing with `JSONDecodeError` / `Expecting value`, treat login/auth gating as a first-class hypothesis before iterating on payload keys or date candidates.
 - Rule: For KRX non-JSON responses, always capture and classify the body as `AUTH_REQUIRED`, `ACCESS_DENIED`, `NON_JSON_EMPTY`, or `NON_JSON_RESPONSE`; never reduce it to a generic "empty constituent list".
 - Rule: If a third-party source becomes login-gated, add optional authenticated-session support and a precise blocker message in the same change; do not present it as a completed data fix while credentials are still unsupported.
+
+## 2026-04-18
+- Pattern: CI pytest failed with `ModuleNotFoundError: No module named 'openpyxl'` while all tests passed locally — `openpyxl` was installed locally as a transitive dependency but was never listed in `requirements.txt`.
+- Rule: When source code uses a library via `engine="openpyxl"` or similar string-based plugin references (pandas, SQLAlchemy, etc.), always add that library as an explicit dependency in `requirements.txt` — implicit transitive availability is not guaranteed in clean CI environments.
+- Rule: After adding any new `import`, `engine=`, or plugin reference, run `pip install --no-deps -r requirements.txt` in a clean venv to verify all dependencies are declared.
+- Pattern: CI warning about Node.js 20 deprecation for `actions/checkout@v4` and `actions/setup-python@v5`.
+- Rule: Keep GitHub Actions pinned to the latest major version (`@v6` as of 2026-04); review action versions when CI deprecation warnings appear.
+
