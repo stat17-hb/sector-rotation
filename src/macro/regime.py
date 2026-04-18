@@ -62,6 +62,7 @@ def compute_regime_history(
     use_adaptive_epsilon: bool = False,
     epsilon_factor: float = 0.5,
     confirmation_periods: int = 1,
+    carry_single_flat_regime: bool = False,
     yield_curve_spread: pd.Series | None = None,
     yield_curve_threshold: float = 0.0,
 ) -> pd.DataFrame:
@@ -77,6 +78,9 @@ def compute_regime_history(
         epsilon_factor: Multiplier for adaptive epsilon (default 0.5).
         confirmation_periods: Regime must persist this many consecutive months
             before being confirmed (default 1 = no filter).
+        carry_single_flat_regime: When True, preserve the last non-Indeterminate
+            raw regime if exactly one leg turns Flat. Dual-Flat and startup
+            periods stay Indeterminate.
         yield_curve_spread: Optional monthly spread series (e.g. KTB3Y - base_rate).
             Adds a "yield_curve" column ("Normal" / "Inverted") to the result.
         yield_curve_threshold: Spread below this value is classified "Inverted"
@@ -103,11 +107,19 @@ def compute_regime_history(
     growth_dir = compute_3ma_direction(growth_series, epsilon=g_eps)
     inflation_dir = compute_3ma_direction(inflation_series, epsilon=i_eps)
 
-    regimes = pd.Series(
-        [classify_regime(g, i) for g, i in zip(growth_dir, inflation_dir)],
-        index=growth_series.index,
-        name="regime",
-    )
+    regimes_raw: list[str] = []
+    last_non_indeterminate: str | None = None
+    for growth_label, inflation_label in zip(growth_dir, inflation_dir):
+        regime = classify_regime(growth_label, inflation_label)
+        if carry_single_flat_regime and regime == "Indeterminate":
+            has_single_flat_leg = (growth_label == "Flat") ^ (inflation_label == "Flat")
+            if has_single_flat_leg and last_non_indeterminate is not None:
+                regime = last_non_indeterminate
+        if regime != "Indeterminate":
+            last_non_indeterminate = regime
+        regimes_raw.append(regime)
+
+    regimes = pd.Series(regimes_raw, index=growth_series.index, name="regime")
 
     confirmed = (
         apply_confirmation_filter(regimes, n=confirmation_periods)

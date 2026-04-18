@@ -104,3 +104,18 @@ def test_profile_switch_changes_summary_without_mutating_input():
     assert institutional["5044"].flow_profile == "institutional_confirmation"
     assert foreign_led["5044"].flow_score != institutional["5044"].flow_score
     assert set(frame["investor_type"].unique()) == {"외국인", "기관합계", "개인"}
+
+
+def test_disabled_flow_overlay_keeps_base_action_even_when_frame_is_supportive():
+    signals, summary_map = apply_flow_overlay(
+        [_signal("Watch")],
+        flow_frame=_flow_frame(foreign=0.15, institutional=0.10, retail=-0.08),
+        flow_profile="foreign_lead",
+        enabled=False,
+    )
+
+    updated = signals[0]
+    assert updated.action == "Watch"
+    assert updated.base_action == "Watch"
+    assert updated.flow_adjustment == "experimental unavailable"
+    assert summary_map == {}

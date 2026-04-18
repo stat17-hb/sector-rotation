@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import sys
-import types
-
 import duckdb
 import pandas as pd
 import pytest
@@ -18,11 +15,15 @@ def _isolated_us_curated_path(tmp_path, monkeypatch):
 
 
 def test_fetch_sector_prices_normalizes_yfinance_download(monkeypatch):
-    index = pd.DatetimeIndex(["2024-01-02", "2024-01-03"])
-    columns = pd.MultiIndex.from_product([["SPY", "XLK"], ["Close"]])
-    raw = pd.DataFrame([[100.0, 200.0], [101.0, 202.0]], index=index, columns=columns)
-    fake_module = types.SimpleNamespace(download=lambda **kwargs: raw)
-    monkeypatch.setitem(sys.modules, "yfinance", fake_module)
+    raw = pd.DataFrame(
+        {
+            "ticker": ["SPY", "XLK", "SPY", "XLK"],
+            "close": [100.0, 200.0, 101.0, 202.0],
+            "volume": [1_000.0, 2_000.0, 1_100.0, 2_100.0],
+        },
+        index=pd.DatetimeIndex(["2024-01-02", "2024-01-02", "2024-01-03", "2024-01-03"]),
+    )
+    monkeypatch.setattr(yf_sectors, "fetch_yahoo_chart_history_batch", lambda *args, **kwargs: raw)
 
     frame = yf_sectors.fetch_sector_prices(["SPY", "XLK"], "20240102", "20240103")
 
@@ -190,3 +191,32 @@ def test_load_sector_prices_ignores_bookkeeping_failures_after_live_persist(monk
     assert set(frame["index_code"].astype(str).unique()) == {"SPY", "XLK"}
     stored = read_market_prices(["SPY", "XLK"], "20240101", "20240131", market="US")
     assert set(stored["index_code"].astype(str).unique()) == {"SPY", "XLK"}
+
+
+def test_load_sector_prices_uses_cached_rows_when_yahoo_batch_fails(monkeypatch):
+    cached = pd.DataFrame(
+        {
+            "index_code": ["SPY", "XLV"],
+            "index_name": ["S&P 500", "Health Care"],
+            "close": [500.0, 130.0],
+        },
+        index=pd.DatetimeIndex(["2024-01-02", "2024-01-02"]),
+    )
+    upsert_index_dimension(
+        [
+            {"index_code": "SPY", "index_name": "S&P 500", "family": "ETF", "is_benchmark": True, "is_active": True, "export_sector": False},
+            {"index_code": "XLV", "index_name": "Health Care", "family": "ETF", "is_benchmark": False, "is_active": True, "export_sector": False},
+        ],
+        market="US",
+    )
+    upsert_market_prices(cached, provider="YFINANCE", market="US")
+    monkeypatch.setattr(
+        yf_sectors,
+        "fetch_yahoo_chart_history_batch",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("Yahoo chart batch failed: XLV=timeout")),
+    )
+
+    status, frame = yf_sectors.load_sector_prices(["SPY", "XLV"], "20240101", "20240102")
+
+    assert status == "CACHED"
+    assert set(frame["index_code"].astype(str).unique()) == {"SPY", "XLV"}

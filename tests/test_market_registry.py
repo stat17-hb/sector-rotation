@@ -24,3 +24,10 @@ def test_load_market_configs_merges_us_overrides():
     assert sector_map["benchmark"]["code"] == "SPY"
     assert "fred" in macro_series_cfg
     assert macro_series_cfg["fred"]["leading_index"]["series_id"] == "INDPRO"
+
+
+def test_load_market_configs_sets_kr_adaptive_epsilon_false():
+    settings, _, _, profile = load_market_configs("KR")
+
+    assert profile.market_id == "KR"
+    assert settings["use_adaptive_epsilon"] is False

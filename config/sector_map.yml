@@ -2,18 +2,17 @@ benchmark:
   code: "1001"
   name: "KOSPI"
 
+# Historical note:
+# inline comments below may reference the 2026-02 validation snapshot.
+# Current macro-history authority is `docs/regime-validity-dashboard-parity-current.md`.
+
 regimes:
   Recovery:
     description: "성장 Up, 물가/금리 Down"
+    # 2026-04-15 empirical remap:
+    # canonical lag1 specificity + unique assignment 기준으로 Recovery 적합성이 높은
+    # 정보기술, 금융을 우선 배치한다.
     sectors:
-      - code: "5044"
-        name: "KRX 반도체"
-        export_sector: true
-        etfs:
-          - code: "396500"
-            name: "TIGER 반도체TOP10"
-          - code: "091160"
-            name: "KODEX 반도체"
       - code: "1155"
         name: "KOSPI200 정보기술"
         export_sector: true
@@ -22,6 +21,12 @@ regimes:
             name: "TIGER 200 IT"
           - code: "363580"
             name: "KODEX 200IT TR"
+      - code: "1168"
+        name: "KOSPI200 금융"
+        export_sector: false
+        etfs:
+          - code: "139270"
+            name: "TIGER 200 금융"
   Expansion:
     description: "성장 Up, 물가/금리 Up"
     sectors:
@@ -31,12 +36,36 @@ regimes:
         etfs:
           - code: "227550"
             name: "TIGER 200 산업재"
-      - code: "1168"
-        name: "KOSPI200 금융"
+      - code: "5044"
+        name: "KRX 반도체"
+        export_sector: true
+        etfs:
+          - code: "396500"
+            name: "TIGER 반도체TOP10"
+          - code: "091160"
+            name: "KODEX 반도체"
+      - code: "5045"
+        name: "KRX 헬스케어"
         export_sector: false
         etfs:
-          - code: "139270"
-            name: "TIGER 200 금융"
+          - code: "143860"
+            name: "TIGER 헬스케어"
+          - code: "266420"
+            name: "KODEX 헬스케어"
+  Slowdown:
+    description: "성장 Down, 물가/금리 Up"
+    # 2026-04-15 empirical remap:
+    # lag1 specificity 기준으로 생활소비재, 경기소비재, 유틸리티가
+    # Slowdown 구간에서 더 분리된 leadership을 보였다.
+    sectors:
+      - code: "1157"
+        name: "KOSPI200 생활소비재"
+        export_sector: false
+        etfs:
+          - code: "266410"
+            name: "KODEX 필수소비재"
+          - code: "227560"
+            name: "TIGER 200 생활소비재"
       - code: "1165"
         name: "KOSPI200 경기소비재"
         export_sector: false
@@ -45,11 +74,22 @@ regimes:
             name: "KODEX 경기소비재"
           - code: "139290"
             name: "TIGER 200 경기소비재"
-  Slowdown:
-    description: "성장 Down, 물가/금리 Up"
-    # 실증 검증 (2023-2026, 9개월): 철강 1위, 헬스케어 3위, 에너지화학 4위, 유틸리티 8위
-    # → 유틸리티 제거, 헬스케어 추가 (SSGA Z-score 10.8과도 일치)
+      - code: "1170"
+        name: "KOSPI200 유틸리티"
+        export_sector: false
+        etfs: []  # 국내 순수 유틸리티 ETF 없음
+  Contraction:
+    description: "성장 Down, 물가/금리 Down"
+    # 2026-04-15 empirical remap:
+    # lag1 specificity 기준으로 미디어통신, 에너지화학, 철강이
+    # Contraction 구간에서 상대적으로 더 분리된 score를 보였다.
     sectors:
+      - code: "5046"
+        name: "KRX 미디어통신"
+        export_sector: false
+        etfs:
+          - code: "228810"
+            name: "TIGER 미디어통신"
       - code: "5048"
         name: "KRX 에너지화학"
         export_sector: false
@@ -66,35 +106,3 @@ regimes:
             name: "KODEX 철강"
           - code: "139240"
             name: "TIGER 200 철강소재"
-      - code: "5045"
-        name: "KRX 헬스케어"
-        export_sector: false
-        etfs:
-          - code: "143860"
-            name: "TIGER 헬스케어"
-          - code: "266420"
-            name: "KODEX 헬스케어"
-  Contraction:
-    description: "성장 Down, 물가/금리 Down"
-    # 실증 검증 불가 (2023-2026 기간 내 Contraction 0개월)
-    # 유틸리티: 방어적 배당 특성으로 이론적 배정 유지
-    # 생활소비재: SSGA Contraction Z-score 9.4로 최우선 방어주
-    sectors:
-      - code: "1170"
-        name: "KOSPI200 유틸리티"
-        export_sector: false
-        etfs: []  # 국내 순수 유틸리티 ETF 없음
-      - code: "1157"
-        name: "KOSPI200 생활소비재"
-        export_sector: false
-        etfs:
-          - code: "266410"
-            name: "KODEX 필수소비재"
-          - code: "227560"
-            name: "TIGER 200 생활소비재"
-      - code: "5046"
-        name: "KRX 미디어통신"
-        export_sector: false
-        etfs:
-          - code: "228810"
-            name: "TIGER 미디어통신"

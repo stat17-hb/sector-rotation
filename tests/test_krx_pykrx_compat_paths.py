@@ -318,3 +318,22 @@ def test_calendar_weekend_fallback_warns_once_when_all_providers_fail(caplog, mo
     assert result == date(2026, 2, 20)
     warnings = [rec.message for rec in caplog.records if "weekend-only fallback" in rec.message]
     assert len(warnings) == 1
+
+
+def test_us_calendar_lookup_uses_yahoo_chart_without_weekend_warning(caplog, monkeypatch):
+    import src.transforms.calendar as calendar_mod
+
+    caplog.set_level("WARNING")
+    frame = pd.DataFrame(
+        {
+            "ticker": ["SPY", "SPY"],
+            "close": [600.0, 605.0],
+        },
+        index=pd.DatetimeIndex(["2026-02-19", "2026-02-20"]),
+    )
+    monkeypatch.setattr(calendar_mod, "fetch_yahoo_chart_history", lambda *args, **kwargs: frame)
+
+    result = calendar_mod.get_last_business_day(as_of=date(2026, 2, 22), provider="YFINANCE", benchmark_code="SPY")
+
+    assert result == date(2026, 2, 20)
+    assert not any("weekend-only fallback" in rec.message for rec in caplog.records)

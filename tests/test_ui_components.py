@@ -4,11 +4,14 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 import app as app_module
+import src.ui.panels as panels_module
 
 from src.signals.matrix import SectorSignal
 from src.ui.copy import ALL_ACTION_KEY
 from src.ui.components import (
     HEATMAP_PALETTE_OPTIONS,
+    build_investor_flow_glance_rows,
+    build_investor_flow_snapshot_rows,
     build_sector_detail_figure,
     build_sector_strength_heatmap,
     describe_signal_decision,
@@ -327,6 +330,9 @@ def test_render_decision_hero_renders_regime_and_provisional_badge(monkeypatch):
     assert "decision-hero" in markdown_calls[0]
     assert "Recovery" in markdown_calls[0]
     assert "잠정 매크로 데이터 포함" in markdown_calls[0]
+    assert "규칙 기반 판단" in markdown_calls[0]
+    assert "confirmed_regime 기준" in markdown_calls[0]
+    assert "역사 문서 분리" in markdown_calls[0]
 
     markdown_calls.clear()
     render_decision_hero(
@@ -341,6 +347,9 @@ def test_render_decision_hero_renders_regime_and_provisional_badge(monkeypatch):
     )
 
     assert "Includes provisional macro prints" in markdown_calls[0]
+    assert "Rules-based heuristic" in markdown_calls[0]
+    assert "confirmed_regime primary" in markdown_calls[0]
+    assert "Historical docs separated" in markdown_calls[0]
 
 
 def test_render_status_card_row_renders_card_markup(monkeypatch):
@@ -390,6 +399,203 @@ def test_describe_signal_decision_changes_by_held_state():
     assert new_view["decision"] == "신규 매수 후보"
     assert english_view["decision"] == "Add candidate"
     assert "Regime fit" in english_view["reason"]
+    assert held_view["judgment_structure"] == "기본 모형"
+    assert held_view["judgment_confidence"] == "제한적 판단 규칙"
+
+
+def test_describe_signal_decision_marks_experimental_flow_overlay():
+    signal = _signal("A", "Strong Buy", 1.10, 1.00)
+    signal.base_action = "Watch"
+    signal.flow_adjustment = "upgrade"
+    signal.flow_state = "supportive"
+    signal.flow_profile = "foreign_lead"
+
+    view = describe_signal_decision(signal, ["Sector A"])
+
+    assert "실험적 수급 보정" in str(view["judgment_structure"])
+    assert view["judgment_confidence"] == "실험 보정 포함"
+
+
+def test_render_investor_flow_summary_marks_reference_only_preview(monkeypatch):
+    warning_calls: list[str] = []
+    caption_calls: list[str] = []
+    info_calls: list[str] = []
+
+    monkeypatch.setattr(panels_module.st, "container", lambda **_: _DummyBlock())
+    monkeypatch.setattr(panels_module, "render_panel_header", lambda **kwargs: None)
+    monkeypatch.setattr(panels_module.st, "warning", lambda text: warning_calls.append(text))
+    monkeypatch.setattr(panels_module.st, "caption", lambda text: caption_calls.append(text))
+    monkeypatch.setattr(panels_module.st, "info", lambda text: info_calls.append(text))
+    monkeypatch.setattr(panels_module.st, "markdown", lambda *args, **kwargs: None)
+
+    frame = pd.DataFrame(
+        {
+            "sector_code": ["5044"],
+            "sector_name": ["KRX 반도체"],
+            "investor_type": ["외국인"],
+            "buy_amount": [100],
+            "sell_amount": [50],
+            "net_buy_amount": [50],
+            "net_flow_ratio": [0.2],
+        },
+        index=pd.to_datetime(["2026-04-07"]),
+    )
+
+    panels_module.render_investor_flow_summary(
+        signals=[_signal("A", "Watch", 1.10, 1.00)],
+        investor_flow_status="CACHED",
+        investor_flow_fresh=False,
+        investor_flow_profile="foreign_lead",
+        investor_flow_frame=frame,
+        investor_flow_detail={"bootstrap_partial_preview": True},
+    )
+
+    assert any("최종 투자판단에는 반영되지 않았습니다" in text for text in warning_calls)
+    assert not any("표시할 투자자 수급 데이터가 없습니다" in text for text in info_calls)
+    assert not any("투자자 수급 탭" in text for text in caption_calls)
+
+
+def test_build_investor_flow_glance_rows_sorts_by_abs_score_and_sector_tie_break():
+    alpha = _signal("A", "Watch", 1.10, 1.00)
+    alpha.flow_state = "supportive"
+    alpha.flow_score = -1.4
+    alpha.base_action = "Watch"
+    alpha.action = "Hold"
+    alpha.foreign_flow_state = "adverse"
+    alpha.institutional_flow_state = "neutral"
+    alpha.retail_flow_state = "supportive"
+    alpha.sector_name = "Alpha"
+
+    beta = _signal("B", "Strong Buy", 1.10, 1.00)
+    beta.flow_state = "supportive"
+    beta.flow_score = 1.4
+    beta.base_action = "Watch"
+    beta.action = "Strong Buy"
+    beta.foreign_flow_state = "supportive"
+    beta.institutional_flow_state = "supportive"
+    beta.retail_flow_state = "adverse"
+    beta.sector_name = "Beta"
+
+    gamma = _signal("C", "Watch", 1.10, 1.00)
+    gamma.flow_state = "neutral"
+    gamma.flow_score = 0.4
+    gamma.base_action = "Watch"
+    gamma.action = "Watch"
+    gamma.foreign_flow_state = "neutral"
+    gamma.institutional_flow_state = "neutral"
+    gamma.retail_flow_state = "neutral"
+    gamma.sector_name = "Gamma"
+
+    rows = build_investor_flow_glance_rows(
+        [gamma, beta, alpha],
+        locale="ko",
+    )
+
+    assert [row["sector"] for row in rows] == ["Alpha", "Beta", "Gamma"]
+    assert rows[0]["foreign"] == "수급 역풍"
+    assert rows[0]["institutional"] == "수급 중립"
+    assert rows[0]["retail"] == "수급 우호"
+
+
+def test_render_investor_flow_summary_limits_to_top_four_and_shows_participants(monkeypatch):
+    markdown_calls: list[str] = []
+
+    monkeypatch.setattr(panels_module.st, "container", lambda **_: _DummyBlock())
+    monkeypatch.setattr(panels_module, "render_panel_header", lambda **kwargs: None)
+    monkeypatch.setattr(panels_module.st, "warning", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module.st, "info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **kwargs: markdown_calls.append(text))
+
+    signals: list[SectorSignal] = []
+    for idx, score in enumerate([1.8, -1.6, 1.2, -0.9, 0.3], start=1):
+        signal = _signal(str(idx), "Watch", 1.10, 1.00)
+        signal.flow_state = "supportive" if score > 0 else "adverse"
+        signal.flow_score = score
+        signal.base_action = "Watch"
+        signal.action = "Strong Buy" if score > 0.8 else "Hold" if score < -0.8 else "Watch"
+        signal.foreign_flow_state = "supportive"
+        signal.institutional_flow_state = "neutral"
+        signal.retail_flow_state = "adverse"
+        signal.sector_name = f"Sector {idx}"
+        signals.append(signal)
+
+    panels_module.render_investor_flow_summary(
+        signals=signals,
+        investor_flow_status="LIVE",
+        investor_flow_fresh=True,
+        investor_flow_profile="foreign_lead",
+        investor_flow_frame=pd.DataFrame(),
+        investor_flow_detail={},
+    )
+
+    flow_markup = next(text for text in markdown_calls if "flow-container" in text)
+    assert "Sector 1" in flow_markup
+    assert "Sector 2" in flow_markup
+    assert "Sector 3" in flow_markup
+    assert "Sector 4" in flow_markup
+    assert "Sector 5" not in flow_markup
+    assert "외국인" in flow_markup
+    assert "기관" in flow_markup
+    assert "개인" in flow_markup
+
+
+def test_build_investor_flow_snapshot_rows_pivots_latest_snapshot(monkeypatch):
+    frame = pd.DataFrame(
+        {
+            "sector_code": ["5044", "5044", "5044", "1234", "1234", "1234"],
+            "sector_name": ["KRX 반도체", "KRX 반도체", "KRX 반도체", "KRX 은행", "KRX 은행", "KRX 은행"],
+            "investor_type": ["외국인", "기관합계", "개인", "외국인", "기관합계", "개인"],
+            "net_buy_amount": [50, 20, -30, -10, 5, 15],
+            "net_flow_ratio": [0.2, 0.1, -0.05, -0.04, 0.01, 0.03],
+        },
+        index=pd.to_datetime(["2026-04-07"] * 6),
+    )
+
+    rows = build_investor_flow_snapshot_rows(frame, locale="ko")
+
+    assert rows[0]["sector"] == "KRX 반도체"
+    assert rows[0]["foreign"] == "+20.00%"
+    assert rows[0]["institutional"] == "+10.00%"
+    assert rows[0]["retail"] == "-5.00%"
+
+
+def test_render_investor_flow_summary_uses_raw_snapshot_fallback_when_signal_flow_is_missing(monkeypatch):
+    markdown_calls: list[str] = []
+
+    monkeypatch.setattr(panels_module.st, "container", lambda **_: _DummyBlock())
+    monkeypatch.setattr(panels_module, "render_panel_header", lambda **kwargs: None)
+    monkeypatch.setattr(panels_module.st, "warning", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module.st, "info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **kwargs: markdown_calls.append(text))
+
+    frame = pd.DataFrame(
+        {
+            "sector_code": ["5044", "5044", "5044"],
+            "sector_name": ["KRX 반도체", "KRX 반도체", "KRX 반도체"],
+            "investor_type": ["외국인", "기관합계", "개인"],
+            "net_buy_amount": [50, 20, -30],
+            "net_flow_ratio": [0.2, 0.1, -0.05],
+        },
+        index=pd.to_datetime(["2026-04-07"] * 3),
+    )
+
+    panels_module.render_investor_flow_summary(
+        signals=[_signal("A", "Watch", 1.10, 1.00)],
+        investor_flow_status="CACHED",
+        investor_flow_fresh=False,
+        investor_flow_profile="foreign_lead",
+        investor_flow_frame=frame,
+        investor_flow_detail={"bootstrap_partial_preview": True},
+    )
+
+    flow_markup = next(text for text in markdown_calls if "flow-container" in text)
+    assert "KRX 반도체" in flow_markup
+    assert "참고용 raw snapshot" in flow_markup
+    assert "+20.00%" in flow_markup
+    assert "+10.00%" in flow_markup
+    assert "-5.00%" in flow_markup
 
 
 def test_render_top_picks_table_uses_native_dataframe_and_limit(monkeypatch):

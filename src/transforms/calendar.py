@@ -15,6 +15,7 @@ from src.data_sources.krx_openapi import (
     get_krx_provider,
 )
 from src.data_sources.pykrx_compat import ensure_pykrx_transport_compat
+from src.data_sources.yahoo_chart import fetch_yahoo_chart_history
 
 logger = logging.getLogger(__name__)
 
@@ -87,22 +88,14 @@ def _get_last_business_day_pykrx(ref: date, benchmark_code: str) -> date:
 
 
 def _get_last_business_day_yfinance(ref: date, benchmark_code: str) -> date:
-    """Fetch recent ETF history via yfinance and return the latest trading day."""
-    start = (ref - timedelta(days=YFINANCE_LOOKBACK_DAYS)).strftime("%Y-%m-%d")
-    end = (ref + timedelta(days=1)).strftime("%Y-%m-%d")
-
-    import yfinance as yf  # type: ignore[import]
-
-    df = yf.download(
-        tickers=str(benchmark_code).strip() or "SPY",
-        start=start,
-        end=end,
-        progress=False,
-        auto_adjust=False,
-        threads=False,
+    """Fetch recent ETF history via Yahoo chart API and return the latest trading day."""
+    df = fetch_yahoo_chart_history(
+        str(benchmark_code).strip() or "SPY",
+        ref - timedelta(days=YFINANCE_LOOKBACK_DAYS),
+        ref,
     )
     if df is None or df.empty:
-        raise ValueError("Empty OHLCV response from yfinance")
+        raise ValueError("Yahoo chart returned no OHLCV rows")
     return df.index[-1].date()
 
 

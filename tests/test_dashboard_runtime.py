@@ -20,6 +20,77 @@ class _DummyCache:
         self.clears += 1
 
 
+def _kr_sector_prices() -> pd.DataFrame:
+    dates = pd.to_datetime(["2026-04-07", "2026-04-08"])
+    return pd.DataFrame(
+        {
+            "index_code": ["1001", "5044"],
+            "index_name": ["KOSPI", "KRX 반도체"],
+            "close": [100.0, 101.0],
+        },
+        index=dates[:2],
+    )
+
+
+def _kr_flow_frame(day: str = "2026-04-08") -> pd.DataFrame:
+    return pd.DataFrame(
+        {
+            "sector_code": ["5044"],
+            "sector_name": ["KRX 반도체"],
+            "investor_type": ["외국인"],
+            "buy_amount": [100],
+            "sell_amount": [50],
+            "net_buy_amount": [50],
+            "net_flow_ratio": [0.2],
+        },
+        index=pd.to_datetime([day]),
+    )
+
+
+def _run_kr_cached_signals(monkeypatch, investor_flow_result: tuple[object, object, dict[str, object], pd.DataFrame]) -> tuple[dict[str, object], pd.DataFrame]:
+    settings, sector_map, macro_series_cfg, market_profile = load_market_configs("KR")
+    dashboard_data.configure_dashboard_env(
+        settings_obj=settings,
+        sector_map_obj=sector_map,
+        macro_series_cfg_obj=macro_series_cfg,
+        market_id_obj="KR",
+        market_profile_obj=market_profile,
+        cache_ttl=60,
+        curated_sector_prices_path=Path("data/curated/sector_prices.parquet"),
+    )
+    dashboard_data._cached_signals.clear()
+
+    sector_prices = _kr_sector_prices()
+    flow_frame = investor_flow_result[3]
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(dashboard_data, "_cached_sector_prices", lambda *args, **kwargs: ("LIVE", sector_prices))
+    monkeypatch.setattr(dashboard_data, "_cached_macro", lambda *args, **kwargs: ("SAMPLE", pd.DataFrame()))
+    monkeypatch.setattr(dashboard_data, "_cached_investor_flow", lambda *args, **kwargs: investor_flow_result)
+    monkeypatch.setattr(
+        "src.signals.matrix.build_signal_table",
+        lambda **kwargs: captured.update(kwargs) or [],
+    )
+
+    dashboard_data._cached_signals(
+        "KR",
+        "20260408",
+        (0, 0),
+        (0, 0),
+        "params",
+        "macro",
+        "price",
+        ("flow",),
+        0.0,
+        20,
+        20,
+        60,
+        3,
+    )
+
+    return captured, flow_frame
+
+
 def _context(market_id: str = "KR") -> DashboardContext:
     return DashboardContext(
         market_id=market_id,
@@ -373,73 +444,52 @@ def test_cached_investor_flow_loads_us_flow_proxies(monkeypatch):
 
 
 def test_cached_signals_enables_flow_for_bootstrap_partial_preview(monkeypatch):
-    settings, sector_map, macro_series_cfg, market_profile = load_market_configs("KR")
-    dashboard_data.configure_dashboard_env(
-        settings_obj=settings,
-        sector_map_obj=sector_map,
-        macro_series_cfg_obj=macro_series_cfg,
-        market_id_obj="KR",
-        market_profile_obj=market_profile,
-        cache_ttl=60,
-        curated_sector_prices_path=Path("data/curated/sector_prices.parquet"),
-    )
-    dashboard_data._cached_signals.clear()
-
-    dates = pd.to_datetime(["2026-04-07", "2026-04-08"])
-    sector_prices = pd.DataFrame(
-        {
-            "index_code": ["1001", "5044"],
-            "index_name": ["KOSPI", "KRX 반도체"],
-            "close": [100.0, 101.0],
-        },
-        index=dates[:2],
-    )
-    flow_frame = pd.DataFrame(
-        {
-            "sector_code": ["5044"],
-            "sector_name": ["KRX 반도체"],
-            "investor_type": ["외국인"],
-            "buy_amount": [100],
-            "sell_amount": [50],
-            "net_buy_amount": [50],
-            "net_flow_ratio": [0.2],
-        },
-        index=pd.to_datetime(["2026-04-08"]),
-    )
-    captured: dict[str, object] = {}
-
-    monkeypatch.setattr(dashboard_data, "_cached_sector_prices", lambda *args, **kwargs: ("LIVE", sector_prices))
-    monkeypatch.setattr(dashboard_data, "_cached_macro", lambda *args, **kwargs: ("SAMPLE", pd.DataFrame()))
-    monkeypatch.setattr(
-        dashboard_data,
-        "_cached_investor_flow",
-        lambda *args, **kwargs: ("CACHED", False, {"bootstrap_partial_preview": True}, flow_frame),
+    flow_frame = _kr_flow_frame()
+    captured, loaded_frame = _run_kr_cached_signals(
+        monkeypatch,
+        ("CACHED", False, {"bootstrap_partial_preview": True}, flow_frame),
     )
 
-    def _fake_build_signal_table(**kwargs):
-        captured.update(kwargs)
-        return []
+    assert captured["flow_enabled"] is False
+    assert captured["sector_investor_flow"].equals(loaded_frame)
 
-    monkeypatch.setattr("src.signals.matrix.build_signal_table", _fake_build_signal_table)
 
-    dashboard_data._cached_signals(
-        "KR",
-        "20260408",
-        (0, 0),
-        (0, 0),
-        "params",
-        "macro",
-        "price",
-        ("flow",),
-        0.0,
-        20,
-        20,
-        60,
-        3,
+def test_cached_signals_enables_flow_for_complete_fresh_kr(monkeypatch):
+    flow_frame = _kr_flow_frame()
+    captured, loaded_frame = _run_kr_cached_signals(
+        monkeypatch,
+        ("LIVE", True, {"coverage_complete": True, "end": "20260408"}, flow_frame),
     )
 
     assert captured["flow_enabled"] is True
-    assert captured["sector_investor_flow"].equals(flow_frame)
+    assert captured["sector_investor_flow"].equals(loaded_frame)
+
+
+def test_cached_signals_keeps_flow_display_only_for_warehouse_write_skipped_preview(monkeypatch):
+    flow_frame = _kr_flow_frame()
+    captured, loaded_frame = _run_kr_cached_signals(
+        monkeypatch,
+        (
+            "LIVE",
+            True,
+            {"coverage_complete": True, "end": "20260408", "warehouse_write_skipped": True},
+            flow_frame,
+        ),
+    )
+
+    assert captured["flow_enabled"] is False
+    assert captured["sector_investor_flow"].equals(loaded_frame)
+
+
+def test_cached_signals_keeps_stale_cached_flow_display_only(monkeypatch):
+    flow_frame = _kr_flow_frame(day="2026-04-07")
+    captured, loaded_frame = _run_kr_cached_signals(
+        monkeypatch,
+        ("CACHED", False, {"coverage_complete": False, "end": "20260407"}, flow_frame),
+    )
+
+    assert captured["flow_enabled"] is False
+    assert captured["sector_investor_flow"].equals(loaded_frame)
 
 
 def test_cached_signals_keeps_us_flow_overlay_disabled(monkeypatch):

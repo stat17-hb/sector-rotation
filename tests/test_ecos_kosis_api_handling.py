@@ -358,3 +358,21 @@ def test_load_kosis_macro_partial_success(tmp_path, monkeypatch, caplog):
     assert not df.empty
     assert "T10" in "".join(df["series_id"].astype(str).tolist())
     assert "partial success" in caplog.text.lower()
+
+
+def test_load_kosis_macro_default_series_config_uses_current_cpi_tables(monkeypatch):
+    calls: list[tuple[str, str, str, dict | None]] = []
+
+    def fake_fetch(org_id, tbl_id, item_id, start_ym, end_ym, obj_params=None):
+        _ = (start_ym, end_ym)
+        calls.append((org_id, tbl_id, item_id, dict(obj_params or {})))
+        return _valid_macro_df(f"{org_id}/{tbl_id}/{item_id}")
+
+    monkeypatch.setattr(kosis, "fetch_kosis_series", fake_fetch)
+
+    status, df = kosis.load_kosis_macro("202401", "202412")
+
+    assert status == "LIVE"
+    assert not df.empty
+    assert ("101", "DT_1J22042", "T03", {"objL1": "0"}) in calls
+    assert ("101", "DT_1J22042", "T02", {"objL1": "0"}) in calls

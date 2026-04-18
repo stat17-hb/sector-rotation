@@ -122,6 +122,41 @@ class TestSignalPipelineIntegration:
             f"SEC02 not in Recovery regime, expected Hold/Avoid, got {by_code['SEC02'].action}"
         )
 
+    def test_runtime_uses_confirmed_regime_not_raw_regime_for_macro_fit(self):
+        bench = _make_prices(120, seed=0, trend=0.0)
+        sec01 = _make_prices(120, seed=1, trend=0.008)
+        sec02 = _make_prices(120, seed=2, trend=0.008)
+
+        df = pd.concat(
+            [
+                _sector_prices_df("BENCH", "Benchmark", bench),
+                _sector_prices_df("SEC01", "Test Sector A", sec01),
+                _sector_prices_df("SEC02", "Test Sector B", sec02),
+            ]
+        ).sort_index()
+        macro_result = pd.DataFrame(
+            {
+                "growth_dir": ["Up"],
+                "inflation_dir": ["Down"],
+                "regime": ["Recovery"],
+                "confirmed_regime": ["Expansion"],
+            },
+            index=pd.to_datetime(["2024-01-31"]),
+        )
+
+        signals = build_signal_table(
+            sector_prices=df,
+            benchmark_prices=bench,
+            macro_result=macro_result,
+            sector_map=_SECTOR_MAP,
+            settings=_SETTINGS,
+            fx_change_pct=None,
+        )
+        by_code = {signal.index_code: signal for signal in signals}
+
+        assert by_code["SEC01"].macro_fit is False
+        assert by_code["SEC02"].macro_fit is True
+
     def test_fx_shock_downgrades_export_sector_strong_buy(self):
         """FX shock >3% on export sector Strong Buy → Watch with FX Shock alert."""
         signals = self._build_strong_signals(fx_change_pct=4.5)
@@ -145,6 +180,35 @@ class TestSignalPipelineIntegration:
         # Both should have same action (no downgrade)
         assert by_code_low["SEC01"].action == by_code_none["SEC01"].action
         assert "FX Shock" not in by_code_low["SEC01"].alerts
+
+    def test_sector_fit_metadata_is_additive_only(self, monkeypatch):
+        import src.signals.sector_fit as sector_fit_mod
+
+        monkeypatch.setattr(sector_fit_mod, "build_sector_fit_lookup", lambda **kwargs: {})
+        baseline = self._build_strong_signals()
+        baseline_by_code = {signal.index_code: signal for signal in baseline}
+
+        monkeypatch.setattr(
+            sector_fit_mod,
+            "build_sector_fit_lookup",
+            lambda **kwargs: {
+                "SEC01": {
+                    "sector_fit_rank": 1,
+                    "sector_fit_total": 2,
+                    "sector_fit_avg_excess_pct": 3.4,
+                    "sector_fit_note": "Top-half empirical fit | Cross-regime leader",
+                    "sector_fit_cross_regimes": ("Recovery", "Expansion"),
+                }
+            },
+        )
+        enriched = self._build_strong_signals()
+        enriched_by_code = {signal.index_code: signal for signal in enriched}
+
+        assert enriched_by_code["SEC01"].action == baseline_by_code["SEC01"].action
+        assert enriched_by_code["SEC01"].macro_fit == baseline_by_code["SEC01"].macro_fit
+        assert enriched_by_code["SEC01"].sector_fit_rank == 1
+        assert enriched_by_code["SEC01"].sector_fit_total == 2
+        assert enriched_by_code["SEC01"].sector_fit_cross_regimes == ("Recovery", "Expansion")
 
     def test_missing_sector_data_produces_na_not_exception(self):
         """When price data for a sector is missing, action should be N/A (no exception)."""

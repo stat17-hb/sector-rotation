@@ -14,6 +14,8 @@ import streamlit as st
 
 from src.data_sources.common import shift_month_token
 from src.macro.series_utils import (
+    build_regime_history_from_macro,
+    build_regime_inflation_series,
     build_enabled_ecos_config,
     build_enabled_fred_config,
     build_enabled_kosis_config,
@@ -319,6 +321,20 @@ def _resolve_market_end_date(benchmark_code: str) -> date:
     )
 
 
+def _build_regime_inflation_series(
+    *,
+    macro_df: pd.DataFrame,
+    macro_series_cfg_obj: dict[str, Any],
+    market_id_arg: str,
+) -> pd.Series:
+    """Backward-compatible wrapper around the shared regime inflation helper."""
+    return build_regime_inflation_series(
+        macro_df=macro_df,
+        macro_series_cfg=macro_series_cfg_obj,
+        market_id=str(market_id_arg or market_id),
+    )
+
+
 def _maybe_schedule_startup_krx_warm(
     benchmark_code: str,
     price_years: int,
@@ -553,6 +569,27 @@ def _investor_flow_is_fresh(status_detail: dict[str, Any], *, market_end_date_st
     return bool(status_detail.get("coverage_complete")) and latest == str(market_end_date_str)
 
 
+def _investor_flow_is_actionable(
+    *,
+    market_id_arg: str,
+    flow_status: str,
+    flow_fresh: bool,
+    flow_detail: dict[str, Any],
+) -> bool:
+    normalized_market = str(market_id_arg or market_id).strip().upper() or market_id
+    if normalized_market != "KR":
+        return False
+    if str(flow_status).strip().upper() not in {"LIVE", "CACHED"}:
+        return False
+    if not flow_fresh:
+        return False
+    if bool(flow_detail.get("bootstrap_partial_preview")):
+        return False
+    if bool(flow_detail.get("warehouse_write_skipped")):
+        return False
+    return True
+
+
 @st.cache_data(ttl=600)
 def _cached_api_preflight(timeout_sec: int = 3, market_id_arg: str | None = None) -> dict:
     """Cached API endpoint reachability check (10 min TTL)."""
@@ -768,7 +805,6 @@ def _cached_signals(
     flow_profile: str = "foreign_lead",
 ):
     """Compute signals. Keyed by parquet file metadata + params hash."""
-    from src.macro.regime import compute_regime_history
     from src.signals.matrix import build_signal_table
 
     if not isinstance(flow_artifact_key, tuple):
@@ -786,9 +822,9 @@ def _cached_signals(
 
     normalized_market = str(market_id_arg or market_id).strip().upper() or market_id
     market_blocking_error = ""
-    flow_preview_enabled = False
     flow_status = "SAMPLE"
     flow_fresh = False
+    flow_detail: dict[str, Any] = {}
     sector_flow = pd.DataFrame()
     if normalized_market == "KR":
         from src.data_sources.krx_indices import (
@@ -809,12 +845,11 @@ def _cached_signals(
             price_status = "BLOCKED"
             sector_prices = pd.DataFrame()
             market_blocking_error = str(exc)
-        flow_status, flow_fresh, _flow_detail, sector_flow = _cached_investor_flow(
+        flow_status, flow_fresh, flow_detail, sector_flow = _cached_investor_flow(
             normalized_market,
             market_end_date_str,
             flow_artifact_key,
         )
-        flow_preview_enabled = bool(_flow_detail.get("bootstrap_partial_preview"))
     else:
         price_status, sector_prices = _cached_sector_prices(
             normalized_market,
@@ -824,7 +859,7 @@ def _cached_signals(
             price_cache_token,
             price_artifact_key,
         )
-        flow_status, flow_fresh, _flow_detail, sector_flow = _cached_investor_flow(
+        flow_status, flow_fresh, flow_detail, sector_flow = _cached_investor_flow(
             normalized_market,
             market_end_date_str,
             flow_artifact_key,
@@ -843,71 +878,20 @@ def _cached_signals(
     # Macro regime history
     macro_result = pd.DataFrame()
     if not macro_df.empty:
-        growth_series = extract_macro_series(
-            macro_df=macro_df,
-            macro_series_cfg=macro_series_cfg,
-            alias="leading_index",
-        )
-        # CPI MoM (전월비) as primary inflation signal; fall back to YoY
-        inflation_series = extract_macro_series(
-            macro_df=macro_df,
-            macro_series_cfg=macro_series_cfg,
-            alias="cpi_mom",
-        )
-        if inflation_series.empty:
-            inflation_series = extract_macro_series(
+        try:
+            runtime_regime_settings = dict(settings)
+            runtime_regime_settings["epsilon"] = float(epsilon)
+            macro_result = build_regime_history_from_macro(
                 macro_df=macro_df,
                 macro_series_cfg=macro_series_cfg,
-                alias="cpi_yoy",
+                settings=runtime_regime_settings,
+                market_id=normalized_market,
+                include_provisional=True,
+                window_months=60,
             )
-
-        # CPI YoY 히스토리 백필: 구 CPI 지수(DT_1J22003)에서 YoY 파생 후 스티칭
-        cpi_legacy_idx = extract_macro_series(macro_df, macro_series_cfg, "cpi_index_legacy")
-        if not cpi_legacy_idx.empty and not inflation_series.empty:
-            try:
-                legacy_yoy = (cpi_legacy_idx / cpi_legacy_idx.shift(12) - 1) * 100
-                legacy_yoy = legacy_yoy.dropna()
-                cutoff = inflation_series.index.min()
-                legacy_part = legacy_yoy[legacy_yoy.index < cutoff]
-                if not legacy_part.empty:
-                    inflation_series = pd.concat([legacy_part, inflation_series]).sort_index()
-            except Exception as _stitch_exc:
-                logger.debug("CPI legacy stitch skipped: %s", _stitch_exc)
-
-        long_alias = str(settings.get("yield_curve_long", "bond_3y"))
-        short_alias = str(settings.get("yield_curve_short", "base_rate"))
-        _bond_s = extract_macro_series(macro_df, macro_series_cfg, long_alias)
-        _base_s = extract_macro_series(macro_df, macro_series_cfg, short_alias)
-        yield_curve_spread = None
-        if not _bond_s.empty and not _base_s.empty:
-            try:
-                _spread = (_bond_s - _base_s).dropna()
-                if not _spread.empty:
-                    yield_curve_spread = _spread
-            except Exception as _yc_exc:
-                logger.debug("Yield curve spread computation skipped: %s", _yc_exc)
-
-        if not growth_series.empty and not inflation_series.empty:
-            aligned = pd.concat(
-                {"growth": growth_series, "inflation": inflation_series},
-                axis=1,
-                join="inner",
-            ).dropna()
-            if not aligned.empty:
-                try:
-                    macro_result = compute_regime_history(
-                        aligned["growth"],
-                        aligned["inflation"],
-                        epsilon=epsilon,
-                        use_adaptive_epsilon=bool(settings.get("use_adaptive_epsilon", True)),
-                        epsilon_factor=float(settings.get("epsilon_factor", 0.5)),
-                        confirmation_periods=int(settings.get("confirmation_periods", 2)),
-                        yield_curve_spread=yield_curve_spread,
-                        yield_curve_threshold=float(settings.get("yield_curve_spread_threshold", 0.0)),
-                    )
-                    macro_result = to_plotly_time_index(macro_result)
-                except Exception as exc:
-                    logger.warning("compute_regime_history failed: %s", exc)
+            macro_result = to_plotly_time_index(macro_result)
+        except Exception as exc:
+            logger.warning("compute_regime_history failed: %s", exc)
 
     if macro_result.empty:
         # Fallback: create minimal mock result for display
@@ -957,10 +941,11 @@ def _cached_signals(
             fx_change_pct=fx_change_pct,
             sector_investor_flow=sector_flow,
             flow_profile=flow_profile,
-            flow_enabled=bool(
-                normalized_market == "KR"
-                and flow_status in {"LIVE", "CACHED"}
-                and (flow_fresh or flow_preview_enabled)
+            flow_enabled=_investor_flow_is_actionable(
+                market_id_arg=normalized_market,
+                flow_status=flow_status,
+                flow_fresh=flow_fresh,
+                flow_detail=flow_detail,
             ),
         )
 

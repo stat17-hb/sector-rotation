@@ -53,6 +53,7 @@ def test_collect_sector_investor_flow_aggregates_current_constituents(monkeypatc
     monkeypatch.setattr(flow_source, "ensure_pykrx_transport_compat", lambda: None)
     monkeypatch.setattr(flow_source, "_check_socket_stack", lambda: None)
     monkeypatch.setattr(flow_source, "upsert_sector_constituents_snapshot", lambda *a, **kw: None)
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_raw", lambda **kwargs: pd.DataFrame())
 
     import pykrx.stock as stock
 
@@ -89,6 +90,13 @@ def test_collect_sector_investor_flow_aggregates_current_constituents(monkeypatc
         return frame
 
     monkeypatch.setattr(stock, "get_market_trading_value_by_date", _trading_value_by_date)
+    monkeypatch.setattr(
+        flow_source,
+        "_fetch_ticker_trading_value_frame_detailed",
+        lambda stock_module, *, ticker, start, end, on: stock.get_market_trading_value_by_date(
+            start, end, ticker, on=on
+        ),
+    )
 
     raw_frame, sector_frame, summary = flow_source.collect_sector_investor_flow(
         sector_map=_SECTOR_MAP,
@@ -110,7 +118,12 @@ def test_collect_sector_investor_flow_uses_trading_day_calendar_for_failed_days(
     monkeypatch.setattr(flow_source, "ensure_pykrx_transport_compat", lambda: None)
     monkeypatch.setattr(flow_source, "_check_socket_stack", lambda: None)
     monkeypatch.setattr(flow_source, "upsert_sector_constituents_snapshot", lambda *a, **kw: None)
-    monkeypatch.setattr(flow_source, "_requested_trading_days", lambda *args, **kwargs: ["20260407", "20260408"])
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_raw", lambda **kwargs: pd.DataFrame())
+    monkeypatch.setattr(
+        flow_source,
+        "_resolve_frozen_trading_day_truth",
+        lambda *args, **kwargs: (["20260407", "20260408"], "pykrx_calendar", True),
+    )
 
     import pykrx.stock as stock
 
@@ -137,6 +150,13 @@ def test_collect_sector_investor_flow_uses_trading_day_calendar_for_failed_days(
         return frame
 
     monkeypatch.setattr(stock, "get_market_trading_value_by_date", _trading_value_by_date)
+    monkeypatch.setattr(
+        flow_source,
+        "_fetch_ticker_trading_value_frame_detailed",
+        lambda stock_module, *, ticker, start, end, on: stock.get_market_trading_value_by_date(
+            start, end, ticker, on=on
+        ),
+    )
 
     _, _, summary = flow_source.collect_sector_investor_flow(
         sector_map={"regimes": {"Recovery": {"sectors": [{"code": "5044", "name": "KRX 반도체"}]}}},
@@ -328,6 +348,11 @@ def test_collect_sector_investor_flow_marks_partial_ticker_frames_as_failure(mon
     monkeypatch.setattr(flow_source, "_check_socket_stack", lambda: None)
     monkeypatch.setattr(flow_source, "upsert_sector_constituents_snapshot", lambda *a, **kw: None)
     monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_raw", lambda **kwargs: pd.DataFrame())
+    monkeypatch.setattr(
+        flow_source,
+        "_resolve_frozen_trading_day_truth",
+        lambda *args, **kwargs: (["20260407", "20260408"], "pykrx_calendar", True),
+    )
 
     import pykrx.stock as stock
 
@@ -338,7 +363,10 @@ def test_collect_sector_investor_flow_marks_partial_ticker_frames_as_failure(mon
     )
     monkeypatch.setattr(stock, "get_market_ticker_name", lambda ticker: f"Name {ticker}")
 
-    def _trading_value_by_date(start, end, ticker, on="순매수", **kwargs):
+    monkeypatch.setattr(stock, "get_market_trading_value_by_date", lambda *args, **kwargs: pd.DataFrame())
+
+    def _detail_frame(*args, **kwargs):
+        on = kwargs["on"]
         dates = pd.to_datetime(["2026-04-07", "2026-04-08"])
         if on == "매도":
             return pd.DataFrame()
@@ -354,7 +382,7 @@ def test_collect_sector_investor_flow_marks_partial_ticker_frames_as_failure(mon
         frame.index.name = "날짜"
         return frame
 
-    monkeypatch.setattr(stock, "get_market_trading_value_by_date", _trading_value_by_date)
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_detailed", _detail_frame)
 
     raw_frame, sector_frame, summary = flow_source.collect_sector_investor_flow(
         sector_map={"regimes": {"Recovery": {"sectors": [{"code": "5044", "name": "KRX 반도체"}]}}},
@@ -372,6 +400,12 @@ def test_collect_sector_investor_flow_falls_back_to_detail_frames_when_general_f
     monkeypatch.setattr(flow_source, "ensure_pykrx_transport_compat", lambda: None)
     monkeypatch.setattr(flow_source, "_check_socket_stack", lambda: None)
     monkeypatch.setattr(flow_source, "upsert_sector_constituents_snapshot", lambda *a, **kw: None)
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_raw", lambda **kwargs: pd.DataFrame())
+    monkeypatch.setattr(
+        flow_source,
+        "_resolve_frozen_trading_day_truth",
+        lambda *args, **kwargs: (["20260407", "20260408"], "pykrx_calendar", True),
+    )
 
     import pykrx.stock as stock
 
@@ -384,66 +418,46 @@ def test_collect_sector_investor_flow_falls_back_to_detail_frames_when_general_f
 
     dates = pd.to_datetime(["2026-04-07", "2026-04-08"])
 
-    def _trading_value_by_date(start, end, ticker, on="순매수", detail=False, **kwargs):
-        if not detail:
-            return pd.DataFrame()
-        base = pd.DataFrame(
-            {
-                "금융투자": [10, 20],
-                "보험": [5, 5],
-                "투신": [15, 10],
-                "사모": [1, 1],
-                "은행": [0, 0],
-                "기타금융": [0, 0],
-                "연기금": [9, 9],
-                "기타법인": [3, 4],
-                "개인": [100, 120],
-                "외국인": [50, 60],
-                "기타외국인": [7, 8],
-                "전체": [0, 0],
-            },
-            index=dates,
-        )
-        base.index.name = "날짜"
+    def _detail_frame(*args, **kwargs):
+        on = kwargs["on"]
         if on == "매수":
-            return base
-        if on == "매도":
-            return base * 0 + pd.DataFrame(
+            frame = pd.DataFrame(
                 {
-                    "금융투자": [6, 7],
-                    "보험": [2, 2],
-                    "투신": [8, 8],
-                    "사모": [1, 1],
-                    "은행": [0, 0],
-                    "기타금융": [0, 0],
-                    "연기금": [4, 4],
-                    "기타법인": [2, 2],
-                    "개인": [70, 90],
-                    "외국인": [20, 30],
-                    "기타외국인": [3, 4],
+                    "기관합계": [40, 45],
+                    "개인": [100, 120],
+                    "외국인합계": [57, 68],
                     "전체": [0, 0],
                 },
                 index=dates,
             )
-        return base * 0 + pd.DataFrame(
+            frame.index.name = "날짜"
+            return frame
+        if on == "매도":
+            frame = pd.DataFrame(
+                {
+                    "기관합계": [21, 22],
+                    "개인": [70, 90],
+                    "외국인합계": [23, 34],
+                    "전체": [0, 0],
+                },
+                index=dates,
+            )
+            frame.index.name = "날짜"
+            return frame
+        frame = pd.DataFrame(
             {
-                "금융투자": [4, 13],
-                "보험": [3, 3],
-                "투신": [7, 2],
-                "사모": [0, 0],
-                "은행": [0, 0],
-                "기타금융": [0, 0],
-                "연기금": [5, 5],
-                "기타법인": [1, 2],
+                "기관합계": [19, 23],
                 "개인": [30, 30],
-                "외국인": [30, 30],
-                "기타외국인": [4, 4],
+                "외국인합계": [34, 34],
                 "전체": [0, 0],
             },
             index=dates,
         )
+        frame.index.name = "날짜"
+        return frame
 
-    monkeypatch.setattr(stock, "get_market_trading_value_by_date", _trading_value_by_date)
+    monkeypatch.setattr(stock, "get_market_trading_value_by_date", lambda *args, **kwargs: pd.DataFrame())
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_detailed", _detail_frame)
 
     raw_frame, sector_frame, summary = flow_source.collect_sector_investor_flow(
         sector_map={"regimes": {"Recovery": {"sectors": [{"code": "5044", "name": "KRX 반도체"}]}}},
@@ -622,6 +636,7 @@ def test_collect_sector_investor_flow_handles_dataframe_constituent_result(monke
     monkeypatch.setattr(flow_source, "ensure_pykrx_transport_compat", lambda: None)
     monkeypatch.setattr(flow_source, "_check_socket_stack", lambda: None)
     monkeypatch.setattr(flow_source, "upsert_sector_constituents_snapshot", lambda *a, **kw: None)
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_raw", lambda **kwargs: pd.DataFrame())
 
     import pykrx.stock as stock
 
@@ -648,6 +663,13 @@ def test_collect_sector_investor_flow_handles_dataframe_constituent_result(monke
         return frame
 
     monkeypatch.setattr(stock, "get_market_trading_value_by_date", _trading_value)
+    monkeypatch.setattr(
+        flow_source,
+        "_fetch_ticker_trading_value_frame_detailed",
+        lambda stock_module, *, ticker, start, end, on: stock.get_market_trading_value_by_date(
+            start, end, ticker, on=on
+        ),
+    )
 
     raw_frame, sector_frame, summary = flow_source.collect_sector_investor_flow(
         sector_map={"regimes": {"Recovery": {"sectors": [{"code": "5044", "name": "KRX 반도체"}]}}},
@@ -668,6 +690,7 @@ def test_collect_sector_investor_flow_uses_snapshot_fallback(monkeypatch):
     monkeypatch.setattr(flow_source, "ensure_pykrx_transport_compat", lambda: None)
     monkeypatch.setattr(flow_source, "_check_socket_stack", lambda: None)
     monkeypatch.setattr(flow_source, "upsert_sector_constituents_snapshot", lambda *a, **kw: None)
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_raw", lambda **kwargs: pd.DataFrame())
 
     import pykrx.stock as stock
 
@@ -710,6 +733,13 @@ def test_collect_sector_investor_flow_uses_snapshot_fallback(monkeypatch):
         return frame
 
     monkeypatch.setattr(stock, "get_market_trading_value_by_date", _trading_value)
+    monkeypatch.setattr(
+        flow_source,
+        "_fetch_ticker_trading_value_frame_detailed",
+        lambda stock_module, *, ticker, start, end, on: stock.get_market_trading_value_by_date(
+            start, end, ticker, on=on
+        ),
+    )
 
     raw_frame, sector_frame, summary = flow_source.collect_sector_investor_flow(
         sector_map={"regimes": {"Recovery": {"sectors": [{"code": "5044", "name": "KRX 반도체"}]}}},
@@ -1219,5 +1249,235 @@ def test_read_warm_status_ignores_backfill_runs():
     summary = flow_source.read_warm_status()
 
     assert summary["end"] == "20260407"
-    assert summary["coverage_complete"] is True
+    assert summary["coverage_complete"] is False
     assert summary["failed_codes"] == {"20260408": "partial"}
+
+
+def test_collect_sector_investor_flow_uses_raw_primary_when_wrapper_is_empty(monkeypatch):
+    monkeypatch.setattr(flow_source, "ensure_pykrx_transport_compat", lambda: None)
+    monkeypatch.setattr(flow_source, "_check_socket_stack", lambda: None)
+    monkeypatch.setattr(
+        flow_source,
+        "_resolve_frozen_trading_day_truth",
+        lambda *args, **kwargs: (["20260407"], "warehouse_market_prices", True),
+    )
+    monkeypatch.setattr(
+        flow_source,
+        "_build_sector_universe",
+        lambda *args, **kwargs: flow_source.SectorUniverse(
+            sector_codes=["5044"],
+            sector_names={"5044": "KRX 반도체"},
+            ticker_to_sector_codes={"005930": ["5044"]},
+        ),
+    )
+
+    import pykrx.stock as stock
+
+    wrapper_calls: list[str] = []
+    raw_calls: list[tuple[str, bool]] = []
+
+    monkeypatch.setattr(stock, "get_market_ticker_name", lambda ticker: "삼성전자")
+    monkeypatch.setattr(
+        stock,
+        "get_market_trading_value_by_date",
+        lambda *args, **kwargs: (
+            wrapper_calls.append(str(kwargs.get("on", args[3] if len(args) > 3 else "")))
+            or pd.DataFrame()
+        ),
+    )
+
+    def _raw_frame(*, ticker: str, start: str, end: str, on: str, detail: bool) -> pd.DataFrame:
+        raw_calls.append((on, detail))
+        if detail:
+            return pd.DataFrame()
+        frame = pd.DataFrame(
+            {
+                "기관합계": [50],
+                "기타법인": [10],
+                "개인": [100],
+                "외국인합계": [200],
+                "전체": [0],
+            },
+            index=pd.to_datetime(["2026-04-07"]),
+        )
+        frame.index.name = "날짜"
+        return frame
+
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_raw", _raw_frame)
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_detailed", lambda *args, **kwargs: pd.DataFrame())
+
+    raw_frame, sector_frame, summary = flow_source.collect_sector_investor_flow(
+        sector_map=_SECTOR_MAP,
+        start="20260407",
+        end="20260407",
+    )
+
+    assert not raw_frame.empty
+    assert not sector_frame.empty
+    assert wrapper_calls == []
+    assert raw_calls == [("매수", False), ("매도", False), ("순매수", False)]
+    assert summary["failed_days"] == []
+    assert summary["coverage_complete"] is True
+    assert summary["request_metric_semantics"] == "logical_ticker_steps"
+    assert summary["predicted_requests"] == 3
+    assert summary["processed_requests"] == 3
+
+
+def test_collect_sector_investor_flow_suppresses_failed_days_when_truth_is_ambiguous(monkeypatch):
+    monkeypatch.setattr(flow_source, "ensure_pykrx_transport_compat", lambda: None)
+    monkeypatch.setattr(flow_source, "_check_socket_stack", lambda: None)
+    monkeypatch.setattr(
+        flow_source,
+        "_resolve_frozen_trading_day_truth",
+        lambda *args, **kwargs: ([], "weekday_fallback", False),
+    )
+    monkeypatch.setattr(
+        flow_source,
+        "_build_sector_universe",
+        lambda *args, **kwargs: flow_source.SectorUniverse(
+            sector_codes=["5044"],
+            sector_names={"5044": "KRX 반도체"},
+            ticker_to_sector_codes={"005930": ["5044"]},
+        ),
+    )
+
+    import pykrx.stock as stock
+
+    monkeypatch.setattr(stock, "get_market_ticker_name", lambda ticker: "삼성전자")
+    monkeypatch.setattr(stock, "get_market_trading_value_by_date", lambda *args, **kwargs: pd.DataFrame())
+
+    def _raw_frame(*, ticker: str, start: str, end: str, on: str, detail: bool) -> pd.DataFrame:
+        if detail:
+            return pd.DataFrame()
+        frame = pd.DataFrame(
+            {
+                "기관합계": [50],
+                "기타법인": [10],
+                "개인": [100],
+                "외국인합계": [200],
+                "전체": [0],
+            },
+            index=pd.to_datetime(["2026-04-07"]),
+        )
+        frame.index.name = "날짜"
+        return frame
+
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_raw", _raw_frame)
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_detailed", lambda *args, **kwargs: pd.DataFrame())
+
+    _, sector_frame, summary = flow_source.collect_sector_investor_flow(
+        sector_map=_SECTOR_MAP,
+        start="20260407",
+        end="20260408",
+    )
+
+    assert not sector_frame.empty
+    assert summary["failed_days"] == []
+    assert summary["failed_day_source"] == "weekday_fallback"
+    assert summary["failed_day_truth_confident"] is False
+    assert summary["coverage_complete"] is False
+
+
+def test_read_warm_status_exposes_sector_and_ticker_failure_buckets():
+    warehouse.record_ingest_run(
+        dataset="investor_flow",
+        reason="manual_refresh",
+        provider="PYKRX_UNOFFICIAL",
+        requested_start="20260401",
+        requested_end="20260408",
+        status="LIVE",
+        coverage_complete=False,
+        failed_days=[],
+        failed_codes={"sector:5044": "lookup failed", "005930": "buy frame empty"},
+        delta_keys=[],
+        row_count=0,
+        summary={
+            "status": "LIVE",
+            "failed_day_source": "warehouse_market_prices",
+            "failed_day_truth_confident": True,
+            "request_metric_semantics": "logical_ticker_steps",
+        },
+        market="KR",
+        created_at=pd.Timestamp("2026-04-12T00:00:00Z").to_pydatetime(),
+    )
+    warehouse.update_ingest_watermark(
+        dataset="investor_flow_operational_complete",
+        watermark_key="20260407",
+        status="LIVE",
+        coverage_complete=True,
+        provider="PYKRX_UNOFFICIAL",
+        details={"status": "LIVE"},
+        market="KR",
+    )
+
+    summary = flow_source.read_warm_status()
+
+    assert summary["failed_sector_codes"] == {"sector:5044": "lookup failed"}
+    assert summary["failed_ticker_codes"] == {"005930": "buy frame empty"}
+    assert summary["failed_sector_count"] == 1
+    assert summary["failed_ticker_count"] == 1
+    assert summary["failed_day_source"] == "warehouse_market_prices"
+    assert summary["failed_day_truth_confident"] is True
+    assert summary["request_metric_semantics"] == "logical_ticker_steps"
+
+
+def test_collect_sector_investor_flow_retries_failed_tickers_after_session_reset(monkeypatch):
+    monkeypatch.setattr(flow_source, "ensure_pykrx_transport_compat", lambda: None)
+    monkeypatch.setattr(flow_source, "_check_socket_stack", lambda: None)
+    monkeypatch.setattr(
+        flow_source,
+        "_resolve_frozen_trading_day_truth",
+        lambda *args, **kwargs: (["20260407"], "pykrx_calendar", True),
+    )
+    monkeypatch.setattr(
+        flow_source,
+        "_build_sector_universe",
+        lambda *args, **kwargs: flow_source.SectorUniverse(
+            sector_codes=["5044"],
+            sector_names={"5044": "KRX 반도체"},
+            ticker_to_sector_codes={"005930": ["5044"]},
+        ),
+    )
+
+    import pykrx.stock as stock
+
+    state = {"reset": False, "calls": []}
+
+    monkeypatch.setattr(stock, "get_market_ticker_name", lambda ticker: "삼성전자")
+    monkeypatch.setattr(stock, "get_market_trading_value_by_date", lambda *args, **kwargs: pd.DataFrame())
+    monkeypatch.setattr(flow_source, "reset_krx_shared_session", lambda: state.__setitem__("reset", True))
+
+    def _raw_frame(*, ticker: str, start: str, end: str, on: str, detail: bool) -> pd.DataFrame:
+        state["calls"].append((on, detail, state["reset"]))
+        if detail or not state["reset"]:
+            return pd.DataFrame()
+        frame = pd.DataFrame(
+            {
+                "기관합계": [50],
+                "기타법인": [10],
+                "개인": [100],
+                "외국인합계": [200],
+                "전체": [0],
+            },
+            index=pd.to_datetime(["2026-04-07"]),
+        )
+        frame.index.name = "날짜"
+        return frame
+
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_raw", _raw_frame)
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_detailed", lambda *args, **kwargs: pd.DataFrame())
+
+    raw_frame, sector_frame, summary = flow_source.collect_sector_investor_flow(
+        sector_map=_SECTOR_MAP,
+        start="20260407",
+        end="20260407",
+    )
+
+    assert not raw_frame.empty
+    assert not sector_frame.empty
+    assert summary["failed_codes"] == {}
+    assert summary["retried_ticker_count"] == 1
+    assert summary["retried_recovered_ticker_count"] == 1
+    assert summary["retry_processed_requests"] == 3
+    assert summary["predicted_requests"] == 6
+    assert summary["processed_requests"] == 6

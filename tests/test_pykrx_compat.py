@@ -141,6 +141,50 @@ def test_request_krx_data_uses_shared_session_headers(monkeypatch):
     assert captured["data"] == {"foo": "bar"}
 
 
+def test_patched_webio_reads_pick_up_fresh_session_after_reset(monkeypatch):
+    _install_fake_pykrx(monkeypatch)
+    import src.data_sources.pykrx_compat as compat
+
+    importlib.reload(compat)
+
+    sessions: list[object] = []
+
+    class _Session:
+        def __init__(self, label):
+            self.label = label
+
+        def post(self, url, headers=None, data=None, timeout=None):
+            return {"label": self.label, "url": url, "data": dict(data or {})}
+
+        def get(self, url, headers=None, params=None, timeout=None):
+            return {"label": self.label, "url": url, "params": dict(params or {})}
+
+        def close(self):
+            return None
+
+    def _get_shared_session():
+        if compat._SHARED_SESSION is None:
+            compat._SHARED_SESSION = _Session(f"s{len(sessions) + 1}")
+            sessions.append(compat._SHARED_SESSION)
+        return compat._SHARED_SESSION
+
+    monkeypatch.setattr(compat, "_get_shared_session", _get_shared_session)
+    compat.ensure_pykrx_transport_compat()
+
+    from pykrx.website.comm import webio
+
+    post = webio.Post()
+    post.url = compat.KRX_JSON_URL
+    first = post.read(foo="bar")
+    compat.reset_krx_shared_session()
+    post_after_reset = webio.Post()
+    post_after_reset.url = compat.KRX_JSON_URL
+    second = post_after_reset.read(foo="baz")
+
+    assert first["label"] == "s1"
+    assert second["label"] == "s2"
+
+
 def test_get_shared_session_records_login_failure_detail(monkeypatch):
     import src.data_sources.pykrx_compat as compat
 

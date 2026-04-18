@@ -13,6 +13,7 @@ from src.data_sources.warehouse import (
     close_cached_read_only_connection,
     export_macro_parquet,
     get_dataset_artifact_key,
+    get_macro_dimension_provider_series_ids,
     get_macro_latest_periods,
     is_macro_coverage_complete,
     probe_dataset_mode,
@@ -143,6 +144,16 @@ def sync_provider_macro(
 
     normalized_start = _normalize_month_token(start_ym)
     normalized_end = _normalize_month_token(end_ym)
+    expected_provider_ids = {
+        alias: _provider_series_id(provider, cfg)
+        for alias, cfg in active_config.items()
+    }
+    existing_provider_ids = {} if force else get_macro_dimension_provider_series_ids(aliases, market=market)
+    changed_aliases = {
+        alias
+        for alias, expected_provider_id in expected_provider_ids.items()
+        if existing_provider_ids.get(alias) and existing_provider_ids.get(alias) != expected_provider_id
+    }
 
     cached = _warehouse_provider_frame(
         provider,
@@ -153,6 +164,7 @@ def sync_provider_macro(
     )
     if (
         not force
+        and not changed_aliases
         and not cached.empty
         and is_macro_coverage_complete(
             series_aliases=aliases,
@@ -208,6 +220,17 @@ def sync_provider_macro(
         raise
     delta_aliases: list[str] = []
     failed_aliases: dict[str, str] = {}
+    alias_coverage_complete = {
+        alias: False
+        if force
+        else is_macro_coverage_complete(
+            series_aliases=[alias],
+            start_ym=normalized_start,
+            end_ym=normalized_end,
+            market=market,
+        )
+        for alias in aliases
+    }
 
     _TRANSFORM_LOOKBACK = {"pct_change_12m": 14}
     _DEFAULT_LOOKBACK = 6
@@ -215,7 +238,7 @@ def sync_provider_macro(
     for alias, cfg in active_config.items():
         fetch_start = normalized_start
         last_period = latest_periods.get(alias, "")
-        if last_period:
+        if last_period and alias not in changed_aliases and alias_coverage_complete.get(alias, False):
             transform = cfg.get("transform", "none")
             lookback = _TRANSFORM_LOOKBACK.get(transform, _DEFAULT_LOOKBACK)
             fetch_start = max(normalized_start, _shift_months(last_period, -lookback))

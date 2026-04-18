@@ -7,7 +7,7 @@ R7 — ACTION_VALUES = {"Strong Buy", "Watch", "Hold", "Avoid", "N/A"}
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import pandas as pd
 
@@ -59,6 +59,11 @@ class SectorSignal:
     asof_date: str = ""
     is_provisional: bool = False
     rs_change_pct: float = float("nan")  # 20-day RS change %
+    sector_fit_rank: int | None = None
+    sector_fit_total: int | None = None
+    sector_fit_avg_excess_pct: float = float("nan")
+    sector_fit_note: str = ""
+    sector_fit_cross_regimes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.action not in ACTION_VALUES:
@@ -143,6 +148,7 @@ def build_signal_table(
     from src.indicators.rsi import compute_rsi, compute_weekly_rsi
     from src.macro.regime import get_regime_sectors
     from src.signals.flow import apply_flow_overlay
+    from src.signals.sector_fit import build_sector_fit_lookup
     from src.signals.scoring import apply_fx_shock_filter, apply_rsi_alerts
 
     # Validate inputs
@@ -393,4 +399,24 @@ def build_signal_table(
         short_window=flow_short_window,
         long_window=flow_long_window,
     )
-    return signals
+    sector_fit_lookup = build_sector_fit_lookup(regime=current_regime, lag_months=0)
+    if not sector_fit_lookup:
+        return signals
+
+    enriched: list[SectorSignal] = []
+    for signal in signals:
+        fit_meta = sector_fit_lookup.get(str(signal.index_code))
+        if not fit_meta:
+            enriched.append(signal)
+            continue
+        enriched.append(
+            replace(
+                signal,
+                sector_fit_rank=int(fit_meta["sector_fit_rank"]),
+                sector_fit_total=int(fit_meta["sector_fit_total"]),
+                sector_fit_avg_excess_pct=float(fit_meta["sector_fit_avg_excess_pct"]),
+                sector_fit_note=str(fit_meta.get("sector_fit_note", "") or ""),
+                sector_fit_cross_regimes=tuple(fit_meta.get("sector_fit_cross_regimes", ()) or ()),
+            )
+        )
+    return enriched

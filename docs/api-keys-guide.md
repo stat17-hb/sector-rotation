@@ -144,15 +144,23 @@ Use preflight status to distinguish key issues from network/security restriction
 Some KOSIS tables do not use region/item codes the way they look at first glance.
 For several macro series, the stable request pattern is:
 
-- `itmId` = aggregate item code (for example `T` or `T1`)
-- `objL1` = desired sub-dimension/member (for example `T10` or `A03`)
+- `itmId` may be either:
+  - an aggregate item code paired with `objL1`
+  - or a direct rate-series item code when the table exposes the desired metric directly
+- `objL1` must match the table's actual object dimension, not an assumed legacy member code
 
 Working examples in this project:
 
-- `cpi_yoy`: `orgId=101`, `tblId=DT_1J22003`, `itmId=T`, `objL1=T10`
+- `cpi_yoy`: `orgId=101`, `tblId=DT_1J22042`, `itmId=T03`, `objL1=0`
+- `cpi_mom`: `orgId=101`, `tblId=DT_1J22042`, `itmId=T02`, `objL1=0`
 - `leading_index`: `orgId=101`, `tblId=DT_1C8015`, `itmId=T1`, `objL1=A03`
 
-If `itmId` is set directly to a member code (for example `T10`) and `objL1` is left as `ALL`, KOSIS often returns `err=21`.
+Legacy note:
+
+- `DT_1J22003` is still useful as a CPI index backfill source.
+- In this repo it is treated as `cpi_index_legacy`, not as the primary direct YoY/MoM rate source.
+
+If `objL*` parameters do not match the table schema, KOSIS often returns `err=21`.
 
 ---
 

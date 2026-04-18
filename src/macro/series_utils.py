@@ -177,3 +177,144 @@ def to_plotly_time_index(df: pd.DataFrame) -> pd.DataFrame:
     if isinstance(out.index, pd.PeriodIndex):
         out.index = out.index.to_timestamp(how="end")
     return out
+
+
+def filter_macro_provisional_rows(
+    macro_df: pd.DataFrame,
+    *,
+    include_provisional: bool,
+) -> pd.DataFrame:
+    """Return the macro frame with optional provisional-row exclusion."""
+    if include_provisional or macro_df.empty or "is_provisional" not in macro_df.columns:
+        return macro_df
+    filtered = macro_df[~macro_df["is_provisional"].fillna(False)].copy()
+    return filtered
+
+
+def build_regime_inflation_series(
+    *,
+    macro_df: pd.DataFrame,
+    macro_series_cfg: Mapping,
+    market_id: str,
+) -> pd.Series:
+    """Return the inflation series used for macro regime classification.
+
+    KR keeps a homogeneous YoY-scale history by preferring direct `cpi_yoy`
+    and backfilling older months from the legacy CPI index. This mirrors the
+    dashboard path without importing dashboard code into scripts.
+    """
+    normalized_market = str(market_id or "KR").strip().upper() or "KR"
+    if normalized_market != "KR":
+        inflation_series = extract_macro_series(
+            macro_df=macro_df,
+            macro_series_cfg=macro_series_cfg,
+            alias="cpi_mom",
+        )
+        if inflation_series.empty:
+            inflation_series = extract_macro_series(
+                macro_df=macro_df,
+                macro_series_cfg=macro_series_cfg,
+                alias="cpi_yoy",
+            )
+        return inflation_series
+
+    inflation_series = extract_macro_series(
+        macro_df=macro_df,
+        macro_series_cfg=macro_series_cfg,
+        alias="cpi_yoy",
+    )
+    cpi_legacy_idx = extract_macro_series(
+        macro_df=macro_df,
+        macro_series_cfg=macro_series_cfg,
+        alias="cpi_index_legacy",
+    )
+
+    if not cpi_legacy_idx.empty:
+        legacy_yoy = (cpi_legacy_idx / cpi_legacy_idx.shift(12) - 1) * 100
+        legacy_yoy = legacy_yoy.dropna()
+        if not legacy_yoy.empty:
+            if inflation_series.empty:
+                return legacy_yoy
+            cutoff = inflation_series.index.min()
+            legacy_part = legacy_yoy[legacy_yoy.index < cutoff]
+            if not legacy_part.empty:
+                return pd.concat([legacy_part, inflation_series]).sort_index()
+
+    if not inflation_series.empty:
+        return inflation_series
+
+    return extract_macro_series(
+        macro_df=macro_df,
+        macro_series_cfg=macro_series_cfg,
+        alias="cpi_mom",
+    )
+
+
+def build_regime_history_from_macro(
+    *,
+    macro_df: pd.DataFrame,
+    macro_series_cfg: Mapping,
+    settings: Mapping,
+    market_id: str,
+    include_provisional: bool,
+    window_months: int | None = None,
+) -> pd.DataFrame:
+    """Build a macro regime history frame from a macro fact table.
+
+    This is the smallest shared helper needed to keep dashboard and validation
+    scripts on the same regime-construction contract.
+    """
+    from src.macro.regime import compute_regime_history
+
+    filtered_macro = filter_macro_provisional_rows(
+        macro_df,
+        include_provisional=include_provisional,
+    )
+    if filtered_macro.empty:
+        return pd.DataFrame()
+
+    growth_series = extract_macro_series(
+        macro_df=filtered_macro,
+        macro_series_cfg=macro_series_cfg,
+        alias="leading_index",
+    )
+    inflation_series = build_regime_inflation_series(
+        macro_df=filtered_macro,
+        macro_series_cfg=macro_series_cfg,
+        market_id=market_id,
+    )
+    if growth_series.empty or inflation_series.empty:
+        return pd.DataFrame()
+
+    aligned = pd.concat(
+        {"growth": growth_series, "inflation": inflation_series},
+        axis=1,
+        join="inner",
+    ).dropna()
+    if aligned.empty:
+        return pd.DataFrame()
+
+    if window_months is not None and window_months > 0 and len(aligned) > window_months:
+        aligned = aligned.iloc[-window_months:]
+
+    long_alias = str(settings.get("yield_curve_long", "bond_3y"))
+    short_alias = str(settings.get("yield_curve_short", "base_rate"))
+    bond_series = extract_macro_series(filtered_macro, macro_series_cfg, long_alias)
+    base_series = extract_macro_series(filtered_macro, macro_series_cfg, short_alias)
+    yield_curve_spread = None
+    if not bond_series.empty and not base_series.empty:
+        spread = (bond_series - base_series).dropna()
+        if not spread.empty:
+            yield_curve_spread = spread
+
+    return compute_regime_history(
+        aligned["growth"],
+        aligned["inflation"],
+        epsilon=float(settings.get("epsilon", 0.0)),
+        use_adaptive_epsilon=bool(settings.get("use_adaptive_epsilon", True)),
+        epsilon_factor=float(settings.get("epsilon_factor", 0.5)),
+        confirmation_periods=int(settings.get("confirmation_periods", 2)),
+        carry_single_flat_regime=bool(settings.get("carry_single_flat_regime", False)),
+        yield_curve_spread=yield_curve_spread,
+        yield_curve_threshold=float(settings.get("yield_curve_spread_threshold", 0.0)),
+    )

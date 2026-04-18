@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import sys
-import types
 from io import BytesIO
 
 import pandas as pd
@@ -11,18 +9,15 @@ import src.data_sources.us_flow_proxies as us_flow
 
 
 def test_fetch_sector_flow_history_normalizes_close_and_volume(monkeypatch):
-    index = pd.DatetimeIndex(["2024-01-02", "2024-01-03"])
-    columns = pd.MultiIndex.from_product([["XLF", "XLK"], ["Close", "Volume"]])
     raw = pd.DataFrame(
-        [
-            [40.0, 1_000_000, 200.0, 500_000],
-            [41.0, 1_200_000, 201.0, 600_000],
-        ],
-        index=index,
-        columns=columns,
+        {
+            "ticker": ["XLF", "XLK", "XLF", "XLK"],
+            "close": [40.0, 200.0, 41.0, 201.0],
+            "volume": [1_000_000.0, 500_000.0, 1_200_000.0, 600_000.0],
+        },
+        index=pd.DatetimeIndex(["2024-01-02", "2024-01-02", "2024-01-03", "2024-01-03"]),
     )
-    fake_module = types.SimpleNamespace(download=lambda **kwargs: raw)
-    monkeypatch.setitem(sys.modules, "yfinance", fake_module)
+    monkeypatch.setattr(us_flow, "fetch_yahoo_chart_history_batch", lambda *args, **kwargs: raw)
 
     frame = us_flow.fetch_sector_flow_history(["XLF", "XLK"], "20240102", "20240103")
 
@@ -267,6 +262,49 @@ def test_load_us_flow_proxies_marks_missing_tickers_incomplete(monkeypatch):
     assert len(frame) == 1
     assert detail["coverage_complete"] is False
     assert detail["missing_tickers"] == ["XLK"]
+
+
+def test_load_us_flow_proxies_surfaces_history_failures(monkeypatch):
+    dates = pd.date_range("2024-01-02", periods=25, freq="B")
+    history = pd.DataFrame(
+        {
+            "sector_code": ["XLF"] * len(dates),
+            "close": [40.0] * len(dates),
+            "volume": [1_000_000.0] * len(dates),
+            "dollar_volume": [40_000_000.0] * len(dates),
+        },
+        index=dates,
+    )
+    history.attrs["failed_tickers"] = {"XLK": "Yahoo chart returned no result for XLK"}
+    monkeypatch.setattr(us_flow, "fetch_sector_flow_history", lambda *args, **kwargs: history)
+    monkeypatch.setattr(
+        us_flow,
+        "fetch_ssga_fund_profile",
+        lambda ticker, **kwargs: {"sector_code": ticker, "sector_name": ticker, "snapshot_date": "", "nav": float("nan"), "cusip": "", "top_holdings": []},
+    )
+    monkeypatch.setattr(
+        "src.data_sources.us_ownership_context.load_us_ownership_context",
+        lambda *args, **kwargs: {"errors": {}},
+    )
+
+    status, frame, detail = us_flow.load_us_flow_proxies(
+        sector_map={
+            "regimes": {
+                "Expansion": {
+                    "sectors": [
+                        {"code": "XLF", "name": "Financials"},
+                        {"code": "XLK", "name": "Technology"},
+                    ]
+                }
+            }
+        },
+        start="20240102",
+        end="20240205",
+    )
+
+    assert status == "LIVE"
+    assert len(frame) == 1
+    assert detail["history_failures"] == {"XLK": "Yahoo chart returned no result for XLK"}
 
 
 def test_fetch_ici_weekly_etf_flows_parses_official_table():

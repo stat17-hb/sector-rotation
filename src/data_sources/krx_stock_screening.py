@@ -26,8 +26,12 @@ logger = logging.getLogger(__name__)
 
 DataStatus = Literal["LIVE", "CACHED", "UNAVAILABLE"]
 CACHE_PATH = Path("data/curated/stock_screening_cache.pkl")
+ETF_CONTEXT_CACHE_PATH = Path("data/curated/stock_screening_etf_context_cache.pkl")
 CACHE_TTL_HOURS = 24
 MAX_STOCKS_PER_SECTOR = 15
+ETF_LIQUIDITY_LOOKBACK_DAYS = 20
+ETF_HISTORY_BUFFER_DAYS = 45
+ETF_MIN_AVG_TRADING_VALUE = 300_000_000
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +71,45 @@ def load_screened_stocks(
         return "UNAVAILABLE", []
     except Exception as exc:
         logger.warning("Stock screening failed: %s", exc)
+        return "UNAVAILABLE", []
+
+
+def load_representative_etf_context(
+    strong_buy_sectors: list[dict],
+    etf_map: dict[str, list[dict]] | None,
+    settings: dict | None = None,
+    force_refresh: bool = False,
+) -> tuple[DataStatus, list[dict]]:
+    """Load representative ETF execution context for Strong Buy sectors.
+
+    The result is intentionally execution-support only. It must not affect
+    sector ranking, action, or stock-screening results.
+    """
+    if not strong_buy_sectors:
+        return "UNAVAILABLE", []
+
+    normalized_etf_map = {
+        str(code): [dict(item) for item in items]
+        for code, items in (etf_map or {}).items()
+    }
+
+    if not force_refresh:
+        cached = _read_etf_context_cache(strong_buy_sectors, normalized_etf_map)
+        if cached is not None:
+            return "CACHED", cached
+
+    try:
+        rows = _fetch_representative_etf_context(
+            strong_buy_sectors=strong_buy_sectors,
+            etf_map=normalized_etf_map,
+            settings=settings or {},
+        )
+        if rows:
+            _write_etf_context_cache(strong_buy_sectors, normalized_etf_map, rows)
+            return "LIVE", rows
+        return "UNAVAILABLE", []
+    except Exception as exc:
+        logger.warning("Representative ETF context load failed: %s", exc)
         return "UNAVAILABLE", []
 
 
@@ -133,6 +176,283 @@ def _fetch_and_score(
                 logger.debug("Skipping ticker %s: %s", ticker, exc)
 
     return sorted(rows, key=lambda r: r.get("rs", 0), reverse=True)
+
+
+def _fetch_representative_etf_context(
+    *,
+    strong_buy_sectors: list[dict],
+    etf_map: dict[str, list[dict]],
+    settings: dict,
+) -> list[dict]:
+    import pykrx.stock as stock
+    from pykrx.website.krx.etx.core import 전종목시세_ETF
+
+    from src.data_sources.pykrx_compat import ensure_pykrx_transport_compat
+
+    ensure_pykrx_transport_compat()
+
+    target_date = _last_business_day()
+    candidate_dates = candidate_reference_dates(target_date, periods=5)
+    min_avg_trading_value = int(
+        settings.get("screening_etf_min_avg_trading_value", ETF_MIN_AVG_TRADING_VALUE)
+    )
+    lookback_days = int(
+        settings.get("screening_etf_liquidity_lookback_days", ETF_LIQUIDITY_LOOKBACK_DAYS)
+    )
+
+    snapshot_df, snapshot_date = _fetch_etf_snapshot(candidate_dates, 전종목시세_ETF)
+    rows: list[dict] = []
+
+    for sector in strong_buy_sectors:
+        sector_code = str(sector.get("code", "")).strip()
+        sector_name = str(sector.get("name", "")).strip() or sector_code
+        mapped_etfs = [dict(item) for item in etf_map.get(sector_code, [])]
+        rows.append(
+            _build_sector_etf_context_row(
+                stock_module=stock,
+                sector_code=sector_code,
+                sector_name=sector_name,
+                mapped_etfs=mapped_etfs,
+                snapshot_df=snapshot_df,
+                snapshot_date=snapshot_date,
+                target_date=target_date,
+                lookback_days=lookback_days,
+                min_avg_trading_value=min_avg_trading_value,
+            )
+        )
+
+    return rows
+
+
+def _fetch_etf_snapshot(candidate_dates: list[str], fetcher_cls) -> tuple[pd.DataFrame, str]:
+    fetcher = fetcher_cls()
+    for candidate_date in candidate_dates:
+        try:
+            raw = fetcher.fetch(candidate_date)
+        except Exception as exc:
+            logger.debug("ETF snapshot fetch failed for %s: %s", candidate_date, exc)
+            continue
+        normalized = _normalize_etf_snapshot(raw)
+        if not normalized.empty:
+            return normalized, candidate_date
+    return pd.DataFrame(), ""
+
+
+def _normalize_etf_snapshot(raw: pd.DataFrame) -> pd.DataFrame:
+    if raw is None or raw.empty:
+        return pd.DataFrame()
+
+    required = {"ISU_SRT_CD", "ISU_ABBRV", "NAV", "ACC_TRDVAL", "MKTCAP", "INVSTASST_NETASST_TOTAMT"}
+    if not required.issubset(set(raw.columns)):
+        return pd.DataFrame()
+
+    selected_columns = [
+        "ISU_SRT_CD",
+        "ISU_ABBRV",
+        "NAV",
+        "ACC_TRDVAL",
+        "MKTCAP",
+        "INVSTASST_NETASST_TOTAMT",
+    ]
+    if "LIST_SHRS" in raw.columns:
+        selected_columns.append("LIST_SHRS")
+
+    frame = raw[selected_columns].copy()
+    frame = frame.rename(
+        columns={
+            "ISU_SRT_CD": "ticker",
+            "ISU_ABBRV": "name",
+            "NAV": "nav",
+            "ACC_TRDVAL": "latest_trade_value",
+            "MKTCAP": "market_cap",
+            "INVSTASST_NETASST_TOTAMT": "net_assets",
+            "LIST_SHRS": "listed_shares",
+        }
+    )
+    frame["ticker"] = frame["ticker"].astype(str).str.strip()
+    frame["name"] = frame["name"].astype(str).str.strip()
+    if "listed_shares" not in frame.columns:
+        frame["listed_shares"] = pd.NA
+
+    for column in ("nav", "latest_trade_value", "market_cap", "net_assets", "listed_shares"):
+        frame[column] = _to_numeric(frame[column])
+    frame = frame.set_index("ticker")
+    return frame
+
+
+def _build_sector_etf_context_row(
+    *,
+    stock_module,
+    sector_code: str,
+    sector_name: str,
+    mapped_etfs: list[dict],
+    snapshot_df: pd.DataFrame,
+    snapshot_date: str,
+    target_date: str,
+    lookback_days: int,
+    min_avg_trading_value: int,
+) -> dict:
+    if not mapped_etfs:
+        return {
+            "sector_code": sector_code,
+            "sector_name": sector_name,
+            "etf_code": "",
+            "etf_name": "—",
+            "style_tags": "없음",
+            "execution_state": "대표 ETF 없음",
+            "latest_trade_value": None,
+            "avg_trade_value_20d": None,
+            "net_assets": None,
+            "nav": None,
+            "reference_date": "",
+            "freshness_label": "매핑 없음",
+            "note": "ETF 매핑이 없는 섹터입니다.",
+        }
+
+    candidates: list[dict] = []
+    for order, etf in enumerate(mapped_etfs):
+        ticker = str(etf.get("code", "")).strip()
+        etf_name = str(etf.get("name", "")).strip() or ticker
+        snapshot_row = snapshot_df.loc[ticker] if ticker and ticker in snapshot_df.index else None
+        history = _fetch_etf_history(
+            stock_module=stock_module,
+            ticker=ticker,
+            target_date=target_date,
+            lookback_days=lookback_days,
+        )
+        latest_history_date = ""
+        avg_trade_value_20d = None
+        latest_trade_value = None
+        nav_value = (
+            float(snapshot_row.get("nav"))
+            if snapshot_row is not None and pd.notna(snapshot_row.get("nav"))
+            else None
+        )
+        net_assets = (
+            float(snapshot_row.get("net_assets"))
+            if snapshot_row is not None and pd.notna(snapshot_row.get("net_assets"))
+            else None
+        )
+
+        if history is not None and not history.empty:
+            history = history.sort_index()
+            latest_history_date = history.index.max().strftime("%Y%m%d")
+            latest_trade_value = float(history["거래대금"].iloc[-1])
+            avg_trade_value_20d = float(history["거래대금"].tail(lookback_days).mean())
+            if nav_value is None and "NAV" in history.columns and not history["NAV"].empty:
+                nav_value = float(history["NAV"].iloc[-1])
+
+        if (
+            latest_trade_value is None
+            and snapshot_row is not None
+            and pd.notna(snapshot_row.get("latest_trade_value"))
+        ):
+            latest_trade_value = float(snapshot_row.get("latest_trade_value"))
+
+        candidates.append(
+            {
+                "mapping_order": order,
+                "etf_code": ticker,
+                "etf_name": etf_name,
+                "style_tags": _infer_etf_style_tags(etf_name),
+                "latest_trade_value": latest_trade_value,
+                "avg_trade_value_20d": avg_trade_value_20d,
+                "net_assets": net_assets,
+                "nav": nav_value,
+                "reference_date": latest_history_date or (snapshot_date if snapshot_row is not None else ""),
+                "liquidity_ok": (
+                    avg_trade_value_20d is not None and avg_trade_value_20d >= float(min_avg_trading_value)
+                ),
+            }
+        )
+
+    chosen = sorted(
+        candidates,
+        key=lambda row: (
+            1 if row["liquidity_ok"] else 0,
+            float(row["latest_trade_value"] or 0.0),
+            float(row["net_assets"] or 0.0),
+            -int(row["mapping_order"]),
+        ),
+        reverse=True,
+    )[0]
+
+    reference_date = str(chosen.get("reference_date", "") or "")
+    is_stale = bool(reference_date) and reference_date != target_date
+    if not reference_date:
+        freshness_label = "기준시각 불명"
+    elif is_stale:
+        freshness_label = f"저신뢰 · {reference_date}"
+    else:
+        freshness_label = reference_date
+
+    if not chosen["liquidity_ok"]:
+        execution_state = "실행 유동성 부족"
+    elif not reference_date:
+        execution_state = "기준시각 불명"
+    else:
+        execution_state = "정상"
+
+    note_parts: list[str] = []
+    if execution_state == "실행 유동성 부족":
+        note_parts.append("20일 평균 거래대금 기준 미달")
+    if not reference_date:
+        note_parts.append("최근 기준일 확인 불가")
+    elif is_stale:
+        note_parts.append("최신 영업일 기준이 아님")
+
+    return {
+        "sector_code": sector_code,
+        "sector_name": sector_name,
+        "etf_code": str(chosen.get("etf_code", "")),
+        "etf_name": str(chosen.get("etf_name", "")),
+        "style_tags": str(chosen.get("style_tags", "")),
+        "execution_state": execution_state,
+        "latest_trade_value": chosen.get("latest_trade_value"),
+        "avg_trade_value_20d": chosen.get("avg_trade_value_20d"),
+        "net_assets": chosen.get("net_assets"),
+        "nav": chosen.get("nav"),
+        "reference_date": reference_date,
+        "freshness_label": freshness_label,
+        "note": " · ".join(note_parts),
+    }
+
+
+def _fetch_etf_history(*, stock_module, ticker: str, target_date: str, lookback_days: int) -> pd.DataFrame:
+    try:
+        end_ts = pd.Timestamp(target_date).normalize()
+        start_ts = pd.bdate_range(end=end_ts, periods=max(lookback_days * 2, ETF_HISTORY_BUFFER_DAYS))[0]
+        history = stock_module.get_etf_ohlcv_by_date(start_ts.strftime("%Y%m%d"), target_date, ticker)
+    except Exception as exc:
+        logger.debug("ETF history fetch failed for %s: %s", ticker, exc)
+        return pd.DataFrame()
+    if history is None or history.empty:
+        return pd.DataFrame()
+    return history.sort_index()
+
+
+def _infer_etf_style_tags(name: str) -> str:
+    text = str(name or "").strip()
+    tags: list[str] = []
+    for needle, tag in (
+        ("고배당", "배당"),
+        ("배당", "배당"),
+        ("TR", "TR"),
+        ("액티브", "액티브"),
+        ("TOP10", "TOP10"),
+        ("레버리지", "레버리지"),
+        ("인버스", "인버스"),
+    ):
+        if needle in text and tag not in tags:
+            tags.append(tag)
+    if not tags:
+        tags.append("일반")
+    return ", ".join(tags[:3])
+
+
+def _to_numeric(series: pd.Series) -> pd.Series:
+    cleaned = series.astype(str).str.replace(",", "", regex=False).str.replace("-", "0", regex=False)
+    return pd.to_numeric(cleaned, errors="coerce")
 
 
 def _get_constituents(stock_module, trade_date: str, sector_code: str) -> list[str]:
@@ -244,6 +564,15 @@ def _cache_key(sectors: list[dict]) -> str:
     return ",".join(sorted(s["code"] for s in sectors))
 
 
+def _etf_context_cache_key(sectors: list[dict], etf_map: dict[str, list[dict]]) -> str:
+    items: list[str] = []
+    for sector in sorted(sectors, key=lambda item: str(item.get("code", ""))):
+        sector_code = str(sector.get("code", "")).strip()
+        etf_codes = ",".join(str(item.get("code", "")).strip() for item in etf_map.get(sector_code, []))
+        items.append(f"{sector_code}:{etf_codes}")
+    return "|".join(items)
+
+
 def _read_cache(sectors: list[dict]) -> list[dict] | None:
     if not CACHE_PATH.exists():
         return None
@@ -267,6 +596,42 @@ def _write_cache(sectors: list[dict], rows: list[dict]) -> None:
             pickle.dump({"key": _cache_key(sectors), "ts": datetime.now(), "rows": rows}, f)
     except Exception as exc:
         logger.debug("Cache write failed: %s", exc)
+
+
+def _read_etf_context_cache(sectors: list[dict], etf_map: dict[str, list[dict]]) -> list[dict] | None:
+    if not ETF_CONTEXT_CACHE_PATH.exists():
+        return None
+    try:
+        with open(ETF_CONTEXT_CACHE_PATH, "rb") as f:
+            cached = pickle.load(f)
+        if cached.get("key") != _etf_context_cache_key(sectors, etf_map):
+            return None
+        age_hours = (datetime.now() - cached["ts"]).total_seconds() / 3600
+        if age_hours > CACHE_TTL_HOURS:
+            return None
+        return cached["rows"]
+    except Exception:
+        return None
+
+
+def _write_etf_context_cache(
+    sectors: list[dict],
+    etf_map: dict[str, list[dict]],
+    rows: list[dict],
+) -> None:
+    try:
+        ETF_CONTEXT_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(ETF_CONTEXT_CACHE_PATH, "wb") as f:
+            pickle.dump(
+                {
+                    "key": _etf_context_cache_key(sectors, etf_map),
+                    "ts": datetime.now(),
+                    "rows": rows,
+                },
+                f,
+            )
+    except Exception as exc:
+        logger.debug("ETF context cache write failed: %s", exc)
 
 
 def _last_business_day() -> str:

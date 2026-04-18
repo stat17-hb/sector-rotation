@@ -1,5 +1,8 @@
 # 경기국면 판정 타당성 평가 보고서 (2026-02-25)
 
+> Historical snapshot note (2026-04-15): 이 문서는 2026-02 기준의 구 raw-regime 검증 경로를 기록한 historical snapshot입니다.
+> 현재 canonical reference는 `docs/regime-validity-dashboard-parity-current.md`입니다.
+
 ## 결론 (3줄)
 - 최종 판정: **부분 타당** (D1~D4 합계 `2/4`).
 - Point-in-time(1개월 지연) 적합률은 `2/8 = 25.0%`로 낮아, 시차 반영 시 성능 저하가 큽니다.

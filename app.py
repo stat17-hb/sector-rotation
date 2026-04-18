@@ -584,6 +584,8 @@ held_sectors, filter_action_global, filter_regime_only_global, position_mode, sh
     investor_flow_status=investor_flow_status,
     investor_flow_fresh=investor_flow_fresh,
     investor_flow_profile=str(st.session_state.get("flow_profile", "foreign_lead")),
+    investor_flow_frame=investor_flow_frame,
+    investor_flow_detail=dict(investor_flow_detail),
     yield_curve_status=yield_curve_status,
     signals=list(signals),
     held_sector_options=held_sector_options,

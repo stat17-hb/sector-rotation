@@ -1,9 +1,9 @@
 """
-US sector ETF price loader backed by yfinance and DuckDB cache.
+US sector ETF price loader backed by Yahoo chart history and DuckDB cache.
 """
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date
 import logging
 from pathlib import Path
 from typing import Any, Literal
@@ -24,6 +24,7 @@ from src.data_sources.warehouse import (
     upsert_index_dimension,
     upsert_market_prices,
 )
+from src.data_sources.yahoo_chart import fetch_yahoo_chart_history_batch
 
 logger = logging.getLogger(__name__)
 
@@ -53,25 +54,16 @@ def _run_best_effort_bookkeeping(label: str, callback, /, *args, **kwargs) -> No
         callback(*args, **kwargs)
     except Exception as exc:
         logger.warning("US market bookkeeping skipped (%s): %s", label, exc)
-
-
-def _normalize_market_date(value: str) -> date:
-    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
-    if len(digits) != 8:
-        raise ValueError(f"Invalid market date: {value!r}")
-    return date(int(digits[:4]), int(digits[4:6]), int(digits[6:8]))
-
-
-def _to_long_frame(close_frame: pd.DataFrame) -> pd.DataFrame:
-    if close_frame.empty:
+def _to_long_frame(history_frame: pd.DataFrame) -> pd.DataFrame:
+    if history_frame.empty:
         return pd.DataFrame()
-    long = close_frame.stack().reset_index()
-    long.columns = ["trade_date", "index_code", "close"]
-    long["index_name"] = long["index_code"].astype(str).map(
+
+    long = history_frame.copy()
+    long["index_code"] = long["ticker"].astype(str)
+    long["index_name"] = long["index_code"].map(
         lambda code: DEFAULT_TICKER_NAMES.get(str(code), str(code))
     )
-    long = long.set_index("trade_date")
-    long.index = pd.DatetimeIndex(long.index)
+    long.index = pd.DatetimeIndex(long.index).normalize()
     long["index_code"] = long["index_code"].astype("object")
     long["index_name"] = long["index_name"].astype("object")
     long["close"] = pd.to_numeric(long["close"], errors="coerce")
@@ -98,35 +90,10 @@ def fetch_sector_prices(tickers: list[str], start: str, end: str) -> pd.DataFram
     if not normalized:
         return pd.DataFrame()
 
-    start_date = _normalize_market_date(start)
-    end_date = _normalize_market_date(end)
-    end_exclusive = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
-
-    import yfinance as yf  # type: ignore[import]
-
-    raw = yf.download(
-        tickers=normalized,
-        start=start_date.strftime("%Y-%m-%d"),
-        end=end_exclusive,
-        progress=False,
-        auto_adjust=False,
-        group_by="ticker",
-        threads=False,
-    )
-    if raw is None or raw.empty:
-        raise ValueError("yfinance returned no rows")
-
-    if isinstance(raw.columns, pd.MultiIndex):
-        if "Close" in raw.columns.get_level_values(-1):
-            close = raw.xs("Close", axis=1, level=-1)
-        else:
-            raise ValueError("yfinance response did not include Close prices")
-    else:
-        close = raw[["Close"]].rename(columns={"Close": normalized[0]})
-
-    close.index = pd.DatetimeIndex(close.index).normalize()
-    close = close.sort_index().dropna(how="all")
-    return _to_long_frame(close)
+    history = fetch_yahoo_chart_history_batch(normalized, start, end)
+    if history.empty:
+        raise ValueError("Yahoo chart returned no rows")
+    return _to_long_frame(history)
 
 
 def _make_sample_df(tickers: list[str]) -> pd.DataFrame:
@@ -198,7 +165,8 @@ def load_sector_prices(tickers: list[str], start: str, end: str) -> LoaderResult
         if coverage_complete:
             return ("CACHED", normalize_then_validate(cached, "sector_prices"))
 
-        requested_end = pd.Timestamp(_normalize_market_date(end))
+        digits = "".join(ch for ch in str(end or "") if ch.isdigit())
+        requested_end = pd.Timestamp(date(int(digits[:4]), int(digits[4:6]), int(digits[6:8])))
         benchmark_cached = cached[cached["index_code"].astype(str) == coverage_code]
         if not benchmark_cached.empty:
             benchmark_latest = pd.Timestamp(benchmark_cached.index.max()).normalize()

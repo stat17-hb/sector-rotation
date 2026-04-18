@@ -3,13 +3,13 @@ US sector ETF flow-proxy loader.
 
 This module intentionally does not claim to reproduce Korean-style participant
 flow. It surfaces a public-data proxy layer built from:
-- sector ETF price/volume history from yfinance
+- sector ETF price/volume history from Yahoo Finance chart API
 - current official fund snapshot fields from SSGA product pages
 """
 from __future__ import annotations
 
 from io import BytesIO
-from datetime import date, timedelta
+from datetime import date
 import html
 import logging
 import re
@@ -19,6 +19,7 @@ from urllib.parse import urljoin
 import pandas as pd
 import requests
 
+from src.data_sources.yahoo_chart import fetch_yahoo_chart_history_batch
 
 logger = logging.getLogger(__name__)
 
@@ -59,34 +60,22 @@ def _sector_entries(sector_map: dict[str, Any]) -> list[dict[str, str]]:
 
 def _to_long_history(raw: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
     if raw is None or raw.empty:
-        raise ValueError("yfinance returned no rows for US flow proxy history")
+        raise ValueError("Yahoo chart returned no rows for US flow proxy history")
 
     normalized = [str(ticker).strip().upper() for ticker in tickers if str(ticker).strip()]
     if not normalized:
         return pd.DataFrame()
-
-    if isinstance(raw.columns, pd.MultiIndex):
-        if "Close" not in raw.columns.get_level_values(-1) or "Volume" not in raw.columns.get_level_values(-1):
-            raise ValueError("yfinance response did not include Close/Volume fields")
-        close = raw.xs("Close", axis=1, level=-1)
-        volume = raw.xs("Volume", axis=1, level=-1)
-    else:
-        if "Close" not in raw.columns or "Volume" not in raw.columns:
-            raise ValueError("yfinance response did not include Close/Volume columns")
-        close = raw[["Close"]].rename(columns={"Close": normalized[0]})
-        volume = raw[["Volume"]].rename(columns={"Volume": normalized[0]})
-
-    close.index = pd.DatetimeIndex(close.index).normalize()
-    volume.index = pd.DatetimeIndex(volume.index).normalize()
-    close = close.sort_index().dropna(how="all")
-    volume = volume.sort_index().dropna(how="all")
+    if not {"ticker", "close", "volume"}.issubset(raw.columns):
+        raise ValueError("Yahoo chart response did not include Close/Volume columns")
 
     rows: list[dict[str, object]] = []
     for ticker in normalized:
-        close_series = pd.to_numeric(close.get(ticker), errors="coerce")
-        volume_series = pd.to_numeric(volume.get(ticker), errors="coerce")
-        if close_series is None or volume_series is None:
+        ticker_rows = raw[raw["ticker"].astype(str).str.upper() == ticker].copy()
+        if ticker_rows.empty:
             continue
+        ticker_rows.index = pd.DatetimeIndex(ticker_rows.index).normalize()
+        close_series = pd.to_numeric(ticker_rows["close"], errors="coerce")
+        volume_series = pd.to_numeric(ticker_rows["volume"], errors="coerce")
         combined = pd.concat(
             {"close": close_series, "volume": volume_series},
             axis=1,
@@ -110,6 +99,7 @@ def _to_long_history(raw: pd.DataFrame, tickers: list[str]) -> pd.DataFrame:
 
     frame = pd.DataFrame(rows).set_index("trade_date").sort_index()
     frame.index = pd.DatetimeIndex(frame.index)
+    frame.attrs["failed_tickers"] = dict(raw.attrs.get("failed_tickers", {}))
     return frame
 
 
@@ -118,21 +108,7 @@ def fetch_sector_flow_history(tickers: list[str], start: str, end: str) -> pd.Da
     if not normalized:
         return pd.DataFrame()
 
-    start_date = _normalize_market_date(start)
-    end_date = _normalize_market_date(end)
-    end_exclusive = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
-
-    import yfinance as yf  # type: ignore[import]
-
-    raw = yf.download(
-        tickers=normalized,
-        start=start_date.strftime("%Y-%m-%d"),
-        end=end_exclusive,
-        progress=False,
-        auto_adjust=False,
-        group_by="ticker",
-        threads=False,
-    )
+    raw = fetch_yahoo_chart_history_batch(normalized, start, end, allow_partial=True)
     return _to_long_history(raw, normalized)
 
 
@@ -522,6 +498,7 @@ def load_us_flow_proxies(
                 "history_error": str(exc),
             },
         )
+    history_failures = dict(history_frame.attrs.get("failed_tickers", {}))
 
     snapshot_failures: dict[str, str] = {}
     snapshots: dict[str, dict[str, Any]] = {}
@@ -559,6 +536,7 @@ def load_us_flow_proxies(
         "watermark_key": latest_date,
         "coverage_complete": bool(not frame.empty and latest_date == str(end) and not missing_tickers),
         "snapshot_failures": snapshot_failures,
+        "history_failures": history_failures,
         "missing_tickers": missing_tickers,
         "history_rows": int(len(history_frame)),
         "proxy_layer": "wrapper_flow",

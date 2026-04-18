@@ -1,10 +1,14 @@
 """Tests for signal matrix and scoring. (3 tests)"""
 from __future__ import annotations
 
+from pathlib import Path
+
+import pandas as pd
 import pytest
 
 from src.signals.matrix import SectorSignal, compute_action
 from src.signals.scoring import apply_fx_shock_filter, apply_rsi_alerts
+from src.signals.sector_fit import build_sector_fit_lookup
 
 
 def _make_signal(**kwargs) -> SectorSignal:
@@ -73,3 +77,43 @@ class TestSignals:
             threshold_pct=3.0,
         )
         assert no_change.action == "Strong Buy"
+
+    def test_sector_fit_lookup_uses_pinned_current_artifact(self, monkeypatch, tmp_path: Path):
+        docs_dir = tmp_path / "docs"
+        docs_dir.mkdir()
+        current = docs_dir / "regime-validity-dashboard-parity-current-rankings.csv"
+        latest = docs_dir / "regime-validity-dashboard-parity-2099-01-01-rankings.csv"
+
+        pd.DataFrame(
+            [
+                {
+                    "lag_months": 0,
+                    "regime": "Recovery",
+                    "rank": 2,
+                    "code": "5044",
+                    "sector_name": "KRX 반도체",
+                    "avg_excess_pct": 1.2,
+                    "assigned_regime": "Recovery",
+                }
+            ]
+        ).to_csv(current, index=False, encoding="utf-8-sig")
+        pd.DataFrame(
+            [
+                {
+                    "lag_months": 0,
+                    "regime": "Recovery",
+                    "rank": 1,
+                    "code": "5044",
+                    "sector_name": "KRX 반도체",
+                    "avg_excess_pct": 9.9,
+                    "assigned_regime": "Recovery",
+                }
+            ]
+        ).to_csv(latest, index=False, encoding="utf-8-sig")
+
+        monkeypatch.chdir(tmp_path)
+
+        lookup = build_sector_fit_lookup(regime="Recovery", lag_months=0)
+
+        assert lookup["5044"]["sector_fit_rank"] == 2
+        assert lookup["5044"]["sector_fit_avg_excess_pct"] == 1.2

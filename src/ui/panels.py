@@ -56,7 +56,7 @@ def render_page_header(
     st.markdown(
         (
             '<section class="page-shell">'
-            '<div class="page-shell__eyebrow">섹터 로테이션 코크핏</div>'
+            '<div class="page-shell__eyebrow">섹터 로테이션 종합상황판</div>'
             f'<div class="page-shell__title">{html.escape(title)}</div>'
             f'<div class="page-shell__description">{html.escape(description)}</div>'
             f"{pills_html}"
@@ -380,6 +380,9 @@ def render_decision_hero(
 
     chips = [
         f'<span class="decision-hero__chip">{html.escape(regime_state)}</span>',
+        f'<span class="decision-hero__badge">{html.escape(get_ui_text("hero_method_badge", locale))}</span>',
+        f'<span class="decision-hero__badge">{html.escape(get_ui_text("hero_pit_badge", locale))}</span>',
+        f'<span class="decision-hero__badge">{html.escape(get_ui_text("hero_contraction_badge", locale))}</span>',
     ]
     if is_provisional:
         chips.append(f'<span class="decision-hero__badge">{html.escape(get_ui_text("hero_provisional_badge", locale))}</span>')
@@ -395,7 +398,6 @@ def render_decision_hero(
         )
 
     fx_numeric = _safe_float(fx_change)
-    fx_display = f"{fx_numeric:+.1f}%" if fx_numeric is not None else "N/A"
     hero_metrics = "".join(
         [
             _hero_metric(get_ui_text("hero_leading_index", locale), growth_val, "p"),
@@ -403,8 +405,6 @@ def render_decision_hero(
             _hero_metric(fx_label, fx_numeric, "%"),
         ]
     )
-    if fx_display == "N/A":
-        hero_metrics = hero_metrics.replace("nan%", "N/A")
 
     st.markdown(
         (
@@ -499,28 +499,13 @@ def render_investor_flow_summary(
     investor_flow_status: str,
     investor_flow_fresh: bool,
     investor_flow_profile: str,
+    investor_flow_frame: pd.DataFrame | None = None,
+    investor_flow_detail: Mapping[str, object] | None = None,
     locale: UiLocale = DEFAULT_UI_LOCALE,
 ) -> None:
     """Render a compact KR investor-flow snapshot under the status cards."""
     if not signals:
         return
-
-    rows: list[dict[str, object]] = []
-    for signal in signals:
-        flow_state = str(getattr(signal, "flow_state", "unavailable") or "unavailable")
-        if flow_state == "unavailable":
-            continue
-        rows.append(
-            {
-                "Sector": str(getattr(signal, "sector_name", "")),
-                "Flow": get_flow_state_label(flow_state, locale),
-                "FlowStateRaw": flow_state,
-                "Action": getattr(signal, "action", "N/A"),
-                "BaseAction": getattr(signal, "base_action", getattr(signal, "action", "N/A")),
-                "Score": _safe_float(getattr(signal, "flow_score", None)),
-                "Reason": str(getattr(signal, "flow_reason", "")),
-            }
-        )
 
     with st.container(border=True):
         render_panel_header(
@@ -530,69 +515,129 @@ def render_investor_flow_summary(
             badge=f"{investor_flow_status} · {get_flow_profile_label(investor_flow_profile, locale)}",
         )
         st.caption(get_ui_text("flow_sidebar_caption", locale))
+        reference_only_note = get_flow_reference_only_note(
+            investor_flow_status,
+            investor_flow_fresh,
+            investor_flow_detail,
+            locale,
+        )
+        has_display_frame = isinstance(investor_flow_frame, pd.DataFrame) and not investor_flow_frame.empty
+        if reference_only_note and has_display_frame:
+            st.warning(reference_only_note)
 
+        signal_rows = build_investor_flow_glance_rows(
+            signals,
+            locale=locale,
+        )
+        snapshot_rows = build_investor_flow_snapshot_rows(
+            investor_flow_frame,
+            locale=locale,
+        )
+        rows = signal_rows or snapshot_rows
         if not rows:
+            if reference_only_note and has_display_frame:
+                st.caption(get_ui_text("flow_reference_only_summary_hint", locale))
+                return
             st.info(get_ui_text("flow_tab_empty", locale))
             return
 
-        rows.sort(key=lambda x: (x["Score"] or 0.0, x["Sector"]), reverse=True)
-        top_rows = rows[:5]
+        st.caption(get_ui_text("flow_summary_limit_note", locale))
+        rows = rows[:4]
+
+        use_signal_rows = bool(signal_rows)
+
+        def _state_tone(raw_state: str | None, *, ratio: float | None = None) -> str:
+            if ratio is not None:
+                if ratio > 0:
+                    return "success"
+                if ratio < 0:
+                    return "danger"
+                return "warning"
+            raw_state = str(raw_state or "neutral")
+            if raw_state == "supportive":
+                return "success"
+            if raw_state == "adverse":
+                return "danger"
+            return "warning"
+
+        def _participant_chip(label: str, value: str, raw_state: str | None = None, *, ratio: float | None = None) -> str:
+            tone = _state_tone(raw_state, ratio=ratio)
+            return (
+                '<span style="display:inline-flex; align-items:center; gap:0.3rem; '
+                'padding:0.22rem 0.5rem; border-radius:999px; font-size:0.76rem; '
+                f'font-weight:700; background:color-mix(in srgb, var(--{tone}) 16%, transparent); '
+                f'color:var(--{tone}); border:1px solid color-mix(in srgb, var(--{tone}) 28%, transparent);">'
+                f'<span>{html.escape(label)}</span><strong>{html.escape(value)}</strong>'
+                '</span>'
+            )
 
         html_chunks = ['<div class="flow-container">']
-        for i, row in enumerate(top_rows, start=1):
-            sector = html.escape(str(row["Sector"]))
-            flow_label = html.escape(str(row["Flow"]))
-            raw_state = str(row["FlowStateRaw"])
-
-            if "supportive" in raw_state or "buy" in raw_state:
-                badge_tone = "success"
-            elif "adverse" in raw_state or "sell" in raw_state:
-                badge_tone = "warning"
-            else:
-                badge_tone = "neutral"
-
+        for row in rows:
+            sector = html.escape(str(row["sector"]))
+            flow_label = html.escape(
+                str(row["flow_state"]) if use_signal_rows else "참고용 raw snapshot"
+            )
+            score_label = f'{get_ui_text("flow_col_score", locale)} {float(row["flow_score"]):+.2f}'
+            badge_tone = (
+                _state_tone(str(row["flow_state_raw"]))
+                if use_signal_rows
+                else "info"
+            )
             badge_class = f"flow-card__badge flow-card__badge--{badge_tone}"
 
-            action = str(row["Action"])
-            base_action = str(row["BaseAction"])
-            action_html = f"{html.escape(base_action)} &rarr; {html.escape(action)}" if base_action != action else html.escape(action)
-            score = row["Score"]
-            score_str = f"{score:+.2f}" if score is not None else "N/A"
-            reason = html.escape(str(row["Reason"]))
+            chips_html = "".join(
+                [
+                    _participant_chip(
+                        get_ui_text("flow_col_foreign", locale),
+                        str(row["foreign"]),
+                        str(row.get("foreign_raw", "")),
+                        ratio=_safe_float(row.get("foreign_ratio")),
+                    ),
+                    _participant_chip(
+                        get_ui_text("flow_col_institutional", locale),
+                        str(row["institutional"]),
+                        str(row.get("institutional_raw", "")),
+                        ratio=_safe_float(row.get("institutional_ratio")),
+                    ),
+                    _participant_chip(
+                        get_ui_text("flow_col_retail", locale),
+                        str(row["retail"]),
+                        str(row.get("retail_raw", "")),
+                        ratio=_safe_float(row.get("retail_ratio")),
+                    ),
+                ]
+            )
 
-            lbl_adj = get_ui_text("flow_col_adjustment", locale)
-            lbl_score = get_ui_text("flow_col_score", locale)
-            lbl_reason = get_ui_text("col_reason", locale)
+            detail_html = (
+                f'<div style="margin-top:0.55rem; font-size:0.82rem; color:var(--text-muted);">'
+                f'{html.escape(get_ui_text("flow_col_adjustment", locale))}: '
+                f'<strong style="color:var(--text);">{html.escape(str(row["action_change"]))}</strong>'
+                '</div>'
+                if use_signal_rows and not reference_only_note and bool(row["has_action_change"])
+                else ""
+            )
 
             card = (
                 '<div class="flow-card">'
-                '<div class="flow-card__header">'
-                '<div class="flow-card__title">'
-                f'<span class="flow-card__rank">{i}.</span> {sector} '
+                '<div class="flow-card__header" style="align-items:flex-start; gap:0.5rem;">'
+                '<div class="flow-card__title" style="display:flex; flex-direction:column; gap:0.35rem;">'
+                f'<div style="font-weight:800;">{sector}</div>'
+                f'<div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">'
                 f'<span class="{badge_class}">{flow_label}</span>'
+                f'<span style="font-size:0.8rem; color:var(--text-muted); font-weight:700;">{html.escape(score_label)}</span>'
                 '</div>'
                 '</div>'
-                '<div class="flow-card__body">'
-                '<div class="flow-card__row">'
-                f'<div class="flow-card__label">{html.escape(lbl_adj)}</div>'
-                f'<div class="flow-card__value"><strong>{action_html}</strong></div>'
                 '</div>'
-                '<div class="flow-card__row">'
-                f'<div class="flow-card__label">{html.escape(lbl_score)}</div>'
-                f'<div class="flow-card__value">{score_str}</div>'
-                '</div>'
-                '<div class="flow-card__row">'
-                f'<div class="flow-card__label">{html.escape(lbl_reason)}</div>'
-                f'<div class="flow-card__value">{reason}</div>'
-                '</div>'
+                '<div class="flow-card__body" style="gap:0.65rem;">'
+                f'<div style="display:flex; gap:0.45rem; flex-wrap:wrap;">{chips_html}</div>'
+                f'{detail_html}'
                 '</div>'
                 '</div>'
             )
             html_chunks.append(card)
-        
         html_chunks.append('</div>')
         st.markdown("".join(html_chunks), unsafe_allow_html=True)
-        
+
         if not investor_flow_fresh:
             st.caption(get_ui_text("flow_unavailable", locale))
 
@@ -619,7 +664,7 @@ def render_investor_decision_boards(
 
     with st.container(border=True):
         render_panel_header(
-            eyebrow="투자 결정 보드",
+            eyebrow="투자 결정 상황판",
             title="보유 포지션 관리 및 신규 매수 탐색",
             description="보유 섹터를 먼저 선택하면 추가/축소/신규 진입을 구분하여 제안합니다.",
             badge=f"{len(valid_held)}개 보유",
@@ -632,11 +677,12 @@ def render_investor_decision_boards(
             placeholder="현재 보유 중인 섹터를 선택하세요",
         )
         st.caption("보유 섹터 설정 시 포지션 관리와 신규 진입에 맞는 추천 문구가 표시됩니다.")
+        st.caption(get_ui_text("judgment_disclaimer_caption", locale))
 
         held_col, new_col = st.columns(2, gap="large")
         with held_col:
             render_panel_header(
-                eyebrow="보유 포지션 액션",
+                eyebrow="보유 포지션 대응",
                 title="포지션 관리",
                 description="보유 섹터의 추가 매수, 유지, 비중 축소, 청산 검토 후보를 제시합니다.",
                 badge=f"{len(selected_held)}개 추적 중",
@@ -738,14 +784,26 @@ def render_sector_detail_panel(
                 _render_card_html(
                     eyebrow="투자 판단",
                     value=str(detail_summary.get("decision", "N/A")),
-                    detail="보유 여부 반영 실전 액션",
+                    detail="보유 여부 반영 실전 대응",
                     tone="info",
+                ),
+                _render_card_html(
+                    eyebrow=get_ui_text("judgment_structure_label", locale),
+                    value=str(detail_summary.get("judgment_structure", "N/A")),
+                    detail=str(detail_summary.get("judgment_confidence", "N/A")),
+                    tone="warning",
                 ),
                 _render_card_html(
                     eyebrow="국면 적합성",
                     value=str(detail_summary.get("regime_fit", "N/A")),
                     detail="매크로 정합성",
                     tone="success" if str(detail_summary.get("regime_fit", "")).strip() == regime_fit_match else "warning",
+                ),
+                _render_card_html(
+                    eyebrow=get_ui_text("sector_fit_card", locale),
+                    value=str(detail_summary.get("sector_fit_rank", "N/A")),
+                    detail=str(detail_summary.get("sector_fit_note", "N/A")),
+                    tone="info",
                 ),
                 _render_card_html(
                     eyebrow="RS 추세",
@@ -768,7 +826,7 @@ def render_sector_detail_panel(
                 _render_card_html(
                     eyebrow="경고",
                     value=str(detail_summary.get("alerts_text", alerts_none)),
-                    detail="활성 리스크 플래그",
+                    detail="활성 위험 신호",
                     tone="warning" if str(detail_summary.get("alerts_text", alerts_none)) != alerts_none else "success",
                 ),
             ]

@@ -274,16 +274,16 @@ def load_kosis_macro(
         series_config = {
             "cpi_yoy": {
                 "org_id": "101",
-                "tbl_id": "DT_1J22003",
-                "item_id": "T",
-                "obj_params": {"objL1": "T10"},  # 전년동월비(%)
+                "tbl_id": "DT_1J22042",
+                "item_id": "T03",
+                "obj_params": {"objL1": "0"},  # 총지수 전년동월비(%)
                 "enabled": True,
             },
             "cpi_mom": {
                 "org_id": "101",
-                "tbl_id": "DT_1J22003",
-                "item_id": "T",
-                "obj_params": {"objL1": "T20"},  # 전월비(%)
+                "tbl_id": "DT_1J22042",
+                "item_id": "T02",
+                "obj_params": {"objL1": "0"},  # 총지수 전월비(%)
                 "enabled": True,
             },
             "leading_index": {

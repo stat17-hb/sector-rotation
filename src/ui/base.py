@@ -24,6 +24,7 @@ from src.ui.copy import (
     get_cycle_phase_label,
     get_decision_label,
     get_flow_profile_label,
+    get_flow_reference_only_note,
     get_flow_state_label,
     get_heatmap_palette_label,
     get_position_mode_label,
@@ -287,7 +288,23 @@ def describe_signal_decision(
     rs_div = _rs_divergence_pct(signal)
     ret_3m = _pct_value(getattr(signal, "returns", {}).get("3M"))
     volatility = _pct_value(getattr(signal, "volatility_20d", None))
+    sector_fit_rank = getattr(signal, "sector_fit_rank", None)
+    sector_fit_total = getattr(signal, "sector_fit_total", None)
+    sector_fit_note = str(getattr(signal, "sector_fit_note", "") or "").strip()
     alerts = [str(item).strip() for item in getattr(signal, "alerts", []) if str(item).strip()]
+
+    has_flow_overlay = flow_adjustment in {"upgrade", "downgrade"} or flow_state != "unavailable"
+    stack_labels = [get_ui_text("judgment_structure_base", locale)]
+    if "FX Shock" in alerts:
+        stack_labels.append(get_ui_text("judgment_structure_fx", locale))
+    if has_flow_overlay:
+        stack_labels.append(get_ui_text("judgment_structure_flow", locale))
+    judgment_structure = " + ".join(stack_labels)
+    judgment_confidence = (
+        get_ui_text("judgment_confidence_flow", locale)
+        if has_flow_overlay
+        else get_ui_text("judgment_confidence_limited", locale)
+    )
 
     positive_parts: list[str] = []
     if bool(getattr(signal, "macro_fit", False)):
@@ -298,6 +315,17 @@ def describe_signal_decision(
         positive_parts.append(get_ui_text("reason_trend_intact", locale))
     if ret_3m is not None:
         positive_parts.append(get_ui_text("reason_return_3m", locale, value=ret_3m))
+    if sector_fit_rank is not None and sector_fit_total:
+        positive_parts.append(
+            get_ui_text(
+                "reason_sector_fit_rank",
+                locale,
+                rank=int(sector_fit_rank),
+                total=int(sector_fit_total),
+            )
+        )
+    if sector_fit_note:
+        positive_parts.append(sector_fit_note)
     if flow_adjustment == "upgrade":
         positive_parts.append(
             f"{base_action} -> {action} ({get_flow_state_label(flow_state, locale)} · {get_flow_profile_label(flow_profile, locale)})"
@@ -354,6 +382,11 @@ def describe_signal_decision(
     )
     return_3m = f"{ret_3m:+.1f}%" if ret_3m is not None else "N/A"
     volatility_20d = f"{volatility:.1f}%" if volatility is not None else "N/A"
+    sector_fit_rank_text = (
+        f"{int(sector_fit_rank)}/{int(sector_fit_total)}"
+        if sector_fit_rank is not None and sector_fit_total
+        else get_ui_text("sector_fit_missing", locale)
+    )
     alerts_display = list(alerts)
     if flow_adjustment in {"upgrade", "downgrade"}:
         alerts_display.append(f"{base_action} -> {action}")
@@ -376,7 +409,11 @@ def describe_signal_decision(
         "reason": reason,
         "risk": risk,
         "invalidation": invalidation,
+        "judgment_structure": judgment_structure,
+        "judgment_confidence": judgment_confidence,
         "regime_fit": regime_fit,
+        "sector_fit_rank": sector_fit_rank_text,
+        "sector_fit_note": sector_fit_note or get_ui_text("sector_fit_note_none", locale),
         "rs_trend": rs_trend,
         "return_3m": return_3m,
         "volatility_20d": volatility_20d,
@@ -427,6 +464,104 @@ def signal_display_sort_key(signal, held_sectors: Sequence[str] | None = None) -
     )
 
 
+def build_investor_flow_glance_rows(
+    signals: Sequence,
+    *,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> list[dict[str, object]]:
+    """Return stable, signal-derived rows for investor-flow glance UIs."""
+    rows: list[dict[str, object]] = []
+    for signal in signals:
+        flow_state_raw = str(getattr(signal, "flow_state", "unavailable") or "unavailable")
+        if flow_state_raw == "unavailable":
+            continue
+
+        sector = str(getattr(signal, "sector_name", "")).strip()
+        if not sector:
+            continue
+
+        score = _safe_float(getattr(signal, "flow_score", None))
+        numeric_score = float(score) if score is not None else 0.0
+        action = str(getattr(signal, "action", "N/A"))
+        base_action = str(getattr(signal, "base_action", action) or action)
+        rows.append(
+            {
+                "sector": sector,
+                "flow_state": get_flow_state_label(flow_state_raw, locale),
+                "flow_state_raw": flow_state_raw,
+                "flow_score": numeric_score,
+                "action_change": f"{base_action} -> {action}",
+                "has_action_change": action != base_action,
+                "foreign": get_flow_state_label(
+                    str(getattr(signal, "foreign_flow_state", "unavailable") or "unavailable"),
+                    locale,
+                ),
+                "foreign_raw": str(getattr(signal, "foreign_flow_state", "unavailable") or "unavailable"),
+                "institutional": get_flow_state_label(
+                    str(getattr(signal, "institutional_flow_state", "unavailable") or "unavailable"),
+                    locale,
+                ),
+                "institutional_raw": str(
+                    getattr(signal, "institutional_flow_state", "unavailable") or "unavailable"
+                ),
+                "retail": get_flow_state_label(
+                    str(getattr(signal, "retail_flow_state", "unavailable") or "unavailable"),
+                    locale,
+                ),
+                "retail_raw": str(getattr(signal, "retail_flow_state", "unavailable") or "unavailable"),
+            }
+        )
+
+    rows.sort(key=lambda row: (-abs(float(row["flow_score"])), str(row["sector"])))
+    return rows
+
+
+def build_investor_flow_snapshot_rows(
+    flow_frame: pd.DataFrame | None,
+    *,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> list[dict[str, object]]:
+    """Return latest-date investor-flow rows grouped by sector for raw snapshot fallback."""
+    if not isinstance(flow_frame, pd.DataFrame) or flow_frame.empty:
+        return []
+
+    latest_date = flow_frame.index.max()
+    latest_rows = flow_frame.loc[flow_frame.index == latest_date].copy()
+    if latest_rows.empty:
+        return []
+
+    expected_order = ("외국인", "기관합계", "개인")
+    expected_keys = {
+        "외국인": "foreign",
+        "기관합계": "institutional",
+        "개인": "retail",
+    }
+    grouped: list[dict[str, object]] = []
+    for sector_name, sector_rows in latest_rows.groupby(latest_rows["sector_name"].astype(str)):
+        row: dict[str, object] = {
+            "sector": str(sector_name),
+            "flow_score": 0.0,
+        }
+        strength = 0.0
+        for investor_label in expected_order:
+            investor_key = expected_keys[investor_label]
+            investor_rows = sector_rows[sector_rows["investor_type"].astype(str) == investor_label]
+            ratio = _safe_float(investor_rows["net_flow_ratio"].iloc[-1]) if not investor_rows.empty else None
+            net_buy = _safe_float(investor_rows["net_buy_amount"].iloc[-1]) if not investor_rows.empty else None
+            row[f"{investor_key}_ratio"] = ratio
+            row[f"{investor_key}_net"] = net_buy
+            row[investor_key] = (
+                f"{ratio:+.2%}" if ratio is not None else get_flow_state_label("unavailable", locale)
+            )
+            if ratio is not None:
+                strength += abs(float(ratio))
+        row["flow_score"] = strength
+        grouped.append(row)
+
+    grouped.sort(key=lambda item: (-float(item["flow_score"]), str(item["sector"])))
+    return grouped
+
+
 __all__ = [
     "html",
     "math",
@@ -462,6 +597,7 @@ __all__ = [
     "get_regime_subtitle",
     "get_ui_text",
     "get_flow_profile_label",
+    "get_flow_reference_only_note",
     "get_flow_state_label",
     "normalize_action_filter",
     "format_action_label",
@@ -485,4 +621,6 @@ __all__ = [
     "describe_signal_decision",
     "filter_signals_for_display",
     "signal_display_sort_key",
+    "build_investor_flow_glance_rows",
+    "build_investor_flow_snapshot_rows",
 ]

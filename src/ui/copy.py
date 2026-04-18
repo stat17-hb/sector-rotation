@@ -1,6 +1,7 @@
 """Locale-aware UI copy helpers."""
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Literal
 
 
@@ -36,18 +37,18 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
     "scope_matching_regime": {"ko": "현재 국면 해당", "en": "Matching current regime"},
     "scope_full_universe": {"ko": "전체 유니버스", "en": "Full universe"},
     "command_bar_eyebrow": {"ko": "빠른 필터", "en": "Quick filters"},
-    "command_bar_title": {"ko": "분석 캔버스로 돌아가기 전에 실시간 신호 보드를 정제하세요.", "en": "Refine the live signal board before returning to the analysis canvas."},
-    "filter_action": {"ko": "액션 필터", "en": "Action filter"},
+    "command_bar_title": {"ko": "분석 캔버스로 돌아가기 전에 실시간 신호 상황판을 정제하세요.", "en": "Refine the live signal board before returning to the analysis canvas."},
+    "filter_action": {"ko": "대응 필터", "en": "Action filter"},
     "filter_regime_only": {"ko": "현재 국면만", "en": "Current regime only"},
     "filter_position_scope": {"ko": "포지션 범위", "en": "Position scope"},
     "filter_alerted_only": {"ko": "알림 있는 항목만", "en": "Alerted only"},
     "summary_regime_label": {"ko": "국면", "en": "Regime"},
-    "summary_action_label": {"ko": "액션", "en": "Action"},
+    "summary_action_label": {"ko": "대응", "en": "Action"},
     "summary_scope_label": {"ko": "범위", "en": "Scope"},
     "summary_positions_label": {"ko": "포지션", "en": "Positions"},
     "summary_alerts_label": {"ko": "알림", "en": "Alerts"},
     "top_picks_empty_held_missing": {
-        "ko": "포트폴리오 액션 추천을 위해 보유 섹터를 먼저 추가하세요.",
+        "ko": "포트폴리오 대응 추천을 위해 보유 섹터를 먼저 추가하세요.",
         "en": "Add held sectors first to enable portfolio action recommendations.",
     },
     "top_picks_empty_held": {
@@ -87,7 +88,7 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
     "col_alerts": {"ko": "알림", "en": "Alerts"},
     "col_held": {"ko": "보유", "en": "Held"},
     "col_in_regime": {"ko": "국면 적합", "en": "In Regime"},
-    "col_action": {"ko": "액션", "en": "Action"},
+    "col_action": {"ko": "대응", "en": "Action"},
     "col_etf": {"ko": "매수 ETF", "en": "ETF"},
     "col_volatility": {"ko": "변동성", "en": "Volatility"},
     "col_mdd_3m": {"ko": "MDD (3개월)", "en": "MDD (3M)"},
@@ -99,7 +100,19 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
         "ko": "잠정 매크로 데이터 포함",
         "en": "Includes provisional macro prints",
     },
-    "hero_eyebrow": {"ko": "매크로 국면", "en": "Macro regime"},
+    "hero_method_badge": {
+        "ko": "규칙 기반 판단",
+        "en": "Rules-based heuristic",
+    },
+    "hero_pit_badge": {
+        "ko": "confirmed_regime 기준",
+        "en": "confirmed_regime primary",
+    },
+    "hero_contraction_badge": {
+        "ko": "역사 문서 분리",
+        "en": "Historical docs separated",
+    },
+    "hero_eyebrow": {"ko": "거시경제 국면", "en": "Macro regime"},
     "hero_leading_index": {"ko": "선행지수", "en": "Leading index"},
     "hero_cpi_yoy": {"ko": "CPI 전년비", "en": "CPI YoY"},
     "status_current_regime": {"ko": "현재 국면", "en": "Current regime"},
@@ -113,9 +126,9 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
     "status_yield_inverted": {"ko": "역전", "en": "Inverted"},
     "status_yield_normal": {"ko": "정상", "en": "Normal"},
     "status_yield_detail": {"ko": "3년 국채 대비 기준금리", "en": "3Y government bond versus base rate"},
-    "action_summary_universe": {"ko": "유니버스", "en": "Universe"},
+    "action_summary_universe": {"ko": "전체 분석 대상", "en": "Universe"},
     "action_summary_filtered_count": {"ko": "필터 적용 후 섹터 수", "en": "Filtered sectors in view"},
-    "action_distribution_title": {"ko": "액션 분포", "en": "Action distribution"},
+    "action_distribution_title": {"ko": "투자의견 분포", "en": "Action distribution"},
     "action_distribution_yaxis": {"ko": "섹터 수", "en": "Sector count"},
     "cycle_palette_label": {"ko": "사이클 팔레트", "en": "Cycle palette"},
     "cycle_phase_control": {"ko": "사이클 국면", "en": "Cycle phase"},
@@ -135,7 +148,18 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
     "reason_rs_vs_trend": {"ko": "RS {value:+.1f}% (추세 대비)", "en": "RS {value:+.1f}% vs trend"},
     "reason_trend_intact": {"ko": "추세 유지", "en": "Trend intact"},
     "reason_return_3m": {"ko": "3개월 {value:+.1f}%", "en": "3M {value:+.1f}%"},
+    "reason_sector_fit_rank": {"ko": "lag0 nowcast 실증 순위 {rank}/{total}", "en": "lag0 nowcast empirical rank {rank}/{total}"},
     "reason_need_confirming_strength": {"ko": "추가 강도 확인 필요", "en": "Need more confirming strength"},
+    "judgment_disclaimer_caption": {
+        "ko": "최종 대응은 규칙 기반 판단입니다. 실증 적합도는 lag0 nowcast reference only이며 PIT/action 신호가 아닙니다. 기본 모형(국면 × 모멘텀), 환율(FX) 안전장치, 실험적 수급 보정을 분리해 해석하세요.",
+        "en": "Final action is a rules-based heuristic. Empirical fit is a lag0 nowcast reference only, not a PIT or action-driving signal. Read the base shell (regime x momentum), FX safety filter, and experimental flow overlay separately.",
+    },
+    "judgment_structure_label": {"ko": "판단 구조", "en": "Judgment stack"},
+    "judgment_structure_base": {"ko": "기본 모형", "en": "Base shell"},
+    "judgment_structure_fx": {"ko": "환율 안전장치", "en": "FX safety filter"},
+    "judgment_structure_flow": {"ko": "실험적 수급 보정", "en": "Experimental flow overlay"},
+    "judgment_confidence_limited": {"ko": "제한적 판단 규칙", "en": "Limited heuristic"},
+    "judgment_confidence_flow": {"ko": "실험 보정 포함", "en": "Includes experimental overlay"},
     "risk_regime_mismatch": {"ko": "국면 불일치", "en": "Regime mismatch"},
     "risk_rs_below_trend": {"ko": "RS {value:+.1f}% (추세 하회)", "en": "RS {value:+.1f}% below trend"},
     "risk_trend_weakened": {"ko": "추세 약화", "en": "Trend weakened"},
@@ -151,6 +175,9 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
     "alerts_none": {"ko": "없음", "en": "None"},
     "regime_fit_yes": {"ko": "적합", "en": "Fit"},
     "regime_fit_no": {"ko": "불일치", "en": "Mismatch"},
+    "sector_fit_missing": {"ko": "실증 rank 없음", "en": "No empirical rank"},
+    "sector_fit_card": {"ko": "실증 적합도 (lag0)", "en": "Empirical fit (lag0)"},
+    "sector_fit_note_none": {"ko": "lag0 nowcast reference only · not PIT · not action-driving", "en": "lag0 nowcast reference only · not PIT · not action-driving"},
     "conclusion_template": {
         "ko": "{decision} | 국면: {regime_fit} | RS 추세: {rs_trend} | 3개월: {return_3m} | 변동성: {volatility_20d} | 알림: {alerts_text}",
         "en": "{decision} | Regime: {regime_fit} | RS trend: {rs_trend} | 3M: {return_3m} | Volatility: {volatility_20d} | Alerts: {alerts_text}",
@@ -162,7 +189,7 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
     "flow_supportive": {"ko": "수급 우호", "en": "Flow supportive"},
     "flow_neutral": {"ko": "수급 중립", "en": "Flow neutral"},
     "flow_adverse": {"ko": "수급 역풍", "en": "Flow adverse"},
-    "flow_profile_label": {"ko": "수급 해석 프로필", "en": "Flow profile"},
+    "flow_profile_label": {"ko": "수급 해석 유형", "en": "Flow profile"},
     "flow_status_label": {"ko": "투자자 수급", "en": "Investor flow"},
     "flow_refresh_button": {"ko": "투자자수급 갱신", "en": "Refresh investor flow"},
     "flow_sidebar_caption": {
@@ -171,8 +198,12 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
     },
     "flow_summary_title": {"ko": "투자자 수급 스냅샷", "en": "Investor-flow snapshot"},
     "flow_summary_description": {
-        "ko": "기존 액션은 유지한 채 수급 후처리 결과만 요약합니다.",
-        "en": "Summarize post-processed investor-flow adjustments without changing the base matrix.",
+        "ko": "기본 대응은 유지한 채 외국인·기관·개인 수급 방향과 보정 강도를 함께 요약합니다.",
+        "en": "Summarize foreign, institutional, and retail flow direction alongside the overlay strength without changing the base matrix.",
+    },
+    "flow_summary_limit_note": {
+        "ko": "강한 수급 신호가 보이는 상위 4개 섹터만 요약합니다.",
+        "en": "Only the top 4 sectors with the strongest flow signal are summarized here.",
     },
     "flow_tab_warning": {
         "ko": "Unofficial / Experimental: 비공식 KRX 수급 데이터는 수동 갱신 후 캐시에서만 읽습니다.",
@@ -182,10 +213,34 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
         "ko": "표시할 투자자 수급 데이터가 없습니다. 사이드바에서 투자자수급 갱신을 실행하세요.",
         "en": "No investor-flow data is available yet. Run the manual refresh from the sidebar.",
     },
+    "flow_reference_only_partial": {
+        "ko": "현재 표시 중인 수급 데이터는 partial preview입니다. 참고용으로만 보며, 최종 투자판단에는 반영되지 않았습니다.",
+        "en": "The visible investor-flow data is a partial preview. Treat it as reference-only; it is not reflected in the final action.",
+    },
+    "flow_reference_only_transient": {
+        "ko": "현재 표시 중인 수급 데이터는 warehouse 저장 실패 후 임시 preview입니다. 현재 세션 참고용이며, 최종 투자판단에는 반영되지 않았습니다.",
+        "en": "The visible investor-flow data is a transient preview after warehouse write failure. It is session-only reference and is not reflected in the final action.",
+    },
+    "flow_reference_only_stale": {
+        "ko": "현재 표시 중인 수급 데이터는 최신 complete 기준이 아닌 cached snapshot입니다. 참고용으로만 보며, 최종 투자판단에는 반영되지 않았습니다.",
+        "en": "The visible investor-flow data is a cached snapshot that is not current to the latest complete cursor. Treat it as reference-only; it is not reflected in the final action.",
+    },
+    "flow_reference_only_summary_hint": {
+        "ko": "상세 수급 수치는 투자자 수급 탭에서 참고하세요.",
+        "en": "See the investor-flow tab for the detailed reference snapshot.",
+    },
+    "flow_reference_only_action_hidden": {
+        "ko": "현재 상태에서는 수급 기반 의견 변화 표를 숨기고 참여 주체 비교표와 raw snapshot만 표시합니다.",
+        "en": "In this state, the action-change table is hidden while the participant comparison and raw snapshot remain visible.",
+    },
+    "flow_reference_only_action_hidden_raw_only": {
+        "ko": "현재 상태에서는 수급 기반 의견 변화 표를 숨기고 raw snapshot만 표시합니다.",
+        "en": "In this state, the action-change table is hidden and only the raw snapshot is shown.",
+    },
     "flow_col_profile": {"ko": "프로필", "en": "Profile"},
     "flow_col_state": {"ko": "수급 상태", "en": "Flow state"},
     "flow_col_score": {"ko": "수급 점수", "en": "Flow score"},
-    "flow_col_adjustment": {"ko": "액션 변화", "en": "Action change"},
+    "flow_col_adjustment": {"ko": "투자의견 변화", "en": "Action change"},
     "flow_col_foreign": {"ko": "외국인", "en": "Foreign"},
     "flow_col_institutional": {"ko": "기관", "en": "Institutional"},
     "flow_col_retail": {"ko": "개인", "en": "Retail"},
@@ -363,6 +418,29 @@ def get_flow_state_label(state: str, locale: str | None = DEFAULT_UI_LOCALE) -> 
     return _FLOW_STATE_LABELS.get(state, {}).get(normalized_locale, state)
 
 
+def get_flow_reference_only_note(
+    status: str,
+    fresh: bool,
+    detail: Mapping[str, object] | None = None,
+    locale: str | None = DEFAULT_UI_LOCALE,
+) -> str:
+    normalized_status = str(status or "").strip().upper()
+    normalized_locale = normalize_locale(locale)
+    payload = dict(detail or {})
+
+    if normalized_status == "SAMPLE":
+        return ""
+    if fresh and not bool(payload.get("bootstrap_partial_preview")) and not bool(payload.get("warehouse_write_skipped")):
+        return ""
+    if bool(payload.get("warehouse_write_skipped")):
+        return get_ui_text("flow_reference_only_transient", normalized_locale)
+    if bool(payload.get("bootstrap_partial_preview")):
+        return get_ui_text("flow_reference_only_partial", normalized_locale)
+    if normalized_status in {"LIVE", "CACHED"} and not fresh:
+        return get_ui_text("flow_reference_only_stale", normalized_locale)
+    return ""
+
+
 def get_cycle_palette_items(locale: str | None = DEFAULT_UI_LOCALE) -> list[tuple[str, str]]:
     normalized_locale = normalize_locale(locale)
     return [
@@ -388,6 +466,7 @@ __all__ = [
     "get_cycle_phase_label",
     "get_decision_label",
     "get_flow_profile_label",
+    "get_flow_reference_only_note",
     "get_flow_state_label",
     "get_heatmap_palette_label",
     "get_position_mode_label",

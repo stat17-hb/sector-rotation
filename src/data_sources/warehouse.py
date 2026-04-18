@@ -1445,6 +1445,45 @@ def upsert_macro_dimension(rows: list[dict[str, Any]], *, market: str = "KR") ->
         con.close()
 
 
+def get_macro_dimension_provider_series_ids(
+    series_aliases: list[str],
+    *,
+    market: str = "KR",
+) -> dict[str, str]:
+    if not warehouse_exists() or not series_aliases:
+        return {}
+
+    _ensure_schema_for_readers()
+    normalized_market = _normalize_market_id(market)
+    alias_frame = pd.DataFrame({"series_alias": [str(alias) for alias in series_aliases]})
+    con = _connect_ro()
+    try:
+        _register_frame(con, "macro_dimension_aliases", alias_frame)
+        result = con.execute(
+            """
+            SELECT
+                dim.series_alias,
+                dim.provider_series_id
+            FROM dim_macro_series AS dim
+            INNER JOIN macro_dimension_aliases AS req
+                ON req.series_alias = dim.series_alias
+            WHERE dim.market = ?
+            ORDER BY dim.series_alias
+            """,
+            [normalized_market],
+        ).fetchdf()
+    finally:
+        con.close()
+
+    if result.empty:
+        return {}
+    return {
+        str(row["series_alias"]): str(row["provider_series_id"])
+        for _, row in result.iterrows()
+        if str(row["provider_series_id"]).strip()
+    }
+
+
 def upsert_macro_series_frame(
     *,
     series_alias: str,
@@ -1542,8 +1581,12 @@ def read_macro_data(
                 fact.fetched_at,
                 fact.is_provisional
             FROM fact_macro_monthly AS fact
+            INNER JOIN dim_macro_series AS dim
+                ON dim.market = fact.market
+               AND dim.series_alias = fact.series_alias
+               AND dim.provider_series_id = fact.provider_series_id
             INNER JOIN requested_aliases AS req
-                ON req.series_alias = fact.series_alias
+                ON req.series_alias = dim.series_alias
             WHERE fact.market = ?
               AND fact.period_month BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
             ORDER BY fact.period_month, fact.series_alias
@@ -1589,8 +1632,12 @@ def get_macro_latest_periods(series_aliases: list[str], *, market: str = "KR") -
                 fact.series_alias,
                 STRFTIME(MAX(fact.period_month), '%Y%m') AS last_period
             FROM fact_macro_monthly AS fact
+            INNER JOIN dim_macro_series AS dim
+                ON dim.market = fact.market
+               AND dim.series_alias = fact.series_alias
+               AND dim.provider_series_id = fact.provider_series_id
             INNER JOIN latest_macro_aliases AS req
-                ON req.series_alias = fact.series_alias
+                ON req.series_alias = dim.series_alias
             WHERE fact.market = ?
             GROUP BY fact.series_alias
             """
@@ -1644,15 +1691,19 @@ def export_macro_parquet(path: Path | None = None, *, market: str = "KR") -> Pat
         result = con.execute(
             """
             SELECT
-                period_month,
-                provider_series_id,
-                value,
-                provider,
-                fetched_at,
-                is_provisional
-            FROM fact_macro_monthly
-            WHERE market = ?
-            ORDER BY period_month, provider_series_id
+                fact.period_month,
+                fact.provider_series_id,
+                fact.value,
+                fact.provider,
+                fact.fetched_at,
+                fact.is_provisional
+            FROM fact_macro_monthly AS fact
+            INNER JOIN dim_macro_series AS dim
+                ON dim.market = fact.market
+               AND dim.series_alias = fact.series_alias
+               AND dim.provider_series_id = fact.provider_series_id
+            WHERE fact.market = ?
+            ORDER BY fact.period_month, fact.provider_series_id
             """
             ,
             [normalized_market],

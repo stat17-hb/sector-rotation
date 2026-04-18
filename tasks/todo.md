@@ -1,3 +1,182 @@
+# 2026-04-18 - Ralplan: Investor-Flow Glanceability
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Ground the current KR investor-flow summary and tab rendering path
+- [x] Capture a focused context snapshot for investor-flow glanceability
+- [x] Draft PRD and test-spec artifacts for the UX improvement
+- [x] Run architect review on the proposed information architecture
+- [x] Revise the draft with explicit ranking, helper ownership, and copy-scope rules
+- [x] Run critic re-review and converge on an approved execution plan
+- [x] Implement the approved glance-row helper, summary-card refresh, and KR tab matrix
+- [x] Update focused UI copy and regression tests for the new reference-only contract
+- [x] Run compile, targeted/full module tests, diagnostics, deslop, and final architect verification
+
+## Review
+- Scope:
+  improve how KR investor-flow data communicates `외국인 / 기관 / 개인` participation at a glance without changing the underlying scoring/data contract.
+- Grounded facts:
+  `src/ui/panels.py` summary cards currently emphasize action changes and reason text.
+  `src/dashboard/tabs.py` already has group-level fields on the signal rows, but the raw snapshot is still row-oriented by investor type.
+  `src/signals/flow.py` already exposes per-group state, ratio, and z-score fields needed for a clearer side-by-side presentation.
+- Initial direction:
+  add a compact sector-centric participant view in both the summary and the KR flow tab, while preserving the raw snapshot as a lower-level audit layer.
+  architect feedback narrowed this to a bounded summary surface and a signal-derived helper only.
+  revised plan now fixes the summary rule to `top 4 by |flow_score| desc, tie-break by sector name`, places the shared row helper in `src/ui/base.py`, and expands reference-only copy updates so the tab can truthfully say `participant matrix + raw snapshot visible / action-change hidden`.
+  architect re-review: `APPROVE`.
+  critic re-review: `APPROVE`.
+  implementation now ships:
+  `src/ui/base.py` signal-derived `build_investor_flow_glance_rows()`,
+  `src/ui/panels.py` top-4 participant summary cards,
+  `src/dashboard/tabs.py` sector-centric glance matrix before raw snapshot,
+  `src/ui/copy.py` updated reference-only wording,
+  focused regressions in `tests/test_ui_components.py` and `tests/test_dashboard_tabs.py`.
+  deslop pass removed unused helper fields/arguments after the first green run.
+
+## Verification
+- `python -m py_compile src\ui\base.py src\ui\copy.py src\ui\panels.py src\dashboard\tabs.py tests\test_ui_components.py tests\test_dashboard_tabs.py`
+- `pytest -q tests\test_ui_components.py tests\test_dashboard_tabs.py -k "investor_flow or flow_summary"` -> `7 passed, 45 deselected`
+- `pytest -q tests\test_ui_components.py tests\test_dashboard_tabs.py` -> `52 passed`
+- LSP diagnostics:
+  `src/ui/base.py` -> `0` errors
+  `src/ui/panels.py` -> `0` errors
+  `src/dashboard/tabs.py` -> `0` errors
+  `tests/test_ui_components.py` -> `0` errors
+  `tests/test_dashboard_tabs.py` -> `0` errors
+- Final architect verification -> `APPROVE`
+
+## Remaining Risks
+- glance matrix는 signal fields 기반이고 raw snapshot은 `investor_flow_frame` 기반이라, 상류 데이터가 어긋나면 UI에서 불일치가 보일 수 있다.
+- raw-only fallback 분기는 이번 회귀 세트에서 가장 좁게 다뤄진 경로다.
+
+## 2026-04-18 Follow-up
+- User feedback:
+  상단 투자자 수급 스냅샷과 하단 투자자 수급 탭이 체감상 변하지 않는다는 리포트가 들어왔다.
+- Root cause:
+  실제 앱 상태를 재점검한 결과 `investor_flow_frame`에는 `2475` rows가 있었지만,
+  현재 세션은 `bootstrap_partial_preview=True`, `flow_fresh=False`라 signal-level `flow_state`가 전부 `unavailable`이었다.
+  그래서 첫 구현의 signal-derived glance UI는 summary에서 비어 있었고, KR 탭도 raw snapshot 중심으로 남아 체감 변화가 작았다.
+- Follow-up fix:
+  `src/ui/base.py`에 `build_investor_flow_snapshot_rows()`를 추가해 최신 raw snapshot을 섹터 기준으로 묶고
+  `외국인 / 기관 / 개인` 비율을 바로 비교할 수 있는 fallback rows를 만들었다.
+  `src/ui/panels.py` summary와 `src/dashboard/tabs.py` KR flow tab은 signal-derived rows가 없을 때 이 raw fallback을 쓰도록 바꿨다.
+- Follow-up verification:
+  `python -m py_compile src\ui\base.py src\ui\panels.py src\dashboard\tabs.py tests\test_ui_components.py tests\test_dashboard_tabs.py`
+  `pytest -q tests\test_ui_components.py tests\test_dashboard_tabs.py -k "investor_flow or flow_summary or snapshot_fallback"` -> `10 passed, 45 deselected`
+  `pytest -q tests\test_ui_components.py tests\test_dashboard_tabs.py` -> `55 passed`
+  bare-mode app inspection:
+  `signal_rows = 0`
+  `snapshot_rows = 11`
+  `summary_will_use_raw_fallback = True`
+  final architect verification -> `APPROVE`
+
+# 2026-04-15 - Ralph: US Yahoo Chart Risk Closure
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Reuse prior context and capture a focused residual-risk snapshot
+- [x] Create PRD and test-spec artifacts for the remaining Yahoo adapter risks
+- [x] Harden timezone fallback behavior in the shared Yahoo chart adapter
+- [x] Add focused regressions for missing timezone names and DST-edge normalization
+- [x] Run targeted verification, architect review, deslop pass, and post-deslop regression
+
+## Review
+- Scope:
+  continue from the completed US Yahoo wrapper fix and close the remaining residual risk rather than reopening the provider migration.
+- Target risks:
+  1. Yahoo payloads with missing `exchangeTimezoneName` / `timezone`
+  2. DST-boundary market-date alignment when only timestamps are available
+- Intended fix:
+  teach the shared adapter to fall back to `gmtoffset` when timezone names are missing, then lock both cases with focused tests.
+  after verification surfaced a live Yahoo read timeout, extend the same bounded retry policy to transport failures and retryable HTTP statuses.
+- Fix applied:
+  `src/data_sources/yahoo_chart.py` now:
+  uses `gmtoffset` fallback when timezone names are missing or invalid,
+  preserves local-date normalization across DST-sensitive timestamps,
+  retries bounded transient failures for `requests.Timeout`, `requests.ConnectionError`, and retryable HTTP statuses `429/500/502/503/504`,
+  still fails fast on non-retryable HTTP statuses like `404`.
+- Tests added:
+  `tests/test_yahoo_chart.py` now pins:
+  missing timezone-name fallback,
+  invalid timezone token fallback,
+  DST-boundary local-date preservation,
+  timeout retry-then-success,
+  retry-budget exhaustion,
+  retryable HTTP retry-then-success,
+  non-retryable `404` fail-fast.
+- Verification:
+  `python -m py_compile src\data_sources\yahoo_chart.py tests\test_yahoo_chart.py`
+  `pytest -q tests\test_yahoo_chart.py tests\test_yfinance_sectors.py tests\test_us_flow_proxies.py tests\test_krx_pykrx_compat_paths.py tests\test_dashboard_runtime.py tests\test_dashboard_data.py tests\test_dashboard_tabs.py tests\test_market_registry.py` -> `75 passed`
+  live probes:
+  `fetch_yahoo_chart_history('SPY', '20260401', '20260415')` -> `2026-04-01 .. 2026-04-15`, `10` rows
+  `get_last_business_day(provider='YFINANCE', benchmark_code='SPY')` -> `2026-04-15`
+  LSP diagnostics:
+  `src/data_sources/yahoo_chart.py` -> `0` errors
+  `tests/test_yahoo_chart.py` -> `0` errors
+- Deslop pass:
+  scoped to the Ralph-owned files only.
+  kept the retry policy bounded and explicit instead of adding broader abstraction or adaptive backoff machinery.
+- Architect review:
+  `APPROVE`
+- Remaining risks:
+  `Retry-After` header hints are not yet honored for `429`.
+  if Yahoo omits a usable timezone name and provides only one `gmtoffset` across a DST-spanning range, exact per-day local-date reconstruction remains limited by upstream metadata fidelity.
+  broader Yahoo payload drift remains the primary integration risk.
+
+# 2026-04-15 - Ralph: US Yahoo Chart Wrapper Failure
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Capture a fresh Ralph context snapshot for the US Yahoo wrapper failure
+- [x] Create PRD and test-spec artifacts before implementation
+- [x] Reproduce the current failure and verify Yahoo chart endpoint health
+- [x] Replace `yfinance` wrapper usage with a shared direct Yahoo chart adapter in US paths
+- [x] Add focused regressions for calendar, sector prices, and flow-proxy history
+- [x] Run targeted verification, live probes, architect review, deslop pass, and post-deslop regression
+
+## Review
+- Working hypothesis:
+  the failure is in the `yfinance` wrapper layer, not the upstream Yahoo chart data source.
+- Evidence gathered:
+  `src/transforms/calendar.py`, `src/data_sources/yfinance_sectors.py`, and `src/data_sources/us_flow_proxies.py` all call `yf.download(...)`.
+  live repro on 2026-04-15 shows `yfinance 1.2.0` returns `TypeError("'NoneType' object is not subscriptable")` for both `SPY` and `XLV`.
+  direct `requests` to `https://query1.finance.yahoo.com/v8/finance/chart/SPY` and `/XLV` return HTTP `200` plus valid chart JSON in the same environment.
+- Intended fix:
+  add one shared Yahoo chart adapter using `requests` and route US calendar / sector-price / flow-proxy history through it.
+  preserve existing cache/sample fallback contracts instead of widening scope into a provider rewrite.
+- Fix applied:
+  added `src/data_sources/yahoo_chart.py` as the shared daily OHLCV adapter over Yahoo's chart endpoint.
+  `src/transforms/calendar.py`, `src/data_sources/yfinance_sectors.py`, and `src/data_sources/us_flow_proxies.py` now use that adapter instead of the failing `yfinance` wrapper path.
+  US flow proxies keep partial-history support and now surface `history_failures` in detail metadata.
+- Tests added:
+  `tests/test_yahoo_chart.py`
+  failure-policy additions in `tests/test_yfinance_sectors.py`
+  history-failure propagation additions in `tests/test_us_flow_proxies.py`
+  US calendar regression in `tests/test_krx_pykrx_compat_paths.py`
+- Verification:
+  `python -m py_compile src\data_sources\yahoo_chart.py src\transforms\calendar.py src\data_sources\yfinance_sectors.py src\data_sources\us_flow_proxies.py tests\test_yahoo_chart.py tests\test_yfinance_sectors.py tests\test_us_flow_proxies.py tests\test_krx_pykrx_compat_paths.py`
+  `pytest -q tests\test_yahoo_chart.py tests\test_yfinance_sectors.py tests\test_us_flow_proxies.py tests\test_krx_pykrx_compat_paths.py tests\test_dashboard_runtime.py tests\test_dashboard_data.py tests\test_dashboard_tabs.py tests\test_market_registry.py` -> `68 passed`
+  live probes:
+  `fetch_yahoo_chart_history('SPY', '20260401', '20260415')` -> `2026-04-01 .. 2026-04-15`, `10` rows
+  `get_last_business_day(provider='YFINANCE', benchmark_code='SPY')` -> `2026-04-15`
+  `fetch_sector_prices(['SPY','XLV'], '20260401', '20260415')` -> `20` rows
+  `fetch_sector_flow_history(['XLB','XLC','XLE'], '20260401', '20260415')` -> `30` rows
+  LSP diagnostics on affected files -> `0` errors
+- Deslop pass:
+  scoped only to the Ralph-owned files.
+  removed the remaining misleading `yfinance`-specific error strings in the new direct-adapter path and trimmed unused imports.
+- Architect review:
+  `APPROVE`
+  no blocking findings.
+- Remaining risks:
+  real Yahoo payload drift and DST-edge timestamps are still integration risks because tests use mocked chart payloads.
+
 # 2026-04-12 - Ralph: Windows Child-Process Launch Recovery
 
 Status: In progress
@@ -3326,3 +3505,90 @@ Review:
 - `omx doctor` verification result: `12 passed, 0 warnings, 0 failed`. The doctor resolved setup scope from `.omx/setup-scope.json`, found Codex CLI `0.117.0`, Node `v22.20.0`, cargo-backed Explore Harness readiness, OMX config entries, 20 prompts, 25 skills, the user-scope `AGENTS.md`, the repo `.omx/state` directory, and 5 configured MCP servers.
 - Repo-side change footprint stayed minimal: `git status --short` only showed `tasks/todo.md` as a tracked modification after the refresh because `.omx/` remains ignored.
 - Residual note: `omx setup` refreshed the user `config.toml`, so any future manual diffing of `C:\Users\k1190\.codex\config.toml` should compare against the new backup timestamp above rather than the earlier 2026-04-09 setup backup.
+
+## 76) Ralplan: 국면 판정 / 섹터 적합성 로직 정교화 플랜 (2026-04-15)
+
+Planning scope:
+- 목표: `국면 판정 로직`과 `해당 국면에 적합한 섹터 판정 로직`을 같은 변경으로 뭉개지 않고, 증거 계약을 먼저 맞춘 뒤 단계적으로 정교화한다.
+- 배경: `docs/regime-validity-2026-02-25.md` / `docs/sector-mapping-validation.md`의 오래된 표본 해석과, 최근 `tasks/todo.md`에 기록된 refreshed confirmed counts가 충돌한다.
+- 원칙: parity-first, minimal extraction, gated semantics, additive sector-fit evidence.
+
+Execution checklist:
+- [x] Stage 0A: 현재 curated snapshot 기준 dashboard-parity artifact 생성
+- [x] Stage 0A: provisional / label / confirmation 정책을 명시하고 테스트로 고정
+- [x] Stage 0A: parity artifact와 refreshed confirmed counts의 일치 여부 또는 delta 원인 명시
+- [x] Stage 0B: 2026-02-25 문서와 현재 canonical path를 historical/current로 분리
+- [x] Stage 0B: config 주석, UI copy, UI tests를 parity artifact 기준으로 정렬
+- [x] Stage 1 gate: confirmed-vs-raw divergence / action churn / PIT gap / unexplained stability 문제를 수치로 판정
+- [x] Stage 1: gate가 열릴 때만 one-leg-Flat carry experiment 수행
+- [x] Stage 2A: confirmed-regime 기준 sector-fit evidence 재평가 및 cross-regime strength 보고
+- [x] Stage 2B gate: additive-only runtime surfacing 필요성 검증
+- [x] Mapping edits decision: sample-size 공개 후 evidence 재평가를 했고, 이번 패스에서는 hard remap을 보류
+
+Review:
+- Planner, Architect, Critic 합의 결과: `APPROVE`
+- 채택안: parity reset -> stale-surface cleanup -> conditional classifier refinement -> sector-fit evidence -> optional additive runtime surfacing
+- 보류 원칙: `compute_action()`과 boolean `macro_fit`는 첫 패스에서 유지
+- 권위 소스: pinned curated snapshot + parity artifact
+- `tasks/todo.md` 역할: truth source가 아니라 reconciliation checkpoint
+- Stage 0A 결과:
+  `docs/regime-validity-dashboard-parity-2026-04-15.md`와 stable alias
+  `docs/regime-validity-dashboard-parity-current.md`
+  / `...-current-rankings.csv`를 생성했다.
+- Stage 1 결과:
+  `carry_single_flat_regime: true`를 도입했고,
+  `stage1_experiment: ACCEPTED (changed_pct=3.4, lag1=27.3->27.3)`로 확인했다.
+- Stage 2 결과:
+  `docs/sector-mapping-validation-dashboard-parity-2026-04-15.md`를 생성했고,
+  runtime에는 lag0 nowcast 실증 rank/note를 additive-only로 노출했다.
+- Mapping decision:
+  dashboard-parity confirmed-regime path에서 정적 map 적합률이 `2/11`로 낮고 cross-regime leadership이 강해,
+  이번 패스에서는 `config/sector_map.yml` hard remap보다 empirical fit 노출을 우선했다.
+
+## 77) Ralplan: 남은 리스크 클로저 플랜 (2026-04-15)
+
+Planning scope:
+- 목표: 첫 refinement pass 이후 남은 리스크를 닫되, 이미 끝난 parity/reset 작업은 다시 열지 않는다.
+- 대상 리스크:
+  - classifier-risk: `33/118 = 28.0%` raw-vs-confirmed divergence, neutral했던 첫 classifier experiment
+  - sector-map closure: `2/11` top-half hit, strong cross-regime overlap
+- 기본 원칙: `freeze/reporting first`, one named experiment only, no current-pass action redesign.
+
+Execution checklist:
+- [x] Stage 1R: classifier baseline/closure artifact 생성
+- [x] Stage 1R: `flat_to_prior_nonflat_bridge` pre-registration case 평가
+- [x] Stage 1R: named experiment case가 약해 classifier freeze 결정
+- [x] Stage 2R-A: sector-fit artifact + map gate만 평가
+- [x] Stage 2R-B: wording cleanup only
+- [x] runtime/action semantics는 이번 패스에서 유지
+- [x] stop decision을 docs / todo에 명시
+
+Review:
+- Planner, Architect, Critic 합의 결과: `APPROVE`
+- 기본 추천안: `Option 1`
+  `freeze classifier semantics now and improve reporting/wording only`
+- 예외 경로: `flat_to_prior_nonflat_bridge` pre-registration case가 fixed replay window에서 충분히 강할 때만 `Option 2` 허용
+- classifier semantics는 freeze했고, `compute_action()` redesign은 하지 않는다.
+- 권위 소스: canonical parity/reset artifact 재사용
+- classifier risk closure 결과:
+  `docs/regime-classifier-risk-closure-2026-04-15.md`
+  생성.
+  replay window는 `2016-04 -> 2026-01 (118 points)`.
+  `flat_to_prior_nonflat_bridge`
+  pre-registration은
+  `affected months 9`,
+  `changed_vs_current 0`,
+  `unexplained churn 0/1298 = 0.0%`
+  로 약하다고 판정되어 classifier semantics를 freeze했다.
+- sector-fit risk closure 결과:
+  `docs/sector-fit-risk-closure-2026-04-15.md`
+  생성.
+  canonical lag1 top-half hit-maximizing unique assignment과 current mapping이 일치함을 확인했다.
+  static map top-half hits는 `9/11 = 81.8%`까지 개선됐고,
+  lag1 candidate 자체는 `10/11 = 90.9%`를 보였다.
+  따라서 이번 패스에서 `config/sector_map.yml`은 empirical remap으로 갱신했다.
+- wording cleanup 결과:
+  runtime empirical fit은 `lag0 nowcast empirical reference`,
+  `not PIT`,
+  `not action-driving`
+  으로 명시했고, action shell은 그대로 유지했다.

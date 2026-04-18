@@ -1,5 +1,8 @@
 # 섹터-레짐 매핑 실증 검증 보고서
 
+> Historical snapshot note (2026-04-15): 이 문서는 2026-02 시점의 3년 price window + 구 raw-regime 경로를 기준으로 작성된 historical snapshot입니다.
+> 현재 canonical reference는 `docs/regime-validity-dashboard-parity-current.md`와 그에 맞춰 재실행한 최신 검증 결과입니다.
+
 > 작성일: 2026-02-25
 > 데이터 범위: 2023-02-27 ~ 2026-02-24 (약 3년)
 > 분석 유효 월수: 31개월 (Indeterminate 7개월 제외)

@@ -219,6 +219,25 @@ def _get_shared_session() -> _requests.Session:
     return _SHARED_SESSION
 
 
+def reset_krx_shared_session() -> None:
+    """Drop the shared KRX session so the next raw request re-warms a new one."""
+    global _SHARED_SESSION
+    with _SESSION_LOCK:
+        session = _SHARED_SESSION
+        _SHARED_SESSION = None
+    if session is not None:
+        try:
+            session.close()
+        except Exception:
+            logger.debug("KRX shared session close failed during reset.", exc_info=True)
+    login_id = _load_secret_or_env("KRX_ID")
+    login_pw = _load_secret_or_env("KRX_PW")
+    if login_id and login_pw:
+        _set_krx_login_state(False, "KRX session reset; next request will re-authenticate")
+    else:
+        _set_krx_login_state(None, "KRX session reset; KRX_ID/KRX_PW not configured")
+
+
 def _wrap_init_with_referer(init_fn):
     """Wrap pykrx transport initializer to enforce current KRX Referer."""
     if getattr(init_fn, _PATCH_ATTR, False):
@@ -288,22 +307,22 @@ def ensure_pykrx_transport_compat() -> None:
         # ── Shared-session patch (KRX 2026-02-27 세션 쿠키 의무화 대응) ──
         # pykrx는 요청마다 새 requests 객체를 생성해 쿠키가 보존되지 않는다.
         # Post.read / Get.read 를 공유 Session 을 사용하도록 교체한다.
-        _session = _get_shared_session()
-
         def _shared_post_read(self, **params):
+            session = _get_shared_session()
             headers = dict(getattr(self, "headers", {}) or {})
             headers.setdefault("Referer", KRX_REFERER)
             headers.setdefault("User-Agent", _BROWSER_UA)
             headers.setdefault("X-Requested-With", "XMLHttpRequest")
             headers.setdefault("Origin", "https://data.krx.co.kr")
-            return _session.post(self.url, headers=headers, data=params)
+            return session.post(self.url, headers=headers, data=params)
 
         def _shared_get_read(self, **params):
+            session = _get_shared_session()
             headers = dict(getattr(self, "headers", {}) or {})
             headers.setdefault("Referer", KRX_REFERER)
             headers.setdefault("User-Agent", _BROWSER_UA)
             headers.setdefault("X-Requested-With", "XMLHttpRequest")
-            return _session.get(self.url, headers=headers, params=params)
+            return session.get(self.url, headers=headers, params=params)
 
         webio.Post.read = _shared_post_read
         webio.Get.read = _shared_get_read
