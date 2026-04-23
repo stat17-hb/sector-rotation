@@ -67,6 +67,10 @@ LoaderResult = tuple[DataStatus, pd.DataFrame]
 - **Action domain**: `{"Strong Buy", "Watch", "Hold", "Avoid", "N/A"}`
 - `"N/A"` only when sector price data could not be loaded
 - **Null policy**: no nulls allowed in `index_code`, `action`, `macro_fit`
+- **KR compatibility note**:
+  - KR rows may additionally carry `macro_context_regime`, `action_policy`, `momentum_core_pass`, `momentum_rank_pass`, `taxonomy_kind`, and `taxonomy_label`
+- KR `macro_fit` / `macro_regime` remain populated for compatibility, stay inactive in KR action semantics, and are not sourced from the active KR sector-classification authority
+  - KR `action` is determined by `momentum_core_pass × trend_ok`; shared legacy paths may still use `macro_fit × momentum_strong`
 
 ---
 

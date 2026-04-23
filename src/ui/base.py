@@ -23,8 +23,10 @@ from src.ui.copy import (
     get_cycle_palette_items,
     get_cycle_phase_label,
     get_decision_label,
+    format_flow_cue_label,
     get_flow_profile_label,
     get_flow_reference_only_note,
+    get_flow_sigma_subject_label,
     get_flow_state_label,
     get_heatmap_palette_label,
     get_position_mode_label,
@@ -104,6 +106,15 @@ CYCLE_REGIME_PALETTE_LABELS: list[tuple[str, str]] = [
 ]
 
 HEATMAP_PALETTE_OPTIONS: tuple[str, ...] = ("classic", "contrast", "blue_orange")
+
+
+def _format_flow_cue(
+    *,
+    state_raw: str | None,
+    zscore: float | int | None,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> str:
+    return format_flow_cue_label(str(state_raw or "unavailable"), zscore, locale)
 
 
 def format_action_label(action: str, locale: UiLocale = DEFAULT_UI_LOCALE) -> str:
@@ -270,6 +281,10 @@ def is_signal_held(signal, held_sectors: Sequence[str] | None = None) -> bool:
     return bool(sector_name) and sector_name in held
 
 
+def _is_kr_momentum_only(signal) -> bool:
+    return str(getattr(signal, "action_policy", "") or "") == "KR_MOMENTUM_ONLY"
+
+
 def describe_signal_decision(
     signal,
     held_sectors: Sequence[str] | None = None,
@@ -292,6 +307,12 @@ def describe_signal_decision(
     sector_fit_total = getattr(signal, "sector_fit_total", None)
     sector_fit_note = str(getattr(signal, "sector_fit_note", "") or "").strip()
     alerts = [str(item).strip() for item in getattr(signal, "alerts", []) if str(item).strip()]
+    momentum_method = str(getattr(signal, "momentum_method", "") or "")
+    mom_percentile = _safe_float(getattr(signal, "mom_percentile", None))
+    mom_raw = _pct_value(getattr(signal, "mom_raw", None))
+    is_hybrid = momentum_method == "hybrid_return_rank_v1"
+    is_kr_momentum_only = _is_kr_momentum_only(signal)
+    macro_context_regime = str(getattr(signal, "macro_context_regime", "") or "").strip() or "Indeterminate"
 
     has_flow_overlay = flow_adjustment in {"upgrade", "downgrade"} or flow_state != "unavailable"
     stack_labels = [get_ui_text("judgment_structure_base", locale)]
@@ -307,11 +328,17 @@ def describe_signal_decision(
     )
 
     positive_parts: list[str] = []
-    if bool(getattr(signal, "macro_fit", False)):
+    if bool(getattr(signal, "macro_fit", False)) and not is_kr_momentum_only:
         positive_parts.append(get_ui_text("reason_regime_fit", locale))
-    if rs_div is not None:
+    if is_hybrid and mom_percentile is not None:
+        positive_parts.append(get_ui_text("reason_momentum_percentile", locale, value=mom_percentile))
+    if is_hybrid and mom_raw is not None:
+        positive_parts.append(get_ui_text("reason_momentum_raw", locale, value=mom_raw))
+    if not is_hybrid and rs_div is not None:
         positive_parts.append(get_ui_text("reason_rs_vs_trend", locale, value=rs_div))
-    if bool(getattr(signal, "trend_ok", False)):
+    if is_hybrid and bool(getattr(signal, "trend_ok", False)):
+        positive_parts.append(get_ui_text("reason_trend_200dma", locale))
+    elif not is_hybrid and bool(getattr(signal, "trend_ok", False)):
         positive_parts.append(get_ui_text("reason_trend_intact", locale))
     if ret_3m is not None:
         positive_parts.append(get_ui_text("reason_return_3m", locale, value=ret_3m))
@@ -337,11 +364,15 @@ def describe_signal_decision(
     reason = " | ".join(positive_parts[:3]) if positive_parts else get_ui_text("reason_need_confirming_strength", locale)
 
     risk_parts: list[str] = []
-    if not bool(getattr(signal, "macro_fit", False)):
+    if not bool(getattr(signal, "macro_fit", False)) and not is_kr_momentum_only:
         risk_parts.append(get_ui_text("risk_regime_mismatch", locale))
-    if rs_div is not None and rs_div < 0:
+    if is_hybrid and (mom_percentile is None or mom_percentile < 60.0):
+        risk_parts.append(get_ui_text("risk_momentum_rank_fail", locale))
+    if not is_hybrid and rs_div is not None and rs_div < 0:
         risk_parts.append(get_ui_text("risk_rs_below_trend", locale, value=rs_div))
-    if not bool(getattr(signal, "trend_ok", False)):
+    if is_hybrid and not bool(getattr(signal, "trend_ok", False)):
+        risk_parts.append(get_ui_text("risk_price_below_200dma", locale))
+    elif not is_hybrid and not bool(getattr(signal, "trend_ok", False)):
         risk_parts.append(get_ui_text("risk_trend_weakened", locale))
     if volatility is not None and volatility >= 25.0:
         risk_parts.append(get_ui_text("risk_volatility", locale, value=volatility))
@@ -364,6 +395,16 @@ def describe_signal_decision(
 
     if action == "N/A":
         invalidation = get_ui_text("invalid_wait_for_data", locale)
+    elif is_kr_momentum_only:
+        invalidation = (
+            get_ui_text("invalid_kr_momentum_break", locale)
+            if bool(getattr(signal, "momentum_core_pass", False)) and bool(getattr(signal, "trend_ok", False))
+            else get_ui_text("invalid_kr_reentry", locale)
+        )
+    elif is_hybrid and bool(getattr(signal, "macro_fit", False)) and bool(getattr(signal, "trend_ok", False)):
+        invalidation = get_ui_text("invalid_hybrid_break", locale)
+    elif is_hybrid:
+        invalidation = get_ui_text("invalid_hybrid_recovery", locale)
     elif bool(getattr(signal, "macro_fit", False)) and bool(getattr(signal, "trend_ok", False)):
         invalidation = get_ui_text("invalid_break_regime_fit", locale)
     elif bool(getattr(signal, "macro_fit", False)):
@@ -374,7 +415,11 @@ def describe_signal_decision(
         invalidation = get_ui_text("invalid_promote_after_improve", locale)
 
     rs_trend = (
-        get_ui_text("rs_trend_above", locale)
+        get_ui_text("momentum_state_strong", locale)
+        if is_hybrid and bool(getattr(signal, "momentum_strong", False))
+        else get_ui_text("momentum_state_weak", locale)
+        if is_hybrid
+        else get_ui_text("rs_trend_above", locale)
         if rs_div is not None and rs_div >= 0
         else get_ui_text("rs_trend_below", locale)
         if rs_div is not None
@@ -391,17 +436,46 @@ def describe_signal_decision(
     if flow_adjustment in {"upgrade", "downgrade"}:
         alerts_display.append(f"{base_action} -> {action}")
     alerts_text = ", ".join(alerts_display) if alerts_display else get_ui_text("alerts_none", locale)
-    regime_fit = get_ui_text("regime_fit_yes", locale) if bool(getattr(signal, "macro_fit", False)) else get_ui_text("regime_fit_no", locale)
-    conclusion = get_ui_text(
-        "conclusion_template",
-        locale,
-        decision=decision,
-        regime_fit=regime_fit,
-        rs_trend=rs_trend,
-        return_3m=return_3m,
-        volatility_20d=volatility_20d,
-        alerts_text=alerts_text,
+    regime_fit = (
+        get_ui_text("regime_reference", locale, value=macro_context_regime)
+        if is_kr_momentum_only
+        else get_ui_text("regime_fit_yes", locale)
+        if bool(getattr(signal, "macro_fit", False))
+        else get_ui_text("regime_fit_no", locale)
     )
+    if is_kr_momentum_only:
+        conclusion = get_ui_text(
+            "conclusion_template_kr",
+            locale,
+            decision=decision,
+            macro_context=regime_fit,
+            momentum_state=rs_trend,
+            return_3m=return_3m,
+            volatility_20d=volatility_20d,
+            alerts_text=alerts_text,
+        )
+    elif is_hybrid:
+        conclusion = get_ui_text(
+            "conclusion_template_hybrid",
+            locale,
+            decision=decision,
+            regime_fit=regime_fit,
+            momentum_state=rs_trend,
+            return_3m=return_3m,
+            volatility_20d=volatility_20d,
+            alerts_text=alerts_text,
+        )
+    else:
+        conclusion = get_ui_text(
+            "conclusion_template",
+            locale,
+            decision=decision,
+            regime_fit=regime_fit,
+            rs_trend=rs_trend,
+            return_3m=return_3m,
+            volatility_20d=volatility_20d,
+            alerts_text=alerts_text,
+        )
 
     return {
         "held": held,
@@ -415,6 +489,7 @@ def describe_signal_decision(
         "sector_fit_rank": sector_fit_rank_text,
         "sector_fit_note": sector_fit_note or get_ui_text("sector_fit_note_none", locale),
         "rs_trend": rs_trend,
+        "momentum_label": "Momentum state" if is_hybrid and str(locale) == "en" else "모멘텀 상태" if is_hybrid else "RS 추세",
         "return_3m": return_3m,
         "volatility_20d": volatility_20d,
         "alerts_text": alerts_text,
@@ -435,7 +510,11 @@ def filter_signals_for_display(
     """Apply the dashboard's user-controlled filters to a signal sequence."""
     filtered = list(signals)
     if filter_regime_only and current_regime:
-        filtered = [signal for signal in filtered if getattr(signal, "macro_regime", None) == current_regime]
+        filtered = [
+            signal
+            for signal in filtered
+            if _is_kr_momentum_only(signal) or getattr(signal, "macro_regime", None) == current_regime
+        ]
     if filter_action and not _is_all_action_filter(filter_action):
         filtered = [signal for signal in filtered if getattr(signal, "action", None) == filter_action]
 
@@ -455,6 +534,16 @@ def signal_display_sort_key(signal, held_sectors: Sequence[str] | None = None) -
     """Return a stable display-order key that prioritizes held sectors first."""
     held = is_signal_held(signal, held_sectors)
     priority_map = HELD_ACTION_PRIORITY if held else NEW_ACTION_PRIORITY
+    if str(getattr(signal, "momentum_method", "")) == "hybrid_return_rank_v1":
+        mom_rank = getattr(signal, "mom_rank", None)
+        mom_raw = _safe_float(getattr(signal, "mom_raw", None))
+        return (
+            0 if held else 1,
+            priority_map.get(str(getattr(signal, "action", "N/A")), 99),
+            int(mom_rank) if mom_rank is not None else 9999,
+            -(mom_raw if mom_raw is not None else -999.0),
+            str(getattr(signal, "sector_name", "")),
+        )
     trailing_return = _safe_float(getattr(signal, "returns", {}).get("3M"))
     return (
         0 if held else 1,
@@ -497,6 +586,13 @@ def build_investor_flow_glance_rows(
                     locale,
                 ),
                 "foreign_raw": str(getattr(signal, "foreign_flow_state", "unavailable") or "unavailable"),
+                "foreign_ratio": _safe_float(getattr(signal, "foreign_flow_ratio", None)),
+                "foreign_cue": _format_flow_cue(
+                    state_raw=str(getattr(signal, "foreign_flow_state", "unavailable") or "unavailable"),
+                    zscore=getattr(signal, "foreign_flow_z", None),
+                    locale=locale,
+                ),
+                "foreign_cue_raw": str(getattr(signal, "foreign_flow_state", "unavailable") or "unavailable"),
                 "institutional": get_flow_state_label(
                     str(getattr(signal, "institutional_flow_state", "unavailable") or "unavailable"),
                     locale,
@@ -504,11 +600,27 @@ def build_investor_flow_glance_rows(
                 "institutional_raw": str(
                     getattr(signal, "institutional_flow_state", "unavailable") or "unavailable"
                 ),
+                "institutional_ratio": _safe_float(getattr(signal, "institutional_flow_ratio", None)),
+                "institutional_cue": _format_flow_cue(
+                    state_raw=str(getattr(signal, "institutional_flow_state", "unavailable") or "unavailable"),
+                    zscore=getattr(signal, "institutional_flow_z", None),
+                    locale=locale,
+                ),
+                "institutional_cue_raw": str(
+                    getattr(signal, "institutional_flow_state", "unavailable") or "unavailable"
+                ),
                 "retail": get_flow_state_label(
                     str(getattr(signal, "retail_flow_state", "unavailable") or "unavailable"),
                     locale,
                 ),
                 "retail_raw": str(getattr(signal, "retail_flow_state", "unavailable") or "unavailable"),
+                "retail_ratio": _safe_float(getattr(signal, "retail_flow_ratio", None)),
+                "retail_cue": _format_flow_cue(
+                    state_raw=str(getattr(signal, "retail_flow_state", "unavailable") or "unavailable"),
+                    zscore=getattr(signal, "retail_flow_z", None),
+                    locale=locale,
+                ),
+                "retail_cue_raw": str(getattr(signal, "retail_flow_state", "unavailable") or "unavailable"),
             }
         )
 
@@ -519,6 +631,7 @@ def build_investor_flow_glance_rows(
 def build_investor_flow_snapshot_rows(
     flow_frame: pd.DataFrame | None,
     *,
+    shared_flow_summary_map: Mapping[str, object] | None = None,
     locale: UiLocale = DEFAULT_UI_LOCALE,
 ) -> list[dict[str, object]]:
     """Return latest-date investor-flow rows grouped by sector for raw snapshot fallback."""
@@ -537,12 +650,21 @@ def build_investor_flow_snapshot_rows(
         "개인": "retail",
     }
     grouped: list[dict[str, object]] = []
-    for sector_name, sector_rows in latest_rows.groupby(latest_rows["sector_name"].astype(str)):
+    summary_map = dict(shared_flow_summary_map or {})
+    for sector_code, sector_rows in latest_rows.groupby(latest_rows["sector_code"].astype(str)):
+        sector_code_str = str(sector_code)
+        sector_name = str(sector_rows["sector_name"].iloc[-1])
+        summary = summary_map.get(sector_code_str)
         row: dict[str, object] = {
-            "sector": str(sector_name),
-            "flow_score": 0.0,
+            "sector": sector_name,
+            "sector_code": sector_code_str,
+            "flow_score": _safe_float(getattr(summary, "flow_score", None)) or 0.0,
+            "flow_state": get_flow_state_label(
+                str(getattr(summary, "flow_state", "unavailable") or "unavailable"),
+                locale,
+            ),
+            "flow_state_raw": str(getattr(summary, "flow_state", "unavailable") or "unavailable"),
         }
-        strength = 0.0
         for investor_label in expected_order:
             investor_key = expected_keys[investor_label]
             investor_rows = sector_rows[sector_rows["investor_type"].astype(str) == investor_label]
@@ -553,12 +675,17 @@ def build_investor_flow_snapshot_rows(
             row[investor_key] = (
                 f"{ratio:+.2%}" if ratio is not None else get_flow_state_label("unavailable", locale)
             )
-            if ratio is not None:
-                strength += abs(float(ratio))
-        row["flow_score"] = strength
+            component = getattr(summary, investor_key, None) if summary is not None else None
+            component_state = str(getattr(component, "state", "unavailable") or "unavailable")
+            row[f"{investor_key}_cue"] = _format_flow_cue(
+                state_raw=component_state,
+                zscore=getattr(component, "zscore", None),
+                locale=locale,
+            )
+            row[f"{investor_key}_cue_raw"] = component_state
         grouped.append(row)
 
-    grouped.sort(key=lambda item: (-float(item["flow_score"]), str(item["sector"])))
+    grouped.sort(key=lambda item: (-abs(float(item["flow_score"])), str(item["sector"])))
     return grouped
 
 
@@ -597,6 +724,7 @@ __all__ = [
     "get_regime_subtitle",
     "get_ui_text",
     "get_flow_profile_label",
+    "get_flow_sigma_subject_label",
     "get_flow_reference_only_note",
     "get_flow_state_label",
     "normalize_action_filter",

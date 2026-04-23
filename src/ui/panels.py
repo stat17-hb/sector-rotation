@@ -104,6 +104,44 @@ def render_status_strip(banner: Mapping[str, object] | None) -> None:
                 st.write(f"- {detail}")
 
 
+def render_progress_panel(host, event: Mapping[str, object] | None) -> None:
+    """Render a task progress panel into the provided placeholder/container host."""
+    if host is None:
+        return
+    if not event:
+        host.empty()
+        return
+
+    task = str(event.get("task", "작업 진행")).strip() or "작업 진행"
+    phase = str(event.get("phase", "")).strip()
+    detail = str(event.get("detail", "")).strip()
+    status = str(event.get("status", "running")).strip().lower() or "running"
+    try:
+        pct = int(round(float(event.get("pct", 0) or 0)))
+    except Exception:
+        pct = 0
+    pct = max(0, min(100, pct))
+
+    host.empty()
+    with host.container():
+        badge = {
+            "running": "진행 중",
+            "complete": "완료",
+            "error": "실패",
+        }.get(status, status.upper())
+        st.caption(f"{task} · {badge} · {pct}%")
+        st.progress(pct)
+        if phase:
+            st.markdown(f"**{phase}**")
+        if detail:
+            if status == "error":
+                st.error(detail)
+            elif status == "complete":
+                st.success(detail)
+            else:
+                st.caption(detail)
+
+
 def render_panel_header(
     *,
     eyebrow: str,
@@ -146,11 +184,11 @@ def render_analysis_toolbar(
 
     summary_markup = (
         '<div class="analysis-toolbar__summary">'
-        '<div class="analysis-toolbar__summary-item"><span>기간</span>'
+        f'<div class="analysis-toolbar__summary-item"><span>{html.escape(get_ui_text("analysis_toolbar_period_label", locale))}</span>'
         f"<strong>{html.escape(str(start_date))} - {html.escape(str(end_date))}</strong></div>"
-        '<div class="analysis-toolbar__summary-item"><span>사이클</span>'
+        f'<div class="analysis-toolbar__summary-item"><span>{html.escape(get_ui_text("analysis_toolbar_cycle_label", locale))}</span>'
         f"<strong>{html.escape(format_cycle_phase_label(selected_cycle_phase, locale=locale))}</strong></div>"
-        '<div class="analysis-toolbar__summary-item"><span>섹터</span>'
+        f'<div class="analysis-toolbar__summary-item"><span>{html.escape(get_ui_text("analysis_toolbar_sector_label", locale))}</span>'
         f"<strong>{html.escape(selected_sector or '자동')}</strong></div>"
         "</div>"
     )
@@ -158,8 +196,8 @@ def render_analysis_toolbar(
     st.markdown(
         (
             '<div class="analysis-toolbar">'
-            '<div class="analysis-toolbar__eyebrow">분석 설정</div>'
-            '<div class="analysis-toolbar__title">기간을 먼저 설정한 후, 경기 국면과 섹터 리더십을 분석하세요.</div>'
+            f'<div class="analysis-toolbar__eyebrow">{html.escape(get_ui_text("analysis_toolbar_eyebrow", locale))}</div>'
+            f'<div class="analysis-toolbar__title">{html.escape(get_ui_text("analysis_toolbar_title", locale))}</div>'
             f"{summary_markup}"
             "</div>"
         ),
@@ -170,21 +208,21 @@ def render_analysis_toolbar(
         start_col, end_col, preset_col, apply_col = st.columns([1.2, 1.2, 1.6, 0.72])
         with start_col:
             start_input = st.date_input(
-                "시작일",
+                get_ui_text("analysis_toolbar_start_date", locale),
                 value=start_date,
                 min_value=min_date,
                 max_value=max_date,
             )
         with end_col:
             end_input = st.date_input(
-                "종료일",
+                get_ui_text("analysis_toolbar_end_date", locale),
                 value=end_date,
                 min_value=min_date,
                 max_value=max_date,
             )
         with preset_col:
             preset_input = st.segmented_control(
-                "빠른 기간 선택",
+                get_ui_text("analysis_toolbar_preset_label", locale),
                 options=["1Y", "3Y", "5Y", "ALL", "CUSTOM"],
                 default=current_preset,
                 format_func=lambda value: format_range_preset_label(value, locale=locale),
@@ -193,7 +231,11 @@ def render_analysis_toolbar(
                 width="stretch",
             )
         with apply_col:
-            submitted = st.form_submit_button("적용", width="stretch", type="primary")
+            submitted = st.form_submit_button(
+                get_ui_text("analysis_toolbar_apply", locale),
+                width="stretch",
+                type="primary",
+            )
 
     if not submitted:
         return start_date, end_date, current_preset, False
@@ -221,10 +263,91 @@ def render_analysis_toolbar(
     return start_final, end_final, inferred, True
 
 
+def render_stock_lookup_control(
+    *,
+    market_id: str,
+    query_value: str,
+    status: str = "",
+    message: str = "",
+    display_model: Mapping[str, Any] | None = None,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> tuple[str, bool]:
+    """Render the stock -> sector lookup control and return (query, submitted)."""
+    normalized_market = str(market_id or "KR").strip().upper() or "KR"
+    market_note_key = "stock_lookup_market_note_us" if normalized_market == "US" else "stock_lookup_market_note_kr"
+
+    st.markdown(
+        (
+            '<div class="analysis-toolbar">'
+            f'<div class="analysis-toolbar__eyebrow">{html.escape(get_ui_text("stock_lookup_eyebrow", locale))}</div>'
+            f'<div class="analysis-toolbar__title">{html.escape(get_ui_text("stock_lookup_title", locale))}</div>'
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+    st.caption(get_ui_text(market_note_key, locale))
+
+    with st.form("stock_lookup_form"):
+        query_col, submit_col = st.columns([3.2, 0.8])
+        with query_col:
+            query_input = st.text_input(
+                get_ui_text("stock_lookup_label", locale),
+                value=str(query_value or ""),
+            )
+        with submit_col:
+            submitted = st.form_submit_button(
+                get_ui_text("stock_lookup_apply", locale),
+                width="stretch",
+                type="primary",
+            )
+
+    normalized_status = str(status or "").strip().lower()
+    if str(message or "").strip():
+        if normalized_status == "success":
+            st.success(message)
+        elif normalized_status in {"ambiguous", "error"}:
+            st.warning(message)
+        else:
+            st.info(message)
+
+    detail = dict(display_model or {})
+    matched_sectors = list(detail.get("matched_sectors") or [])
+    canonical_sector = dict(detail.get("canonical_sector") or {})
+    result = dict(detail.get("result") or {})
+    if matched_sectors:
+        selected_code = str(canonical_sector.get("sector_code", "")).strip()
+        selected_suffix = get_ui_text("stock_lookup_selected_suffix", locale)
+        st.caption(get_ui_text("stock_lookup_matches_label", locale))
+        for candidate in matched_sectors:
+            sector_name = str(candidate.get("sector_name", "")).strip()
+            effective = str(candidate.get("snapshot_date") or candidate.get("resolved_from") or "").strip()
+            if sector_name:
+                selected = str(candidate.get("sector_code", "")).strip() == selected_code
+                label = f"{sector_name} ({selected_suffix})" if selected else sector_name
+                suffix = f" ({effective})" if effective else ""
+                st.markdown(f"- {label}{suffix}")
+    if result:
+        provenance_bits: list[str] = []
+        basis = str(result.get("canonicalization_basis", "")).strip()
+        date_mode = str(result.get("match_date_mode", "")).strip()
+        effective_date = str(result.get("match_effective_date", "")).strip()
+        if basis:
+            provenance_bits.append(basis)
+        if date_mode:
+            provenance_bits.append(date_mode)
+        if effective_date:
+            provenance_bits.append(effective_date)
+        if provenance_bits:
+            st.caption(f"{get_ui_text('stock_lookup_provenance_label', locale)}: {' · '.join(provenance_bits)}")
+
+    return str(query_input or ""), submitted
+
+
 def render_top_bar_filters(
     *,
     current_regime: str,
     action_options: Sequence[str],
+    enable_regime_filter: bool = True,
     filter_action_key: str = "filter_action_global",
     filter_regime_key: str = "filter_regime_only_global",
     position_mode_key: str = "position_mode",
@@ -233,6 +356,9 @@ def render_top_bar_filters(
     locale: UiLocale = DEFAULT_UI_LOCALE,
 ) -> tuple[str, bool, str, bool]:
     """Render high-frequency filters in the main content area."""
+    if not enable_regime_filter:
+        st.session_state[filter_regime_key] = False
+
     with st.container(border=True):
         st.markdown(
             (
@@ -243,6 +369,7 @@ def render_top_bar_filters(
             ),
             unsafe_allow_html=True,
         )
+        st.caption(get_ui_text("command_bar_scope_note", locale))
 
         if is_mobile:
             st.selectbox(
@@ -251,10 +378,11 @@ def render_top_bar_filters(
                 format_func=lambda value: get_action_filter_label(value, locale),
                 key=filter_action_key,
             )
-            st.toggle(
-                get_ui_text("filter_regime_only", locale),
-                key=filter_regime_key,
-            )
+            if enable_regime_filter:
+                st.toggle(
+                    get_ui_text("filter_regime_only", locale),
+                    key=filter_regime_key,
+                )
             st.segmented_control(
                 get_ui_text("filter_position_scope", locale),
                 options=list(POSITION_MODE_OPTIONS),
@@ -269,7 +397,13 @@ def render_top_bar_filters(
                 key=alerted_only_key,
             )
         else:
-            filter_col, toggle_col, mode_col, alerted_col, summary_col = st.columns([1.4, 1.0, 1.4, 1.0, 2.4])
+            column_spec = [1.4, 1.4, 1.0, 2.4] if not enable_regime_filter else [1.4, 1.0, 1.4, 1.0, 2.4]
+            columns = st.columns(column_spec)
+            if enable_regime_filter:
+                filter_col, toggle_col, mode_col, alerted_col, summary_col = columns
+            else:
+                filter_col, mode_col, alerted_col, summary_col = columns
+                toggle_col = None
             with filter_col:
                 st.selectbox(
                     get_ui_text("filter_action", locale),
@@ -277,11 +411,12 @@ def render_top_bar_filters(
                     format_func=lambda value: get_action_filter_label(value, locale),
                     key=filter_action_key,
                 )
-            with toggle_col:
-                st.toggle(
-                    get_ui_text("filter_regime_only", locale),
-                    key=filter_regime_key,
-                )
+            if toggle_col is not None:
+                with toggle_col:
+                    st.toggle(
+                        get_ui_text("filter_regime_only", locale),
+                        key=filter_regime_key,
+                    )
             with mode_col:
                 st.segmented_control(
                     get_ui_text("filter_position_scope", locale),
@@ -299,7 +434,7 @@ def render_top_bar_filters(
                 )
             with summary_col:
                 current_action = str(st.session_state.get(filter_action_key, action_options[0]))
-                regime_only = bool(st.session_state.get(filter_regime_key, False))
+                regime_only = bool(st.session_state.get(filter_regime_key, False)) if enable_regime_filter else False
                 position_mode = normalize_position_mode(str(st.session_state.get(position_mode_key, "all")))
                 alerted_only = bool(st.session_state.get(alerted_only_key, False))
                 scope_label = get_ui_text("scope_matching_regime", locale) if regime_only else get_ui_text("scope_full_universe", locale)
@@ -323,7 +458,7 @@ def render_top_bar_filters(
 
         if is_mobile:
             current_action = str(st.session_state.get(filter_action_key, action_options[0]))
-            regime_only = bool(st.session_state.get(filter_regime_key, False))
+            regime_only = bool(st.session_state.get(filter_regime_key, False)) if enable_regime_filter else False
             position_mode = normalize_position_mode(str(st.session_state.get(position_mode_key, "all")))
             alerted_only = bool(st.session_state.get(alerted_only_key, False))
             scope_label = get_ui_text("scope_matching_regime", locale) if regime_only else get_ui_text("scope_full_universe", locale)
@@ -501,10 +636,14 @@ def render_investor_flow_summary(
     investor_flow_profile: str,
     investor_flow_frame: pd.DataFrame | None = None,
     investor_flow_detail: Mapping[str, object] | None = None,
+    shared_flow_summary_map: Mapping[str, object] | None = None,
+    flow_short_window: int = 20,
+    flow_long_window: int = 60,
     locale: UiLocale = DEFAULT_UI_LOCALE,
 ) -> None:
     """Render a compact KR investor-flow snapshot under the status cards."""
-    if not signals:
+    has_display_frame = isinstance(investor_flow_frame, pd.DataFrame) and not investor_flow_frame.empty
+    if not signals and not has_display_frame:
         return
 
     with st.container(border=True):
@@ -514,6 +653,15 @@ def render_investor_flow_summary(
             description=get_ui_text("flow_summary_description", locale),
             badge=f"{investor_flow_status} · {get_flow_profile_label(investor_flow_profile, locale)}",
         )
+        with st.expander(get_ui_text("flow_sigma_explainer_toggle", locale), expanded=False):
+            st.markdown(
+                get_ui_text(
+                    "flow_sigma_explainer_body",
+                    locale,
+                    short_window=int(flow_short_window),
+                    long_window=int(flow_long_window),
+                )
+            )
         st.caption(get_ui_text("flow_sidebar_caption", locale))
         reference_only_note = get_flow_reference_only_note(
             investor_flow_status,
@@ -521,7 +669,6 @@ def render_investor_flow_summary(
             investor_flow_detail,
             locale,
         )
-        has_display_frame = isinstance(investor_flow_frame, pd.DataFrame) and not investor_flow_frame.empty
         if reference_only_note and has_display_frame:
             st.warning(reference_only_note)
 
@@ -531,6 +678,7 @@ def render_investor_flow_summary(
         )
         snapshot_rows = build_investor_flow_snapshot_rows(
             investor_flow_frame,
+            shared_flow_summary_map=shared_flow_summary_map,
             locale=locale,
         )
         rows = signal_rows or snapshot_rows
@@ -578,6 +726,12 @@ def render_investor_flow_summary(
                 str(row["flow_state"]) if use_signal_rows else "참고용 raw snapshot"
             )
             score_label = f'{get_ui_text("flow_col_score", locale)} {float(row["flow_score"]):+.2f}'
+            show_score_label = use_signal_rows or str(row.get("flow_state_raw", "unavailable")) != "unavailable"
+            score_html = (
+                f'<span style="font-size:0.8rem; color:var(--text-muted); font-weight:700;">{html.escape(score_label)}</span>'
+                if show_score_label
+                else ""
+            )
             badge_tone = (
                 _state_tone(str(row["flow_state_raw"]))
                 if use_signal_rows
@@ -591,19 +745,19 @@ def render_investor_flow_summary(
                         get_ui_text("flow_col_foreign", locale),
                         str(row["foreign"]),
                         str(row.get("foreign_raw", "")),
-                        ratio=_safe_float(row.get("foreign_ratio")),
+                        ratio=None if use_signal_rows else _safe_float(row.get("foreign_ratio")),
                     ),
                     _participant_chip(
                         get_ui_text("flow_col_institutional", locale),
                         str(row["institutional"]),
                         str(row.get("institutional_raw", "")),
-                        ratio=_safe_float(row.get("institutional_ratio")),
+                        ratio=None if use_signal_rows else _safe_float(row.get("institutional_ratio")),
                     ),
                     _participant_chip(
                         get_ui_text("flow_col_retail", locale),
                         str(row["retail"]),
                         str(row.get("retail_raw", "")),
-                        ratio=_safe_float(row.get("retail_ratio")),
+                        ratio=None if use_signal_rows else _safe_float(row.get("retail_ratio")),
                     ),
                 ]
             )
@@ -616,6 +770,22 @@ def render_investor_flow_summary(
                 if use_signal_rows and not reference_only_note and bool(row["has_action_change"])
                 else ""
             )
+            cue_parts = []
+            for label, key in (
+                (get_ui_text("flow_col_foreign", locale), "foreign"),
+                (get_ui_text("flow_col_institutional", locale), "institutional"),
+                (get_ui_text("flow_col_retail", locale), "retail"),
+            ):
+                cue = str(row.get(f"{key}_cue", "") or "").strip()
+                if cue:
+                    cue_parts.append(f"{label} {cue}")
+            cue_html = (
+                '<div style="margin-top:0.45rem; font-size:0.78rem; color:var(--text-muted);">'
+                f'{" · ".join(html.escape(part) for part in cue_parts)}'
+                '</div>'
+                if cue_parts
+                else ""
+            )
 
             card = (
                 '<div class="flow-card">'
@@ -624,12 +794,13 @@ def render_investor_flow_summary(
                 f'<div style="font-weight:800;">{sector}</div>'
                 f'<div style="display:flex; align-items:center; gap:0.5rem; flex-wrap:wrap;">'
                 f'<span class="{badge_class}">{flow_label}</span>'
-                f'<span style="font-size:0.8rem; color:var(--text-muted); font-weight:700;">{html.escape(score_label)}</span>'
+                f'{score_html}'
                 '</div>'
                 '</div>'
                 '</div>'
                 '<div class="flow-card__body" style="gap:0.65rem;">'
                 f'<div style="display:flex; gap:0.45rem; flex-wrap:wrap;">{chips_html}</div>'
+                f'{cue_html}'
                 f'{detail_html}'
                 '</div>'
                 '</div>'
@@ -647,12 +818,10 @@ def render_investor_decision_boards(
     signals: Sequence,
     held_sector_options: Sequence[str],
     held_sectors_key: str = "held_sectors",
-    limit: int = 6,
+    limit: int = 5,
     locale: UiLocale = DEFAULT_UI_LOCALE,
 ) -> list[str]:
     """Render practical-investing decision boards for held positions and new ideas."""
-    from src.ui.tables import render_top_picks_table
-
     raw_held = st.session_state.get(held_sectors_key, [])
     valid_held = [
         str(item)
@@ -664,9 +833,9 @@ def render_investor_decision_boards(
 
     with st.container(border=True):
         render_panel_header(
-            eyebrow="투자 결정 상황판",
-            title="보유 포지션 관리 및 신규 매수 탐색",
-            description="보유 섹터를 먼저 선택하면 추가/축소/신규 진입을 구분하여 제안합니다.",
+            eyebrow=get_ui_text("decision_lane_eyebrow", locale),
+            title=get_ui_text("decision_lane_title", locale),
+            description=get_ui_text("decision_lane_description", locale),
             badge=f"{len(valid_held)}개 보유",
         )
         selected_held = st.multiselect(
@@ -687,12 +856,11 @@ def render_investor_decision_boards(
                 description="보유 섹터의 추가 매수, 유지, 비중 축소, 청산 검토 후보를 제시합니다.",
                 badge=f"{len(selected_held)}개 추적 중",
             )
-            render_top_picks_table(
-                signals,
+            _render_decision_board_cards(
+                signals=signals,
                 held_sectors=selected_held,
                 position_mode="held",
                 limit=limit,
-                include_held=False,
                 locale=locale,
             )
 
@@ -703,16 +871,149 @@ def render_investor_decision_boards(
                 description="관심 종목 중 신규 진입 후보와 그렇지 않은 종목을 구분합니다.",
                 badge="기회 종목군",
             )
-            render_top_picks_table(
-                signals,
+            _render_decision_board_cards(
+                signals=signals,
                 held_sectors=selected_held,
                 position_mode="new",
                 limit=limit,
-                include_held=False,
                 locale=locale,
             )
 
     return [str(item) for item in selected_held if str(item).strip()]
+
+
+def _decision_board_empty_message(
+    position_mode: str,
+    held_sectors: Sequence[str] | None = None,
+    *,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> str:
+    normalized = normalize_position_mode(position_mode)
+    if normalized == "held" and not list(held_sectors or []):
+        return get_ui_text("top_picks_empty_held_missing", locale)
+    if normalized == "held":
+        return get_ui_text("top_picks_empty_held", locale)
+    if normalized == "new":
+        return get_ui_text("top_picks_empty_new", locale)
+    return get_ui_text("top_picks_empty_all", locale)
+
+
+def _decision_card_parts(text: object, *, limit: int = 3) -> list[str]:
+    parts = [str(part).strip() for part in str(text or "").split("|") if str(part).strip()]
+    deduped: list[str] = []
+    for part in parts:
+        if part not in deduped:
+            deduped.append(part)
+    return deduped[:limit]
+
+
+def _render_decision_card_chip(text: str, tone: str = "neutral") -> str:
+    normalized_tone = "neutral" if tone == "info" else tone
+    return (
+        f'<span class="flow-card__badge flow-card__badge--{html.escape(normalized_tone)}" '
+        'style="margin-left:0; margin-right:0.35rem; margin-bottom:0.35rem;">'
+        f"{html.escape(text)}"
+        "</span>"
+    )
+
+
+def _render_decision_board_cards(
+    *,
+    signals: Sequence,
+    held_sectors: Sequence[str] | None,
+    position_mode: str,
+    limit: int = 5,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> None:
+    filtered = filter_signals_for_display(
+        signals,
+        held_sectors=held_sectors,
+        position_mode=position_mode,
+    )
+    if not filtered:
+        st.info(_decision_board_empty_message(position_mode, held_sectors, locale=locale))
+        return
+
+    filtered = sorted(
+        filtered,
+        key=lambda signal: signal_display_sort_key(signal, held_sectors),
+    )[:limit]
+    context_label = get_ui_text(
+        "decision_context_held" if normalize_position_mode(position_mode) == "held" else "decision_context_new",
+        locale,
+    )
+
+    cards: list[str] = []
+    for rank, signal in enumerate(filtered, start=1):
+        thesis = describe_signal_decision(signal, held_sectors, locale=locale)
+        action = str(getattr(signal, "action", "N/A"))
+        action_tone = _action_tone(action)
+        reason_parts = _decision_card_parts(thesis.get("reason"), limit=3)
+        thesis_summary = f"{thesis['judgment_confidence']} · {reason_parts[0]}" if reason_parts else str(thesis["judgment_confidence"])
+        chips = [
+            _render_decision_card_chip(str(part), tone="neutral")
+            for part in reason_parts
+        ]
+        metrics = [
+            (
+                get_ui_text("decision_card_confidence", locale),
+                str(thesis["judgment_confidence"]),
+            ),
+            (
+                get_ui_text("decision_card_regime_fit", locale),
+                str(thesis["regime_fit"]),
+            ),
+            (
+                get_ui_text("period_3m", locale),
+                str(thesis["return_3m"]),
+            ),
+            (
+                get_ui_text("decision_card_sector_fit", locale),
+                str(thesis["sector_fit_rank"]),
+            ),
+        ]
+        metrics_html = "".join(
+            (
+                '<span class="top-pick-card__metric">'
+                f"<strong>{html.escape(label)}</strong>{html.escape(value)}"
+                "</span>"
+            )
+            for label, value in metrics
+            if str(value).strip()
+        )
+        cards.append(
+            (
+                '<div class="top-pick-card">'
+                '<div class="top-pick-card__header">'
+                '<div class="top-pick-card__title">'
+                f'<span class="top-pick-card__rank">{rank}.</span>'
+                f"{html.escape(str(getattr(signal, 'sector_name', '')))}"
+                f'{_render_decision_card_chip(context_label, tone="neutral")}'
+                f'{_render_decision_card_chip(str(thesis["decision"]), tone=action_tone)}'
+                "</div>"
+                "</div>"
+                '<div class="top-pick-card__body">'
+                '<div class="top-pick-card__row">'
+                f'<span class="top-pick-card__label">{html.escape(get_ui_text("decision_card_thesis", locale))}</span>'
+                f'<span class="top-pick-card__value">{html.escape(thesis_summary)}</span>'
+                "</div>"
+                '<div class="top-pick-card__row">'
+                f'<span class="top-pick-card__label">{html.escape(get_ui_text("decision_card_why", locale))}</span>'
+                f'<span class="top-pick-card__value"><span style="display:flex; flex-wrap:wrap;">{"".join(chips)}</span></span>'
+                "</div>"
+                '<div class="top-pick-card__row">'
+                f'<span class="top-pick-card__label">{html.escape(get_ui_text("decision_card_invalidation", locale))}</span>'
+                f'<span class="top-pick-card__value">{html.escape(str(thesis["invalidation"]))}</span>'
+                "</div>"
+                f'<div class="top-pick-card__metrics">{metrics_html}</div>'
+                "</div>"
+                "</div>"
+            )
+        )
+
+    st.markdown("".join(cards), unsafe_allow_html=True)
+    if any(getattr(signal, "is_provisional", False) for signal in filtered):
+        st.caption(get_ui_text("provisional_caption", locale))
 
 def render_sector_detail_panel(
     *,
@@ -779,6 +1080,7 @@ def render_sector_detail_panel(
             st.caption(str(detail_summary.get("conclusion", "")).strip())
             regime_fit_match = get_ui_text("regime_fit_yes", locale)
             rs_trend_above = get_ui_text("rs_trend_above", locale)
+            momentum_state_strong = get_ui_text("momentum_state_strong", locale)
             alerts_none = get_ui_text("alerts_none", locale)
             summary_cards = [
                 _render_card_html(
@@ -806,10 +1108,10 @@ def render_sector_detail_panel(
                     tone="info",
                 ),
                 _render_card_html(
-                    eyebrow="RS 추세",
+                    eyebrow=str(detail_summary.get("momentum_label", "RS 추세")),
                     value=str(detail_summary.get("rs_trend", "N/A")),
-                    detail="상대강도 맥락",
-                    tone="success" if rs_trend_above in str(detail_summary.get("rs_trend", "")) else "warning",
+                    detail="핵심 모멘텀 맥락",
+                    tone="success" if str(detail_summary.get("rs_trend", "")) in {rs_trend_above, momentum_state_strong} else "warning",
                 ),
                 _render_card_html(
                     eyebrow="3개월 수익률",

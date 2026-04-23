@@ -8,8 +8,10 @@ import pandas as pd
 import streamlit as st
 
 from config.theme import set_theme_mode
-from src.dashboard.analysis import _extract_heatmap_selection
+from src.dashboard.analysis import _extract_heatmap_selection, top_pick_sort_key
+from src.ui.copy import format_flow_cue_label
 from src.ui.components import (
+    ALL_ACTION_KEY,
     DEFAULT_UI_LOCALE,
     FLOW_PROFILE_IDS,
     HEATMAP_PALETTE_OPTIONS,
@@ -21,7 +23,9 @@ from src.ui.components import (
     format_cycle_phase_label,
     get_flow_profile_label,
     get_flow_reference_only_note,
+    get_flow_sigma_subject_label,
     get_flow_state_label,
+    filter_signals_for_display,
     format_heatmap_palette_label,
     get_ui_text,
     normalize_range_preset,
@@ -36,6 +40,7 @@ from src.ui.components import (
     render_rs_scatter,
     render_sector_detail_panel,
     render_signal_table,
+    signal_display_sort_key,
     render_status_card_row,
     render_top_bar_filters,
     render_top_picks_table,
@@ -54,6 +59,7 @@ def render_sidebar_controls(
     asof_default: date,
     probe_investor_flow_status: str = "SAMPLE",
     flow_profile: str = "foreign_lead",
+    momentum_method: str = "legacy_rs_ma_v0",
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> tuple[str, date, str, bool, bool, bool, bool]:
     market_options = ["KR", "US"]
@@ -109,13 +115,6 @@ def render_sidebar_controls(
                     step=0.05,
                     help="3MA 방향 판정 최소 변화량입니다. 0이면 모든 변화를 반영합니다.",
                 )
-                slider_rs_ma = st.slider(
-                    "RS MA 기간",
-                    min_value=5,
-                    max_value=60,
-                    value=int(st.session_state["rs_ma_period"]),
-                    step=1,
-                )
                 slider_price_years = st.slider(
                     "가격 데이터 기간(년)",
                     min_value=1,
@@ -123,29 +122,43 @@ def render_sidebar_controls(
                     value=int(st.session_state["price_years"]),
                     step=1,
                 )
+                slider_rs_ma = None
             with param_col2:
-                slider_ma_fast = st.slider(
-                    "빠른 MA",
-                    min_value=5,
-                    max_value=60,
-                    value=int(st.session_state["ma_fast"]),
-                    step=1,
-                )
-                slider_ma_slow = st.slider(
-                    "느린 MA",
-                    min_value=20,
-                    max_value=120,
-                    value=int(st.session_state["ma_slow"]),
-                    step=1,
-                )
+                slider_ma_fast = None
+                slider_ma_slow = None
+                if str(momentum_method) == "legacy_rs_ma_v0":
+                    slider_rs_ma = st.slider(
+                        "RS MA 기간",
+                        min_value=5,
+                        max_value=60,
+                        value=int(st.session_state["rs_ma_period"]),
+                        step=1,
+                    )
+                    slider_ma_fast = st.slider(
+                        "빠른 MA",
+                        min_value=5,
+                        max_value=60,
+                        value=int(st.session_state["ma_fast"]),
+                        step=1,
+                    )
+                    slider_ma_slow = st.slider(
+                        "느린 MA",
+                        min_value=20,
+                        max_value=120,
+                        value=int(st.session_state["ma_slow"]),
+                        step=1,
+                    )
+                else:
+                    st.info("KR 하이브리드 모멘텀 활성화 상태입니다. RS/MA 슬라이더는 진단용 레거시 로직에만 사용됩니다.")
 
             apply_params = st.form_submit_button("적용", width="stretch")
 
         if apply_params:
             st.session_state["epsilon"] = float(slider_epsilon)
-            st.session_state["rs_ma_period"] = int(slider_rs_ma)
-            st.session_state["ma_fast"] = int(slider_ma_fast)
-            st.session_state["ma_slow"] = int(slider_ma_slow)
+            if slider_rs_ma is not None and slider_ma_fast is not None and slider_ma_slow is not None:
+                st.session_state["rs_ma_period"] = int(slider_rs_ma)
+                st.session_state["ma_fast"] = int(slider_ma_fast)
+                st.session_state["ma_slow"] = int(slider_ma_slow)
             st.session_state["price_years"] = int(slider_price_years)
             st.rerun()
 
@@ -215,6 +228,12 @@ def render_analysis_canvas(
     signal_lookup: dict[str, Any] | None = None,
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
+    render_panel_header(
+        eyebrow=get_ui_text("analysis_canvas_eyebrow", ui_locale),
+        title=get_ui_text("analysis_canvas_title", ui_locale),
+        description=get_ui_text("analysis_canvas_description", ui_locale),
+        badge=format_cycle_phase_label(selected_cycle_phase, locale=ui_locale),
+    )
     with st.container(border=True):
         render_panel_header(
             eyebrow="섹터 비교",
@@ -401,15 +420,16 @@ def render_decision_first_sections(
     yield_curve_status: str | None,
     signals: list[Any],
     held_sector_options: list[str],
-    action_options: list[str],
-    is_mobile_client: bool,
     analysis_canvas_kwargs: dict[str, Any],
     market_id: str = "KR",
     investor_flow_frame: pd.DataFrame | None = None,
     investor_flow_detail: dict[str, Any] | None = None,
+    shared_flow_summary_map: dict[str, Any] | None = None,
+    flow_short_window: int = 20,
+    flow_long_window: int = 60,
     ui_locale: str = DEFAULT_UI_LOCALE,
-) -> tuple[list[str], str, bool, str, bool]:
-    """Render the decision-first main-page stack and return the active filters."""
+) -> list[str]:
+    """Render the upper decision-first stack and return the selected held sectors."""
     render_decision_hero(
         regime=current_regime,
         regime_is_confirmed=regime_is_confirmed,
@@ -441,6 +461,9 @@ def render_decision_first_sections(
             investor_flow_profile=investor_flow_profile,
             investor_flow_frame=investor_flow_frame,
             investor_flow_detail=investor_flow_detail,
+            shared_flow_summary_map=shared_flow_summary_map,
+            flow_short_window=flow_short_window,
+            flow_long_window=flow_long_window,
             locale=ui_locale,
         )
     held_sectors = render_investor_decision_boards(
@@ -448,32 +471,17 @@ def render_decision_first_sections(
         held_sector_options=held_sector_options,
         locale=ui_locale,
     )
-    filter_action, filter_regime_only, position_mode, show_alerted_only = render_top_bar_filters(
-        current_regime=current_regime,
-        action_options=action_options,
-        is_mobile=is_mobile_client,
-        locale=ui_locale,
-    )
     render_analysis_canvas(**analysis_canvas_kwargs)
-    return held_sectors, filter_action, filter_regime_only, position_mode, show_alerted_only
+    return held_sectors
 
 
 def render_summary_tab(
     *,
     tab,
-    current_regime: str,
-    regime_is_confirmed: bool,
-    growth_val: float | None,
-    inflation_val: float | None,
-    fx_change: float | None,
-    fx_label: str,
-    is_provisional: bool,
     theme_mode: str,
-    price_status: str,
-    macro_status: str,
-    yield_curve_status: str | None,
     top_pick_signals: list[Any],
     signals_filtered: list[Any],
+    held_sectors: list[str],
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
     with tab:
@@ -482,16 +490,17 @@ def render_summary_tab(
             render_top_picks_table,
         )
 
+        st.caption(get_ui_text("summary_tab_role_caption", ui_locale))
         with st.container(border=True):
             render_panel_header(
-                eyebrow="우선순위 보드",
-                title="상위 추천",
-                description="활성 필터 적용 후 가장 높은 순위의 섹터입니다.",
+                eyebrow="감사용 스냅샷",
+                title="상위 추천 스냅샷",
+                description="현재 필터 기준 상위 추천을 표 형태로 다시 검증하는 audit snapshot입니다.",
                 badge=f"{min(5, len(top_pick_signals))}개 표시",
             )
             render_top_picks_table(
                 top_pick_signals,
-                held_sectors=st.session_state.get("held_sectors", []),
+                held_sectors=held_sectors,
                 limit=5,
                 locale=ui_locale,
             )
@@ -521,16 +530,17 @@ def render_charts_tab(
             render_rs_scatter,
         )
 
+        is_hybrid = any(str(getattr(signal, "momentum_method", "")) == "hybrid_return_rank_v1" for signal in signals_filtered)
         render_panel_header(
-            eyebrow="모멘텀 맵",
-            title="RS 산점도 및 모멘텀 막대",
-            description="상대강도와 RS 이격도 패널은 동일한 시각적 구조를 사용해 비교가 쉽습니다.",
+            eyebrow="Legacy RS Diagnostic" if is_hybrid else "모멘텀 맵",
+            title="Legacy RS 진단 패널" if is_hybrid else "RS 산점도 및 모멘텀 막대",
+            description="하이브리드 모멘텀 전환 후에도 RS/RS MA 패널은 진단용으로만 유지됩니다." if is_hybrid else "상대강도와 RS 이격도 패널은 동일한 시각적 구조를 사용해 비교가 쉽습니다.",
         )
         st.markdown(
             """
         <div class="compact-note">
         <b>읽는 법</b>
-        RS 산점도는 벤치마크 대비 상대강도와 추세를 함께 보여줍니다. 오른쪽 위로 갈수록 강도가 높고 모멘텀이 가속되는 섹터입니다.
+        RS 산점도는 레거시 상대강도 진단용 패널입니다. 하이브리드 모멘텀 활성화 시 이 패널은 action-driving 근거가 아니라 보조 비교용으로만 사용합니다.
         </div>
         """,
             unsafe_allow_html=True,
@@ -539,6 +549,8 @@ def render_charts_tab(
         with st.expander("차트 해석 상세", expanded=False):
             st.markdown(
                 """
+        **이 패널은 레거시 RS 진단용입니다.** 하이브리드 모멘텀 canonical action은 `6M ex-1M`, `12M ex-1M`, percentile rank, `price > 200DMA`를 사용합니다.
+
         **X축 (RS)**: 섹터 종가 대비 벤치마크(KOSPI) 비율입니다. 값이 높을수록 벤치마크 대비 상대강도가 높습니다.
 
         **Y축 (RS MA)**: RS의 이동평균(기본 20)입니다. RS의 추세를 부드럽게 보여줍니다.
@@ -578,6 +590,7 @@ def render_charts_tab(
                     height=scatter_height,
                     margin=scatter_margin,
                     theme_mode=theme_mode,
+                    diagnostic_only=is_hybrid,
                 )
                 if is_mobile_client:
                     st.plotly_chart(fig_scatter, width="stretch")
@@ -590,12 +603,12 @@ def render_charts_tab(
                     """
         <div class="compact-note">
         <b>RS 이격도</b>
-        RS 이격도는 현재 RS가 이동평균 대비 얼마나 위나 아래에 있는지를 수치로 보여줍니다. 양수는 가속, 음수는 둔화를 뜻합니다.
+        RS 이격도는 현재 RS가 이동평균 대비 얼마나 위나 아래에 있는지를 수치로 보여주는 레거시 진단 지표입니다.
         </div>
         """,
                     unsafe_allow_html=True,
                 )
-                fig_bar = render_rs_momentum_bar(signals_filtered, theme_mode=theme_mode)
+                fig_bar = render_rs_momentum_bar(signals_filtered, theme_mode=theme_mode, diagnostic_only=is_hybrid)
                 if fig_bar.data:
                     st.plotly_chart(fig_bar, width="stretch")
                 else:
@@ -639,11 +652,11 @@ def render_all_signals_tab(
     show_alerted_only: bool,
     theme_mode: str,
     settings: dict[str, Any],
-    fx_label: str,
     etf_map: dict[str, list] | None = None,
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
     with tab:
+        kr_momentum_only = any(str(getattr(signal, "action_policy", "") or "") == "KR_MOMENTUM_ONLY" for signal in signals)
         render_panel_header(
             eyebrow="전체 테이블",
             title="전체 섹터 신호",
@@ -651,23 +664,51 @@ def render_all_signals_tab(
         )
         from src.ui.components import render_signal_table
 
-        st.caption(
-            f"적용 필터: 액션={get_action_filter_label(filter_action_global, ui_locale)}, "
-            f"현재 국면만 보기={'ON' if filter_regime_only_global else 'OFF'}"
-        )
+        if kr_momentum_only:
+            st.caption(
+                f"적용 필터: 액션={get_action_filter_label(filter_action_global, ui_locale)}, "
+                "국면 필터=KR 비활성"
+            )
+        else:
+            st.caption(
+                f"적용 필터: 액션={get_action_filter_label(filter_action_global, ui_locale)}, "
+                f"현재 국면만 보기={'ON' if filter_regime_only_global else 'OFF'}"
+            )
         with st.expander("적합/비적합 판정 기준", expanded=False):
-            st.markdown(
-                """
+            momentum_method = str(settings.get("momentum_method", "legacy_rs_ma_v0"))
+            if kr_momentum_only:
+                momentum_line = (
+                    "- 최종 `액션`(Strong Buy/Watch/Hold/Avoid)은 `momentum_core_pass × trend_ok`로 계산합니다. 하이브리드 모드에서는 `momentum_core_pass = momentum_rank_pass`, 레거시 모드에서는 `momentum_core_pass = rs_strong`입니다."
+                    if momentum_method == "hybrid_return_rank_v1"
+                    else "- 최종 `액션`(Strong Buy/Watch/Hold/Avoid)은 `momentum_core_pass × trend_ok`로 계산합니다. 레거시 모드에서는 `momentum_core_pass = rs_strong`입니다."
+                )
+                st.markdown(
+                    f"""
+        - KR은 전체 활성 index universe를 대상으로 momentum-first로 순위화합니다.
+        - 현재 거시 국면은 `macro_context_regime`로 참고만 하며 KR 액션을 gating하지 않습니다.
+        {momentum_line}
+        - `macro_fit`, `macro_regime`는 KR에서 compatibility field로만 남아 있으며 active KR sector classification을 drive하지 않습니다.
+        - 실증 적합도 카드는 `lag0 nowcast empirical reference`이며 action-driving 신호가 아닙니다.
+        """
+                )
+            else:
+                momentum_line = (
+                    "- 최종 `액션`(Strong Buy/Watch/Hold/Avoid)은 국면 적합 여부와 하이브리드 모멘텀(`6M ex-1M`, `12M ex-1M`, percentile rank, `price > 200DMA`)을 결합해 계산합니다."
+                    if momentum_method == "hybrid_return_rank_v1"
+                    else "- 최종 `액션`(Strong Buy/Watch/Hold/Avoid)은 국면 적합 여부와 모멘텀 조건(RS, 추세)을 결합해 계산합니다."
+                )
+                st.markdown(
+                    f"""
         - `국면 적합`은 현재 시점의 확정 국면에서 해당 섹터가 맵핑되는지(`macro_fit`)로 판정합니다.
         - 현재 시점 국면은 `confirmed_regime` 기준입니다. 아직 확정 전이면 잠정 상태로 해석합니다.
-        - 맵핑 기준은 `config/sector_map.yml`의 `regimes -> {국면} -> sectors`입니다.
-        - 최종 `액션`(Strong Buy/Watch/Hold/Avoid)은 국면 적합 여부와 모멘텀 조건(RS, 추세)을 결합해 계산합니다.
+        - 맵핑 기준은 `config/sector_map.yml`의 `regimes -> {{국면}} -> sectors`입니다.
+        {momentum_line}
         - 실증 적합도 카드는 `lag0 nowcast empirical reference`이며 `PIT` 또는 action-driving 신호가 아닙니다.
         - 남은 classifier 리스크는 named experiment가 pre-registration gate를 통과하지 못하면 기본적으로 freeze/reporting-only로 닫습니다.
         - `Indeterminate` 국면에서는 맵핑 섹터가 없어 전체가 `비적합`으로 표시될 수 있습니다.
         - `2026-02` 문서는 historical snapshot이며, 현재 canonical reference는 `docs/regime-validity-dashboard-parity-current.md`입니다.
         """
-            )
+                )
         with st.expander("알림 카테고리 설명", expanded=False):
             rsi_overbought = int(settings.get("rsi_overbought", 70))
             rsi_oversold = int(settings.get("rsi_oversold", 30))
@@ -679,7 +720,8 @@ def render_all_signals_tab(
         - **Oversold**: 일간 RSI(`rsi_d`)가 `{rsi_oversold}` 이하이면 추가됩니다.
         - **FX Shock**: `|USD/KRW 변화율| > {fx_shock_pct:.1f}%`이고 수출 섹터이며 현재 액션이 `Strong Buy`이면 알림을 추가하고 액션을 `Watch`로 조정합니다.
         - **Benchmark Missing**: 벤치마크 가격 데이터가 비어 있으면 모든 섹터에 추가됩니다 (액션 `N/A`).
-        - **RS Data Insufficient**: 특정 섹터의 RS/RS MA 계산이 불가능할 때 해당 섹터에 추가됩니다 (액션 `N/A`).
+        - **RS Data Insufficient**: 특정 섹터의 RS/RS MA 계산이 불가능할 때 legacy diagnostic에 추가될 수 있습니다.
+        - **Momentum History Insufficient**: 하이브리드 모멘텀에 필요한 lookback 또는 200DMA가 부족할 때 추가됩니다 (액션 `N/A`).
         """
             )
             st.caption(
@@ -716,11 +758,14 @@ def render_screening_tab(
     )
 
     with tab:
+        hybrid_active = str(settings.get("momentum_method", "legacy_rs_ma_v0")) == "hybrid_return_rank_v1"
         render_panel_header(
             eyebrow="종목 스크리닝",
             title="Strong Buy 섹터 구성종목",
-            description="현재 Strong Buy 섹터의 구성종목을 RS·RSI·SMA 기준으로 필터링한 매수 후보 리스트",
+            description="현재 Strong Buy 섹터의 구성종목을 legacy RS·RSI·SMA 기준으로 필터링한 execution-support 리스트" if hybrid_active else "현재 Strong Buy 섹터의 구성종목을 RS·RSI·SMA 기준으로 필터링한 매수 후보 리스트",
         )
+        if hybrid_active:
+            st.caption("이 스크리닝 탭은 phase 1에서 legacy execution-support 로직을 유지합니다. KR 하이브리드 모멘텀 cutover evidence에는 포함되지 않습니다.")
 
         # Derive Strong Buy sectors from current signals
         strong_buy_sectors = [
@@ -913,6 +958,9 @@ def render_investor_flow_tab(
     investor_flow_fresh: bool,
     investor_flow_profile: str,
     investor_flow_detail: dict[str, Any] | None = None,
+    shared_flow_summary_map: dict[str, Any] | None = None,
+    flow_short_window: int = 20,
+    flow_long_window: int = 60,
     market_id: str = "KR",
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
@@ -1103,6 +1151,15 @@ def render_investor_flow_tab(
             description=get_ui_text("flow_summary_description", ui_locale),
             badge=f"{investor_flow_status} · {get_flow_profile_label(investor_flow_profile, ui_locale)}",
         )
+        with st.expander(get_ui_text("flow_sigma_explainer_toggle", ui_locale), expanded=False):
+            st.markdown(
+                get_ui_text(
+                    "flow_sigma_explainer_body",
+                    ui_locale,
+                    short_window=int(flow_short_window),
+                    long_window=int(flow_long_window),
+                )
+            )
         st.warning(get_ui_text("flow_tab_warning", ui_locale))
         reference_only_note = get_flow_reference_only_note(
             investor_flow_status,
@@ -1124,6 +1181,7 @@ def render_investor_flow_tab(
         )
         snapshot_glance_rows = build_investor_flow_snapshot_rows(
             investor_flow_frame,
+            shared_flow_summary_map=shared_flow_summary_map,
             locale=ui_locale,
         )
         glance_rows = signal_glance_rows or snapshot_glance_rows
@@ -1137,10 +1195,13 @@ def render_investor_flow_tab(
                     {
                         "Sector": str(row["sector"]),
                         "Flow state": str(row["flow_state"]) if use_signal_glance else "참고용 raw snapshot",
-                        "Flow score": float(row["flow_score"]),
+                        "Flow sigma": float(row["flow_score"]),
                         "Foreign": str(row["foreign"]),
                         "Institutional": str(row["institutional"]),
                         "Retail": str(row["retail"]),
+                        "Foreign σ": str(row.get("foreign_cue", "")),
+                        "Institutional σ": str(row.get("institutional_cue", "")),
+                        "Retail σ": str(row.get("retail_cue", "")),
                         **(
                             {}
                             if reference_only_mode or not use_signal_glance
@@ -1157,10 +1218,13 @@ def render_investor_flow_tab(
                 column_config={
                     "Sector": st.column_config.TextColumn(get_ui_text("col_sector", ui_locale), width="medium"),
                     "Flow state": st.column_config.TextColumn(get_ui_text("flow_col_state", ui_locale), width="small"),
-                    "Flow score": st.column_config.NumberColumn(get_ui_text("flow_col_score", ui_locale), format="%.2f"),
+                    "Flow sigma": st.column_config.NumberColumn(get_ui_text("flow_col_score", ui_locale), format="%.2f"),
                     "Foreign": st.column_config.TextColumn(get_ui_text("flow_col_foreign", ui_locale), width="small"),
                     "Institutional": st.column_config.TextColumn(get_ui_text("flow_col_institutional", ui_locale), width="small"),
                     "Retail": st.column_config.TextColumn(get_ui_text("flow_col_retail", ui_locale), width="small"),
+                    "Foreign σ": st.column_config.TextColumn(f"{get_ui_text('flow_col_foreign', ui_locale)} σ", width="small"),
+                    "Institutional σ": st.column_config.TextColumn(f"{get_ui_text('flow_col_institutional', ui_locale)} σ", width="small"),
+                    "Retail σ": st.column_config.TextColumn(f"{get_ui_text('flow_col_retail', ui_locale)} σ", width="small"),
                     "Action change": st.column_config.TextColumn(get_ui_text("flow_col_adjustment", ui_locale), width="medium"),
                 },
             )
@@ -1170,7 +1234,23 @@ def render_investor_flow_tab(
         latest_date = investor_flow_frame.index.max()
         latest_snapshot = investor_flow_frame.loc[investor_flow_frame.index == latest_date].copy()
         if not latest_snapshot.empty:
-            latest_snapshot["state_label"] = latest_snapshot["investor_type"].astype(str)
+            from src.signals.flow import INVESTOR_LABEL_TO_GROUP
+            summary_map = dict(shared_flow_summary_map or {})
+
+            def _participant_cue(row: pd.Series) -> str:
+                sector_code = str(row.get("sector_code", "") or "").strip()
+                summary = summary_map.get(sector_code)
+                if summary is None:
+                    return get_flow_state_label("unavailable", ui_locale)
+                group_key = INVESTOR_LABEL_TO_GROUP.get(str(row.get("investor_type", "") or "").strip())
+                if not group_key:
+                    return get_flow_state_label("unavailable", ui_locale)
+                component = getattr(summary, group_key, None)
+                state = str(getattr(component, "state", "unavailable") or "unavailable")
+                zscore = getattr(component, "zscore", None)
+                return format_flow_cue_label(state, zscore, ui_locale)
+
+            latest_snapshot["Flow state"] = latest_snapshot.apply(_participant_cue, axis=1)
             latest_snapshot = latest_snapshot.rename(
                 columns={
                     "sector_name": "Sector",
@@ -1179,7 +1259,7 @@ def render_investor_flow_tab(
                 }
             )
             st.dataframe(
-                latest_snapshot[["Sector", "Investor", "Latest ratio", "net_buy_amount"]].reset_index(drop=True),
+                latest_snapshot[["Sector", "Investor", "Latest ratio", "net_buy_amount", "Flow state"]].reset_index(drop=True),
                 width="stretch",
                 hide_index=True,
                 column_config={
@@ -1187,6 +1267,7 @@ def render_investor_flow_tab(
                     "Investor": st.column_config.TextColumn(get_ui_text("flow_status_label", ui_locale), width="small"),
                     "Latest ratio": st.column_config.NumberColumn(get_ui_text("flow_col_latest", ui_locale), format="%.4f"),
                     "net_buy_amount": st.column_config.NumberColumn("Net", format="%d"),
+                    "Flow state": st.column_config.TextColumn(get_ui_text("flow_col_state", ui_locale), width="medium"),
                 },
             )
 
@@ -1235,6 +1316,10 @@ def render_monitoring_tab(
     *,
     tab,
     market_id: str = "KR",
+    investor_flow_status: str | None = None,
+    investor_flow_fresh: bool | None = None,
+    investor_flow_detail: dict[str, Any] | None = None,
+    investor_flow_frame: pd.DataFrame | None = None,
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
     """Render the '데이터 모니터링' tab for investor-flow ingestion health."""
@@ -1247,9 +1332,59 @@ def render_monitoring_tab(
         )
 
         data = _cached_monitoring_data(str(market_id).strip().upper())
-        warm: dict = data["warm"]
-        bounds: dict = data["bounds"]
+        warm: dict = dict(data["warm"] or {})
+        runtime_detail = dict(investor_flow_detail or {})
+        runtime_detail_status = str(runtime_detail.pop("status", "") or "").strip()
+        runtime_detail_coverage = runtime_detail.pop("coverage_complete", None)
+        if runtime_detail:
+            warm.update(runtime_detail)
+        if str(investor_flow_status or "").strip():
+            warm["status"] = str(investor_flow_status)
+        elif not str(warm.get("status", "")).strip() and runtime_detail_status:
+            warm["status"] = runtime_detail_status
+        if investor_flow_fresh is not None:
+            warm["coverage_complete"] = bool(investor_flow_fresh)
+        elif "coverage_complete" not in warm and runtime_detail_coverage is not None:
+            warm["coverage_complete"] = bool(runtime_detail_coverage)
+
+        bounds: dict = dict(data["bounds"] or {})
+        runtime_frame = investor_flow_frame if isinstance(investor_flow_frame, pd.DataFrame) else pd.DataFrame()
+
         history: pd.DataFrame = data["history"]
+        used_runtime_history_fallback = False
+        if history.empty and runtime_detail:
+            requested_start = str(runtime_detail.get("anchor_start", "") or "").strip()
+            requested_end = str(
+                runtime_detail.get("end", runtime_detail.get("watermark_key", ""))
+                or ""
+            ).strip()
+            predicted = int(runtime_detail.get("predicted_requests", 0) or 0)
+            processed = int(runtime_detail.get("processed_requests", 0) or 0)
+            coverage_complete = bool(runtime_detail.get("coverage_complete", investor_flow_fresh))
+            row_count_value = runtime_detail.get("row_count", pd.NA)
+            completion_pct = (
+                round(processed / predicted * 100, 1)
+                if predicted > 0
+                else (100.0 if coverage_complete else 0.0)
+            )
+            history = pd.DataFrame(
+                [
+                    {
+                        "created_at": pd.Timestamp.utcnow(),
+                        "reason": str(runtime_detail.get("reason", "runtime_snapshot") or "runtime_snapshot"),
+                        "requested_start": requested_start,
+                        "requested_end": requested_end,
+                        "status": str(investor_flow_status or runtime_detail.get("status", "SAMPLE")),
+                        "coverage_complete": coverage_complete,
+                        "aborted": bool(runtime_detail.get("aborted", False)),
+                        "predicted_requests": predicted,
+                        "processed_requests": processed,
+                        "row_count": row_count_value,
+                        "completion_pct": completion_pct,
+                    }
+                ]
+            )
+            used_runtime_history_fallback = True
 
         # ── 섹션 1: 수집 상태 요약 ──────────────────────────────────────────
         st.subheader("수집 상태 요약")
@@ -1291,11 +1426,23 @@ def render_monitoring_tab(
                 st.info(f"수집 범위: {min_date} ~ {max_date}")
         else:
             st.info("warehouse에 저장된 원시 데이터가 없습니다.")
+            if not runtime_frame.empty:
+                try:
+                    idx = pd.DatetimeIndex(runtime_frame.index)
+                    runtime_min = idx.min().strftime("%Y-%m-%d")
+                    runtime_max = idx.max().strftime("%Y-%m-%d")
+                    st.info(
+                        "현재 세션 runtime snapshot 범위: "
+                        f"**{runtime_min}** ~ **{runtime_max}**"
+                    )
+                except Exception:
+                    st.info("현재 세션 runtime snapshot은 존재하지만 날짜 범위를 해석하지 못했습니다.")
 
         # ── 섹션 3: 미수집 날짜 / 오류 종목 ────────────────────────────────
         st.subheader("미수집 현황")
         failed_days: list = warm.get("failed_days") or []
         failed_codes: dict = warm.get("failed_codes") or {}
+        failed_ticker_family_counts: dict = warm.get("failed_ticker_family_counts") or {}
         failed_sector_codes: dict = warm.get("failed_sector_codes") or {
             key: value for key, value in failed_codes.items() if str(key).startswith("sector:")
         }
@@ -1326,6 +1473,13 @@ def render_monitoring_tab(
             st.warning(f"오류 섹터 {len(failed_sector_codes)}건")
             st.dataframe(err_df, hide_index=True, use_container_width=True)
         if failed_ticker_codes:
+            st.info("오류 종목 수는 현재 실시간 probe 결과가 아니라 마지막 incomplete manual_refresh 저장 결과입니다.")
+            if failed_ticker_family_counts:
+                family_preview = ", ".join(
+                    f"{str(k).replace('_', ' ')} {int(v)}건"
+                    for k, v in list(failed_ticker_family_counts.items())[:4]
+                )
+                st.info(f"실패 유형 요약: {family_preview}")
             err_df = pd.DataFrame(
                 [{"종목코드": k, "오류": v} for k, v in failed_ticker_codes.items()]
             )
@@ -1345,6 +1499,8 @@ def render_monitoring_tab(
         if history.empty:
             st.info("수집 이력이 없습니다.")
         else:
+            if used_runtime_history_fallback:
+                st.info("warehouse 수집 이력이 비어 있어 현재 세션 runtime snapshot 메타데이터를 대신 표시합니다.")
             display = history.copy()
             display["요청범위"] = display["requested_start"].fillna("") + " ~ " + display["requested_end"].fillna("")
             display = display.rename(
@@ -1390,24 +1546,9 @@ def render_monitoring_tab(
 def render_dashboard_tabs(
     *,
     current_regime: str,
-    regime_is_confirmed: bool,
-    growth_val: float | None,
-    inflation_val: float | None,
-    fx_change: float | None,
-    fx_label: str,
-    is_provisional: bool,
     theme_mode: str,
-    price_status: str,
-    macro_status: str,
-    yield_curve_status: str | None,
-    top_pick_signals: list[Any],
-    signals_filtered: list[Any],
     signals: list[Any],
-    filter_action_global: str,
-    filter_regime_only_global: bool,
     held_sectors: list[str],
-    position_mode: str,
-    show_alerted_only: bool,
     settings: dict[str, Any],
     is_mobile_client: bool,
     market_id: str = "KR",
@@ -1416,17 +1557,45 @@ def render_dashboard_tabs(
     investor_flow_profile: str = "foreign_lead",
     investor_flow_frame: pd.DataFrame | None = None,
     investor_flow_detail: dict[str, Any] | None = None,
+    shared_flow_summary_map: dict[str, Any] | None = None,
     sector_map: dict[str, Any] | None = None,
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
     etf_map = _build_etf_map(sector_map)
+    normalized_market = str(market_id).strip().upper() or "KR"
+    filter_action_global, filter_regime_only_global, position_mode, show_alerted_only = render_top_bar_filters(
+        current_regime=current_regime,
+        action_options=[ALL_ACTION_KEY, "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
+        enable_regime_filter=normalized_market != "KR",
+        is_mobile=is_mobile_client,
+        locale=ui_locale,
+    )
+    signals_filtered = filter_signals_for_display(
+        list(signals),
+        filter_action=filter_action_global,
+        filter_regime_only=filter_regime_only_global,
+        current_regime=current_regime,
+        held_sectors=held_sectors,
+        position_mode=position_mode,
+        show_alerted_only=show_alerted_only,
+    )
+    if str(market_id).strip().upper() == "KR" and any(
+        str(getattr(signal, "momentum_method", "")) == "hybrid_return_rank_v1"
+        for signal in signals_filtered
+    ):
+        top_pick_signals = sorted(signals_filtered, key=top_pick_sort_key)
+    else:
+        top_pick_signals = sorted(
+            signals_filtered,
+            key=lambda signal: signal_display_sort_key(signal, held_sectors),
+        )
+
     tab_labels = [
         "대시보드 요약",
         "모멘텀/차트 분석",
         "전체 종목 데이터",
         "종목 스크리닝",
     ]
-    normalized_market = str(market_id).strip().upper() or "KR"
     include_flow_tab = normalized_market in {"KR", "US"}
     include_monitoring_tab = normalized_market == "KR"
     if include_flow_tab:
@@ -1437,19 +1606,10 @@ def render_dashboard_tabs(
     tab_summary, tab_charts, tab_all_signals, tab_screening = tabs[:4]
     render_summary_tab(
         tab=tab_summary,
-        current_regime=current_regime,
-        regime_is_confirmed=regime_is_confirmed,
-        growth_val=growth_val,
-        inflation_val=inflation_val,
-        fx_change=fx_change,
-        fx_label=fx_label,
-        is_provisional=is_provisional,
         theme_mode=theme_mode,
-        price_status=price_status,
-        macro_status=macro_status,
-        yield_curve_status=yield_curve_status,
         top_pick_signals=top_pick_signals,
         signals_filtered=signals_filtered,
+        held_sectors=held_sectors,
         ui_locale=ui_locale,
     )
     render_charts_tab(
@@ -1469,7 +1629,6 @@ def render_dashboard_tabs(
         show_alerted_only=show_alerted_only,
         theme_mode=theme_mode,
         settings=settings,
-        fx_label=fx_label,
         etf_map=etf_map,
         ui_locale=ui_locale,
     )
@@ -1489,6 +1648,9 @@ def render_dashboard_tabs(
             investor_flow_fresh=investor_flow_fresh,
             investor_flow_profile=investor_flow_profile,
             investor_flow_detail=investor_flow_detail,
+            shared_flow_summary_map=shared_flow_summary_map,
+            flow_short_window=int(settings.get("investor_flow_short_window", 20)),
+            flow_long_window=int(settings.get("investor_flow_long_window", 60)),
             market_id=normalized_market,
             ui_locale=ui_locale,
         )
@@ -1497,5 +1659,9 @@ def render_dashboard_tabs(
         render_monitoring_tab(
             tab=tabs[monitoring_tab_idx],
             market_id=str(market_id),
+            investor_flow_status=investor_flow_status,
+            investor_flow_fresh=investor_flow_fresh,
+            investor_flow_detail=investor_flow_detail,
+            investor_flow_frame=investor_flow_frame if investor_flow_frame is not None else pd.DataFrame(),
             ui_locale=ui_locale,
         )

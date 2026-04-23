@@ -125,13 +125,22 @@ def test_request_krx_data_uses_shared_session_headers(monkeypatch):
 
     captured: dict[str, object] = {}
 
+    class _Resp:
+        headers = {"content-type": "application/json"}
+        text = '{"ok": true}'
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True}
+
     class _Session:
         def post(self, url, headers=None, data=None, timeout=None):
             captured["url"] = url
             captured["headers"] = dict(headers or {})
             captured["data"] = dict(data or {})
             captured["timeout"] = timeout
-            return object()
+            return _Resp()
 
     monkeypatch.setattr(compat, "_get_shared_session", lambda: _Session())
     response = compat.request_krx_data({"foo": "bar"})
@@ -139,6 +148,113 @@ def test_request_krx_data_uses_shared_session_headers(monkeypatch):
     assert captured["url"] == compat.KRX_JSON_URL
     assert captured["headers"]["X-Requested-With"] == "XMLHttpRequest"
     assert captured["data"] == {"foo": "bar"}
+
+
+def test_request_krx_data_retries_once_after_non_json_response(monkeypatch):
+    import src.data_sources.pykrx_compat as compat
+
+    state = {"calls": 0, "resets": 0}
+
+    class _RespBad:
+        headers = {"content-type": "text/html"}
+        text = "<html><body>Temporary upstream HTML</body></html>"
+        status_code = 200
+
+        @staticmethod
+        def json():
+            raise ValueError("not json")
+
+    class _RespOk:
+        headers = {"content-type": "application/json"}
+        text = '{"ok": true}'
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"ok": True}
+
+    class _Session:
+        def post(self, url, headers=None, data=None, timeout=None):
+            state["calls"] += 1
+            return _RespBad() if state["calls"] == 1 else _RespOk()
+
+    monkeypatch.setattr(compat, "_get_shared_session", lambda: _Session())
+    monkeypatch.setattr(compat, "reset_krx_shared_session", lambda: state.__setitem__("resets", state["resets"] + 1))
+
+    response = compat.request_krx_data({"foo": "bar"})
+
+    assert response.json() == {"ok": True}
+    assert state["calls"] == 2
+    assert state["resets"] == 1
+
+
+def test_request_krx_data_raises_descriptive_error_after_second_non_json_response(monkeypatch):
+    import src.data_sources.pykrx_compat as compat
+
+    state = {"calls": 0, "resets": 0}
+
+    class _RespBad:
+        headers = {"content-type": "text/html"}
+        text = "<html><body>Access Denied</body></html>"
+        status_code = 200
+
+        @staticmethod
+        def json():
+            raise ValueError("not json")
+
+    class _Session:
+        def post(self, url, headers=None, data=None, timeout=None):
+            state["calls"] += 1
+            return _RespBad()
+
+    monkeypatch.setattr(compat, "_get_shared_session", lambda: _Session())
+    monkeypatch.setattr(compat, "reset_krx_shared_session", lambda: state.__setitem__("resets", state["resets"] + 1))
+
+    with pytest.raises(RuntimeError, match="KRX JSON endpoint returned access denied HTML"):
+        compat.request_krx_data({"foo": "bar"})
+
+    assert state["calls"] == 1
+    assert state["resets"] == 0
+
+
+def test_get_shared_session_skips_login_retry_after_access_denied(monkeypatch):
+    import src.data_sources.pykrx_compat as compat
+
+    monkeypatch.setattr(compat, "_SHARED_SESSION", None)
+    monkeypatch.setattr(compat, "_SESSION_AUTHENTICATED", None)
+    monkeypatch.setattr(compat, "_SESSION_AUTH_DETAIL", "KRX_ID/KRX_PW not configured")
+    monkeypatch.setattr(compat, "_ACCESS_DENIED_DETAIL", "access denied during KRX login (<html>...</html>)")
+    monkeypatch.setattr(compat, "_load_secret_or_env", lambda name: "x" if name in {"KRX_ID", "KRX_PW"} else "")
+
+    class _Session:
+        def __init__(self):
+            self.cookies = {}
+
+        def get(self, url, headers=None, timeout=None):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(compat._requests, "Session", _Session)
+    monkeypatch.setattr(
+        compat,
+        "_warmup_krx_login_session",
+        lambda session: (_ for _ in ()).throw(AssertionError("warmup should be skipped")),
+    )
+    monkeypatch.setattr(
+        compat,
+        "_login_krx_session",
+        lambda session, login_id, login_pw: (_ for _ in ()).throw(AssertionError("login should be skipped")),
+    )
+
+    session = compat._get_shared_session()
+
+    assert session is not None
+    state = compat.get_krx_login_state()
+    assert state["configured"] is True
+    assert state["authenticated"] is False
+    assert "access denied" in state["detail"].lower()
 
 
 def test_patched_webio_reads_pick_up_fresh_session_after_reset(monkeypatch):

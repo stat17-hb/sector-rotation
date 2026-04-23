@@ -35,9 +35,6 @@ from src.dashboard.analysis import (
 from src.dashboard.data import (
     cached_analysis_sector_prices,
     cached_api_preflight,
-    cached_investor_flow,
-    cached_macro,
-    cached_signals,
     get_krx_provider_configured,
     get_krx_provider_effective,
     get_investor_flow_artifact_key,
@@ -56,6 +53,7 @@ from src.dashboard.data import (
     resolve_market_end_date,
     show_notice_toast,
     configure_dashboard_env,
+    load_dashboard_runtime_data,
 )
 from src.dashboard.runtime import (
     invalidate_dashboard_caches,
@@ -65,8 +63,10 @@ from src.dashboard.runtime import (
     run_market_refresh,
 )
 from src.dashboard.state import (
+    apply_stock_lookup_result,
     apply_market_selection,
     apply_analysis_toolbar_selection,
+    build_stock_lookup_display_model,
     ensure_analysis_bounds,
     ensure_session_defaults,
     ensure_visible_month_selection,
@@ -82,18 +82,20 @@ from src.dashboard.types import AnalysisWindow, DashboardContext, DashboardDataB
 from src.macro.series_utils import extract_macro_series
 from src.data_sources.warehouse import (
     read_market_prices,
+    read_active_index_dimension,
 )
+from src.data_sources.stock_sector_lookup import resolve_stock_to_sector
 from src.ui.copy import ALL_ACTION_KEY, DEFAULT_UI_LOCALE, normalize_locale
 from src.ui.components import (
     HEATMAP_PALETTE_OPTIONS,
-    filter_signals_for_display,
     infer_range_preset,
     normalize_range_preset,
     render_analysis_toolbar,
     render_page_header,
+    render_stock_lookup_control,
     resolve_range_from_preset,
-    signal_display_sort_key,
     build_sector_detail_figure,
+    render_progress_panel,
 )
 from src.ui.data_status import (
     get_button_states,
@@ -104,6 +106,43 @@ from src.ui.styles import inject_css
 
 logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
+
+
+def _make_progress_callback(*hosts):
+    def _callback(event: dict[str, object]) -> None:
+        for host in hosts:
+            render_progress_panel(host, event)
+
+    return _callback
+
+
+def _resolve_shared_flow_summary_map(runtime_payload: dict[str, object] | None) -> dict[str, object]:
+    if not isinstance(runtime_payload, dict):
+        return {}
+    return dict(runtime_payload.get("shared_flow_summary_map") or {})
+
+
+def _build_lookup_error_result(*, market_id: str, query: str, exc: Exception) -> dict[str, object]:
+    return {
+        "status": "error",
+        "market": market_id,
+        "query": query,
+        "normalized_query": "",
+        "matched_symbol": "",
+        "matched_name": "",
+        "sector_code": "",
+        "sector_name": "",
+        "resolution_kind": "",
+        "source": "",
+        "confidence": "",
+        "explanation": f"Stock-sector lookup failed: {exc}",
+        "canonicalization_applied": False,
+        "canonicalization_basis": "not_applicable",
+        "match_effective_date": "",
+        "match_date_mode": "not_applicable",
+        "matched_sector_candidates": [],
+    }
+
 
 # Backward-compatible analysis exports kept for tests.
 _build_cycle_segments = build_cycle_segments
@@ -182,6 +221,7 @@ analysis_heatmap_palette = normalize_session_state(
     normalize_range_preset=normalize_range_preset,
 )
 inject_css(theme_mode)
+manual_progress_host = st.empty()
 
 # Sidebar / runtime status
 macro_cache_token = get_macro_cache_token()
@@ -208,10 +248,12 @@ with st.sidebar:
         probe_macro_status=probe_macro_status,
         probe_investor_flow_status=probe_flow_status,
         flow_profile=selected_flow_profile_state,
+        momentum_method=str(settings.get("momentum_method", "legacy_rs_ma_v0")),
         btn_states=btn_states,
         asof_default=asof_default,
         ui_locale=ui_locale,
     )
+    sidebar_progress_host = st.empty()
 
 st.session_state["flow_profile"] = selected_flow_profile
 
@@ -222,6 +264,12 @@ if apply_market_selection(st.session_state, market_id=selected_market_sidebar):
 rs_ma_period = int(st.session_state.get("rs_ma_period", settings.get("rs_ma_period", 20)))
 ma_fast = int(st.session_state.get("ma_fast", settings.get("ma_fast", 20)))
 ma_slow = int(st.session_state.get("ma_slow", settings.get("ma_slow", 60)))
+momentum_method = str(settings.get("momentum_method", "legacy_rs_ma_v0"))
+momentum_skip_recent_days = int(settings.get("momentum_skip_recent_days", 21))
+momentum_lookback_6m_days = int(settings.get("momentum_lookback_6m_days", 126))
+momentum_lookback_12m_days = int(settings.get("momentum_lookback_12m_days", 252))
+momentum_rank_threshold_pct = float(settings.get("momentum_rank_threshold_pct", 0.60))
+momentum_abs_filter = str(settings.get("momentum_abs_filter", "price_gt_200dma"))
 price_years = int(st.session_state.get("price_years", settings.get("price_years", 3)))
 benchmark_code = str(settings.get("benchmark_code", "1001"))
 market_end_date = resolve_market_end_date(benchmark_code)
@@ -259,68 +307,110 @@ macro_refresh_notice: tuple[str, str] | None = None
 investor_flow_refresh_notice: tuple[str, str] | None = None
 
 if refresh_market:
-    with st.spinner("Refreshing market data..."):
-        market_refresh_notice = run_market_refresh(context, price_years)
+    market_refresh_notice = run_market_refresh(
+        context,
+        price_years,
+        progress_callback=_make_progress_callback(manual_progress_host, sidebar_progress_host),
+    )
 
 if refresh_macro:
-    with st.spinner("Refreshing macro data..."):
-        macro_refresh_notice = run_macro_refresh(context, macro_series_cfg)
+    macro_refresh_notice = run_macro_refresh(
+        context,
+        macro_series_cfg,
+        progress_callback=_make_progress_callback(manual_progress_host, sidebar_progress_host),
+    )
 
 if refresh_flow:
-    with st.spinner("Refreshing investor-flow data..."):
-        investor_flow_refresh_notice = run_investor_flow_refresh(context)
+    investor_flow_refresh_notice = run_investor_flow_refresh(
+        context,
+        progress_callback=_make_progress_callback(manual_progress_host, sidebar_progress_host),
+    )
 
 if recompute:
     run_feature_recompute()
     st.rerun()
 
 # Core data load
-with st.spinner("Loading dashboard data..."):
-    try:
-        prices_key = context.price_artifact_key
-        macro_key = context.macro_artifact_key
-        params = {
-            "epsilon": float(st.session_state["epsilon"]),
-            "rs_ma_period": rs_ma_period,
-            "ma_fast": ma_fast,
-            "ma_slow": ma_slow,
-            "price_years": price_years,
-        }
-        params_hash = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()[:8]
-        signals, macro_result, price_status, macro_status, market_blocking_error = cached_signals(
-            context.market_id,
-            context.market_end_date_str,
-            prices_key,
-            macro_key,
-            params_hash,
-            context.macro_cache_token,
-            context.price_cache_token,
-            context.price_artifact_key,
-            context.investor_flow_artifact_key,
-            float(st.session_state["epsilon"]),
-            rs_ma_period,
-            ma_fast,
-            ma_slow,
-            price_years,
-            str(st.session_state.get("flow_profile", "foreign_lead")),
-        )
-        data_status = {"price": price_status, "macro": macro_status}
-    except Exception as exc:
-        logger.error("Data load failed: %s", exc)
-        signals = []
-        macro_result = pd.DataFrame(
-            {
-                "growth_dir": ["Flat"],
-                "inflation_dir": ["Flat"],
-                "regime": ["Indeterminate"],
-                "confirmed_regime": ["Indeterminate"],
-            },
-            index=pd.DatetimeIndex([date.today()]),
-        )
-        price_status = "SAMPLE"
-        macro_status = "SAMPLE"
-        market_blocking_error = ""
-        data_status = {"price": price_status, "macro": macro_status}
+page_progress_host = st.empty()
+data_load_ok = False
+runtime_payload: dict[str, object] = {}
+try:
+    prices_key = context.price_artifact_key
+    macro_key = context.macro_artifact_key
+    params = {
+        "epsilon": float(st.session_state["epsilon"]),
+        "rs_ma_period": rs_ma_period,
+        "ma_fast": ma_fast,
+        "ma_slow": ma_slow,
+        "momentum_method": momentum_method,
+        "momentum_skip_recent_days": momentum_skip_recent_days,
+        "momentum_lookback_6m_days": momentum_lookback_6m_days,
+        "momentum_lookback_12m_days": momentum_lookback_12m_days,
+        "momentum_rank_threshold_pct": momentum_rank_threshold_pct,
+        "momentum_abs_filter": momentum_abs_filter,
+        "price_years": price_years,
+    }
+    params_hash = hashlib.md5(json.dumps(params, sort_keys=True).encode()).hexdigest()[:8]
+    runtime_payload = load_dashboard_runtime_data(
+        context.market_id,
+        context.market_end_date_str,
+        prices_key,
+        macro_key,
+        params_hash,
+        context.macro_cache_token,
+        context.price_cache_token,
+        context.price_artifact_key,
+        context.investor_flow_artifact_key,
+        epsilon=float(st.session_state["epsilon"]),
+        rs_ma_period=rs_ma_period,
+        ma_fast=ma_fast,
+        ma_slow=ma_slow,
+        momentum_method=momentum_method,
+        momentum_skip_recent_days=momentum_skip_recent_days,
+        momentum_lookback_6m_days=momentum_lookback_6m_days,
+        momentum_lookback_12m_days=momentum_lookback_12m_days,
+        momentum_rank_threshold_pct=momentum_rank_threshold_pct,
+        momentum_abs_filter=momentum_abs_filter,
+        price_years=price_years,
+        flow_profile=str(st.session_state.get("flow_profile", "foreign_lead")),
+        progress_callback=_make_progress_callback(page_progress_host),
+    )
+    signals = list(runtime_payload["signals"])
+    macro_result = runtime_payload["macro_result"]
+    macro_df = runtime_payload["macro_df"]
+    price_status = str(runtime_payload["price_status"])
+    macro_status = str(runtime_payload["macro_status"])
+    market_blocking_error = str(runtime_payload["market_blocking_error"])
+    investor_flow_status = str(runtime_payload["investor_flow_status"])
+    investor_flow_fresh = bool(runtime_payload["investor_flow_fresh"])
+    investor_flow_detail = dict(runtime_payload["investor_flow_detail"])
+    investor_flow_frame = runtime_payload["investor_flow_frame"]
+    data_status = {"price": price_status, "macro": macro_status}
+    data_load_ok = True
+except Exception as exc:
+    logger.error("Data load failed: %s", exc)
+    signals = []
+    macro_result = pd.DataFrame(
+        {
+            "growth_dir": ["Flat"],
+            "inflation_dir": ["Flat"],
+            "regime": ["Indeterminate"],
+            "confirmed_regime": ["Indeterminate"],
+        },
+        index=pd.DatetimeIndex([date.today()]),
+    )
+    macro_df = pd.DataFrame()
+    price_status = "SAMPLE"
+    macro_status = "SAMPLE"
+    market_blocking_error = ""
+    investor_flow_status = "SAMPLE"
+    investor_flow_fresh = False
+    investor_flow_detail = {}
+    investor_flow_frame = pd.DataFrame()
+    data_status = {"price": price_status, "macro": macro_status}
+finally:
+    if data_load_ok:
+        page_progress_host.empty()
 
 price_warm_status: dict[str, object] = {}
 price_cache_case = None
@@ -383,7 +473,6 @@ if not macro_result.empty:
 
 is_provisional = any(getattr(signal, "is_provisional", False) for signal in signals)
 
-_, macro_df = cached_macro(context.market_id, context.macro_cache_token, context.market_end_date_str)
 growth_val: float | None = None
 inflation_val: float | None = None
 fx_change: float | None = None
@@ -398,22 +487,9 @@ if not macro_df.empty:
     if len(fx_series) >= 2:
         fx_change = float((fx_series.iloc[-1] / fx_series.iloc[-2] - 1) * 100)
 
-if context.market_id == "KR":
-    investor_flow_status, investor_flow_fresh, investor_flow_detail, investor_flow_frame = cached_investor_flow(
-        context.market_id,
-        context.market_end_date_str,
-        context.investor_flow_artifact_key,
-    )
-else:
-    investor_flow_status, investor_flow_fresh, investor_flow_detail, investor_flow_frame = cached_investor_flow(
-        context.market_id,
-        context.market_end_date_str,
-        context.investor_flow_artifact_key,
-    )
-
 render_page_header(
     title=str(getattr(market_profile, "page_header", "Sector Rotation")),
-    description="Move from range selection to cycle context, sector comparison, and linked detail tracking without leaving the main canvas.",
+    description="Start with the held/new decision boards, then validate the call in the research canvas and audit tabs without leaving the page.",
     pills=[
         {"label": "Regime", "value": current_regime, "tone": "success" if regime_is_confirmed else "warning"},
         {"label": "Market", "value": price_status, "tone": "danger" if price_status == "SAMPLE" else "warning" if price_status == "CACHED" else "success"},
@@ -516,6 +592,41 @@ if toolbar_submitted and apply_analysis_toolbar_selection(
 ):
     st.rerun()
 
+lookup_query, lookup_submitted = render_stock_lookup_control(
+    market_id=context.market_id,
+    query_value=str(st.session_state.get("stock_lookup_query", "")),
+    status=str(st.session_state.get("stock_lookup_status", "")),
+    message=str(st.session_state.get("stock_lookup_message", "")),
+    display_model=build_stock_lookup_display_model(st.session_state.get("stock_lookup_result"), sector_map),
+    locale=context.ui_locale,
+)
+st.session_state["stock_lookup_query"] = lookup_query
+if lookup_submitted:
+    try:
+        lookup_sector_universe_rows = (
+            read_active_index_dimension(market=context.market_id).to_dict("records")
+            if context.market_id == "KR"
+            else None
+        )
+        lookup_result = resolve_stock_to_sector(
+            lookup_query,
+            context.market_id,
+            sector_map,
+            asof_date=st.session_state.get("asof_date_str"),
+            sector_universe_rows=lookup_sector_universe_rows,
+        )
+    except Exception as exc:
+        lookup_result = _build_lookup_error_result(
+            market_id=context.market_id,
+            query=lookup_query,
+            exc=exc,
+        )
+    apply_stock_lookup_result(
+        st.session_state,
+        result=lookup_result,
+    )
+    st.rerun()
+
 analysis_prices = prices_wide.loc[
     (prices_wide.index >= pd.Timestamp(st.session_state["analysis_start_date"]))
     & (prices_wide.index <= pd.Timestamp(st.session_state["analysis_end_date"]))
@@ -570,7 +681,10 @@ analysis_window = AnalysisWindow(
 mobile_client = is_mobile_client()
 signal_lookup = {str(signal.sector_name): signal for signal in signals}
 held_sector_options = sorted({str(signal.sector_name) for signal in signals if str(signal.sector_name).strip()})
-held_sectors, filter_action_global, filter_regime_only_global, position_mode, show_alerted_only = render_decision_first_sections(
+shared_flow_summary_map = _resolve_shared_flow_summary_map(runtime_payload)
+flow_short_window = int(settings.get("investor_flow_short_window", 20))
+flow_long_window = int(settings.get("investor_flow_long_window", 60))
+held_sectors = render_decision_first_sections(
     current_regime=current_regime,
     regime_is_confirmed=regime_is_confirmed,
     growth_val=growth_val,
@@ -586,11 +700,12 @@ held_sectors, filter_action_global, filter_regime_only_global, position_mode, sh
     investor_flow_profile=str(st.session_state.get("flow_profile", "foreign_lead")),
     investor_flow_frame=investor_flow_frame,
     investor_flow_detail=dict(investor_flow_detail),
+    shared_flow_summary_map=shared_flow_summary_map,
+    flow_short_window=flow_short_window,
+    flow_long_window=flow_long_window,
     yield_curve_status=yield_curve_status,
     signals=list(signals),
     held_sector_options=held_sector_options,
-    action_options=[ALL_ACTION_KEY, "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
-    is_mobile_client=mobile_client,
     analysis_canvas_kwargs={
         "heatmap_return_display": heatmap_return_display,
         "heatmap_strength_display": heatmap_strength_display,
@@ -613,16 +728,6 @@ held_sectors, filter_action_global, filter_regime_only_global, position_mode, sh
     market_id=context.market_id,
     ui_locale=context.ui_locale,
 )
-signals_filtered = filter_signals_for_display(
-    list(signals),
-    filter_action=filter_action_global,
-    filter_regime_only=filter_regime_only_global,
-    current_regime=current_regime,
-    held_sectors=held_sectors,
-    position_mode=position_mode,
-    show_alerted_only=show_alerted_only,
-)
-top_pick_signals = sorted(signals_filtered, key=lambda signal: signal_display_sort_key(signal, held_sectors))
 
 bundle = DashboardDataBundle(
     signals=list(signals),
@@ -661,29 +766,15 @@ bundle = DashboardDataBundle(
     investor_flow_profile=str(st.session_state.get("flow_profile", "foreign_lead")),
     investor_flow_frame=investor_flow_frame,
     investor_flow_detail=dict(investor_flow_detail),
+    shared_flow_summary_map=shared_flow_summary_map,
     investor_flow_refresh_notice=investor_flow_refresh_notice,
 )
 
 render_dashboard_tabs(
     current_regime=bundle.current_regime,
-    regime_is_confirmed=bundle.regime_is_confirmed,
-    growth_val=bundle.growth_val,
-    inflation_val=bundle.inflation_val,
-    fx_change=bundle.fx_change,
-    fx_label=str(getattr(market_profile, "ui_labels", {}).get("fx_metric_label", "FX move")),
-    is_provisional=is_provisional,
     theme_mode=context.theme_mode,
-    price_status=bundle.price_status,
-    macro_status=bundle.macro_status,
-    yield_curve_status=bundle.yield_curve_status,
-    top_pick_signals=top_pick_signals,
-    signals_filtered=signals_filtered,
     signals=bundle.signals,
-    filter_action_global=filter_action_global,
-    filter_regime_only_global=filter_regime_only_global,
     held_sectors=held_sectors,
-    position_mode=position_mode,
-    show_alerted_only=show_alerted_only,
     settings=settings,
     is_mobile_client=mobile_client,
     market_id=context.market_id,
@@ -692,6 +783,7 @@ render_dashboard_tabs(
     investor_flow_profile=bundle.investor_flow_profile,
     investor_flow_frame=bundle.investor_flow_frame,
     investor_flow_detail=bundle.investor_flow_detail,
+    shared_flow_summary_map=bundle.shared_flow_summary_map,
     sector_map=sector_map,
     ui_locale=context.ui_locale,
 )

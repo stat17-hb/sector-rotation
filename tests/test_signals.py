@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import pytest
 
-from src.signals.matrix import SectorSignal, compute_action
+from src.signals.matrix import SectorSignal, compute_action, compute_kr_action
 from src.signals.scoring import apply_fx_shock_filter, apply_rsi_alerts
 from src.signals.sector_fit import build_sector_fit_lookup
 
@@ -31,6 +31,8 @@ def _make_signal(**kwargs) -> SectorSignal:
         mdd_3m=-0.08,
         asof_date="2024-01-31",
         is_provisional=False,
+        momentum_method="legacy_rs_ma_v0",
+        legacy_momentum_strong=True,
     )
     defaults.update(kwargs)
     return SectorSignal(**defaults)
@@ -43,6 +45,12 @@ class TestSignals:
         assert compute_action(True, False) == "Watch"
         assert compute_action(False, True) == "Hold"
         assert compute_action(False, False) == "Avoid"
+
+    def test_kr_action_matrix_all_four_combinations(self):
+        assert compute_kr_action(True, True) == "Strong Buy"
+        assert compute_kr_action(True, False) == "Watch"
+        assert compute_kr_action(False, True) == "Hold"
+        assert compute_kr_action(False, False) == "Avoid"
 
     def test_overheat_alert_added_when_rsi_above_70(self):
         """apply_rsi_alerts adds 'Overheat' when RSI >= 70."""
@@ -117,3 +125,38 @@ class TestSignals:
 
         assert lookup["5044"]["sector_fit_rank"] == 2
         assert lookup["5044"]["sector_fit_avg_excess_pct"] == 1.2
+
+    def test_sector_signal_accepts_hybrid_fields(self):
+        signal = _make_signal(
+            momentum_method="hybrid_return_rank_v1",
+            trend_ok=True,
+            momentum_strong=True,
+            legacy_momentum_strong=False,
+            mom_rel_6m_ex1m=0.14,
+            mom_rel_12m_ex1m=0.28,
+            mom_score=0.82,
+            mom_raw=0.21,
+            mom_rank=1,
+            mom_percentile=82.0,
+        )
+
+        assert signal.momentum_method == "hybrid_return_rank_v1"
+        assert signal.mom_rank == 1
+        assert signal.mom_percentile == pytest.approx(82.0)
+
+    def test_sector_signal_accepts_kr_extension_fields(self):
+        signal = _make_signal(
+            momentum_core_pass=True,
+            momentum_rank_pass=True,
+            macro_context_regime="Recovery",
+            action_policy="KR_MOMENTUM_ONLY",
+            taxonomy_kind="THEME",
+            taxonomy_label="반도체",
+        )
+
+        assert signal.momentum_core_pass is True
+        assert signal.momentum_rank_pass is True
+        assert signal.macro_context_regime == "Recovery"
+        assert signal.action_policy == "KR_MOMENTUM_ONLY"
+        assert signal.taxonomy_kind == "THEME"
+        assert signal.taxonomy_label == "반도체"

@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
 import socket
-from typing import Any, Literal, Mapping, TypedDict
+from typing import Any, Callable, Literal, Mapping, TypedDict
 
 import pandas as pd
 
@@ -32,6 +32,7 @@ from src.data_sources.warehouse import (
     read_investor_flow_operational_complete_cursor,
     read_latest_investor_flow_failed_days,
     read_latest_investor_flow_run,
+    read_investor_flow_runs,
     read_market_prices,
     probe_dataset_mode,
     read_dataset_status,
@@ -50,6 +51,7 @@ KRX_DATA_HOST = "data.krx.co.kr"
 
 DataStatus = Literal["LIVE", "CACHED", "SAMPLE"]
 LoaderResult = tuple[DataStatus, pd.DataFrame]
+ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 class DiscoveryDetails(TypedDict):
@@ -113,6 +115,34 @@ TRADING_VALUE_DETAIL_COLUMNS: tuple[str, ...] = (
     "기타외국인",
     "전체",
 )
+
+
+def _emit_progress(
+    progress_callback: ProgressCallback | None,
+    *,
+    task: str,
+    phase: str,
+    pct: float | int,
+    detail: str = "",
+    status: str = "running",
+    meta: dict[str, Any] | None = None,
+) -> None:
+    if progress_callback is None:
+        return
+    try:
+        pct_value = int(round(float(pct)))
+    except Exception:
+        pct_value = 0
+    event = {
+        "task": str(task).strip(),
+        "phase": str(phase).strip(),
+        "pct": max(0, min(100, pct_value)),
+        "detail": str(detail).strip(),
+        "status": str(status).strip().lower() or "running",
+    }
+    if meta:
+        event["meta"] = dict(meta)
+    progress_callback(event)
 
 
 @dataclass(frozen=True)
@@ -419,11 +449,28 @@ def _validate_trading_value_frames(
     sell_frame: pd.DataFrame,
     net_frame: pd.DataFrame,
     investor_types: tuple[str, ...],
-) -> str | None:
+    leg_details: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
     frames = {"buy": buy_frame, "sell": sell_frame, "net": net_frame}
     empty_labels = [label for label, frame in frames.items() if frame is None or frame.empty]
     if len(empty_labels) >= 2:
-        return f"{empty_labels[0]} frame empty"
+        error_legs = sorted(
+            leg
+            for leg in empty_labels
+            if any(
+                str(attempt.get("status", "")).strip() == "error"
+                for attempt in list(dict((leg_details or {})).get(leg, {}).get("attempts") or [])
+            )
+        )
+        family = "exception_backed_empty" if error_legs else "all_builders_empty"
+        joined = "/".join(empty_labels)
+        reason = f"{joined} frames empty [{family}]"
+        return {
+            "family": family,
+            "empty_legs": list(empty_labels),
+            "error_legs": error_legs,
+            "final_reason": reason,
+        }
     for investor_type in investor_types:
         candidates = INVESTOR_FLOW_COLUMN_CANDIDATES.get(str(investor_type), (str(investor_type),))
         missing = [
@@ -432,19 +479,47 @@ def _validate_trading_value_frames(
             if frame is not None and not frame.empty and _resolve_frame_column(frame, candidates) is None
         ]
         if missing:
-            return f"missing investor columns for {investor_type}: {', '.join(missing)}"
+            return {
+                "family": "missing_investor_columns",
+                "missing_legs": list(missing),
+                "investor_type": str(investor_type),
+                "final_reason": f"missing investor columns for {investor_type}: {', '.join(missing)}",
+            }
     return None
 
 
-def _fetch_first_non_empty_frame(*builders) -> pd.DataFrame:
-    for builder in builders:
+def _short_exception_detail(exc: BaseException) -> str:
+    detail = f"{type(exc).__name__}: {exc}".strip()
+    return detail[:200]
+
+
+def _fetch_first_non_empty_frame(*builders) -> tuple[pd.DataFrame, list[dict[str, Any]], str]:
+    attempts: list[dict[str, Any]] = []
+    for name, builder in builders:
         try:
             frame = builder()
-        except Exception:
+        except Exception as exc:
+            attempts.append(
+                {
+                    "builder": str(name),
+                    "status": "error",
+                    "detail": _short_exception_detail(exc),
+                }
+            )
             frame = pd.DataFrame()
-        if frame is not None and not frame.empty:
-            return frame
-    return pd.DataFrame()
+        else:
+            if frame is None or frame.empty:
+                attempts.append({"builder": str(name), "status": "empty"})
+                continue
+            attempts.append(
+                {
+                    "builder": str(name),
+                    "status": "success",
+                    "rows": int(len(frame)),
+                }
+            )
+            return frame, attempts, str(name)
+    return pd.DataFrame(), attempts, ""
 
 
 def _fetch_ticker_trading_value_frames(
@@ -454,49 +529,104 @@ def _fetch_ticker_trading_value_frames(
     start: str,
     end: str,
     allow_wrapper_fallback: bool = True,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, dict[str, Any]]:
     def _wrapper_frame(on: str) -> pd.DataFrame:
-        try:
-            return stock_module.get_market_trading_value_by_date(start, end, ticker, on=on)
-        except Exception:
-            return pd.DataFrame()
+        return stock_module.get_market_trading_value_by_date(start, end, ticker, on=on)
 
-    def _resolve_for(on: str) -> pd.DataFrame:
+    def _resolve_for(on: str) -> tuple[pd.DataFrame, dict[str, Any]]:
         builders = [
-            lambda: _fetch_ticker_trading_value_frame_raw(
-                ticker=ticker,
-                start=start,
-                end=end,
-                on=on,
-                detail=False,
+            (
+                "raw_general",
+                lambda: _fetch_ticker_trading_value_frame_raw(
+                    ticker=ticker,
+                    start=start,
+                    end=end,
+                    on=on,
+                    detail=False,
+                ),
             ),
-            lambda: _fetch_ticker_trading_value_frame_raw(
-                ticker=ticker,
-                start=start,
-                end=end,
-                on=on,
-                detail=True,
+            (
+                "raw_detail",
+                lambda: _fetch_ticker_trading_value_frame_raw(
+                    ticker=ticker,
+                    start=start,
+                    end=end,
+                    on=on,
+                    detail=True,
+                ),
             ),
         ]
         if allow_wrapper_fallback:
             builders.extend(
                 [
-                    lambda: _fetch_ticker_trading_value_frame_detailed(
-                        stock_module,
-                        ticker=ticker,
-                        start=start,
-                        end=end,
-                        on=on,
+                    (
+                        "wrapper_detail",
+                        lambda: _fetch_ticker_trading_value_frame_detailed(
+                            stock_module,
+                            ticker=ticker,
+                            start=start,
+                            end=end,
+                            on=on,
+                        ),
                     ),
-                    lambda: _wrapper_frame(on),
+                    (
+                        "wrapper_general",
+                        lambda: _wrapper_frame(on),
+                    ),
                 ]
             )
-        return _fetch_first_non_empty_frame(*builders)
+        frame, attempts, selected_builder = _fetch_first_non_empty_frame(*builders)
+        return frame, {
+            "selected_builder": selected_builder,
+            "attempts": attempts,
+        }
 
-    buy_frame = _resolve_for("매수")
-    sell_frame = _resolve_for("매도")
-    net_frame = _resolve_for("순매수")
-    return buy_frame, sell_frame, net_frame
+    buy_frame, buy_detail = _resolve_for("매수")
+    sell_frame, sell_detail = _resolve_for("매도")
+    net_frame, net_detail = _resolve_for("순매수")
+    return buy_frame, sell_frame, net_frame, {
+        "buy": buy_detail,
+        "sell": sell_detail,
+        "net": net_detail,
+    }
+
+
+def _classify_failed_ticker(
+    *,
+    ticker: str,
+    validation_detail: Mapping[str, Any] | None,
+    leg_details: Mapping[str, Any],
+    normalized_empty: bool = False,
+) -> tuple[str, dict[str, Any]]:
+    if validation_detail is not None:
+        family = str(validation_detail.get("family", "")).strip() or "validation_error"
+        final_reason = str(validation_detail.get("final_reason", "")).strip() or family
+    elif normalized_empty:
+        family = "normalized_empty"
+        final_reason = "normalized investor-flow frame empty"
+    else:
+        family = "unknown"
+        final_reason = "unknown investor-flow failure"
+
+    detail = {
+        "ticker": str(ticker),
+        "family": family,
+        "final_reason": final_reason,
+        "legs": dict(leg_details),
+    }
+    if validation_detail is not None:
+        for key in ("empty_legs", "error_legs", "missing_legs", "investor_type"):
+            if key in validation_detail:
+                detail[key] = validation_detail.get(key)
+    return final_reason, detail
+
+
+def _build_failed_ticker_family_counts(failed_ticker_detail: Mapping[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for detail in dict(failed_ticker_detail or {}).values():
+        family = str(dict(detail or {}).get("family", "")).strip() or "unknown"
+        counts[family] = counts.get(family, 0) + 1
+    return counts
 
 
 def _collapse_detail_trading_value_frame(frame: pd.DataFrame) -> pd.DataFrame:
@@ -592,16 +722,13 @@ def _fetch_ticker_trading_value_frame_detailed(
     end: str,
     on: str,
 ) -> pd.DataFrame:
-    try:
-        detail_frame = stock_module.get_market_trading_value_by_date(
-            start,
-            end,
-            ticker,
-            on=on,
-            detail=True,
-        )
-    except Exception:
-        return pd.DataFrame()
+    detail_frame = stock_module.get_market_trading_value_by_date(
+        start,
+        end,
+        ticker,
+        on=on,
+        detail=True,
+    )
     return _collapse_detail_trading_value_frame(detail_frame)
 
 
@@ -630,11 +757,8 @@ def _fetch_ticker_trading_value_frame_raw(
     if detail:
         payload["detailView"] = 1
 
-    try:
-        response = request_krx_data(payload)
-        parsed = _parse_raw_trading_value_payload(response.json(), detail=detail)
-    except Exception:
-        return pd.DataFrame()
+    response = request_krx_data(payload)
+    parsed = _parse_raw_trading_value_payload(response.json(), detail=detail)
     return _collapse_detail_trading_value_frame(parsed) if detail else parsed
 
 
@@ -776,17 +900,49 @@ def _collect_ticker_flow_rows(
     reset_session_between_batches: bool,
     allow_wrapper_fallback: bool,
     ticker_name_resolver,
-) -> tuple[list[pd.DataFrame], dict[str, str], int]:
+    progress_callback: ProgressCallback | None = None,
+    progress_floor: int = 0,
+    progress_ceiling: int = 100,
+    progress_phase: str = "ticker collection",
+) -> tuple[list[pd.DataFrame], dict[str, str], int, dict[str, dict[str, Any]]]:
     raw_frames: list[pd.DataFrame] = []
     failed_codes: dict[str, str] = {}
+    failed_detail: dict[str, dict[str, Any]] = {}
     processed_requests = 0
+    predicted_requests = max(0, len(tickers) * 3)
+    last_pct = -1
+
+    def _emit_collection_progress(current_ticker: str) -> None:
+        nonlocal last_pct
+        if progress_callback is None or predicted_requests <= 0:
+            return
+        ratio = processed_requests / predicted_requests
+        pct = progress_floor + (progress_ceiling - progress_floor) * ratio
+        pct_value = max(progress_floor, min(progress_ceiling, int(round(pct))))
+        if pct_value == last_pct:
+            return
+        last_pct = pct_value
+        _emit_progress(
+            progress_callback,
+            task="투자자수급 갱신",
+            phase=progress_phase,
+            pct=pct_value,
+            detail=f"{processed_requests}/{predicted_requests} logical steps",
+            meta={
+                "processed_requests": processed_requests,
+                "predicted_requests": predicted_requests,
+                "current_ticker": str(current_ticker),
+                "retry": bool(reset_session_between_batches),
+                "metric_semantics": "logical_ticker_steps",
+            },
+        )
 
     for index, ticker in enumerate(tickers):
         if reset_session_between_batches and index % RETRY_SESSION_RESET_BATCH_SIZE == 0:
             reset_krx_shared_session()
         processed_requests += 3
         try:
-            buy_frame, sell_frame, net_frame = _fetch_ticker_trading_value_frames(
+            buy_frame, sell_frame, net_frame, leg_details = _fetch_ticker_trading_value_frames(
                 stock_module,
                 ticker=ticker,
                 start=start,
@@ -794,17 +950,32 @@ def _collect_ticker_flow_rows(
                 allow_wrapper_fallback=allow_wrapper_fallback,
             )
         except Exception as exc:
-            failed_codes[str(ticker)] = str(exc)
+            failed_codes[str(ticker)] = _short_exception_detail(exc)
+            failed_detail[str(ticker)] = {
+                "ticker": str(ticker),
+                "family": "collector_exception",
+                "final_reason": _short_exception_detail(exc),
+                "legs": {},
+            }
+            _emit_collection_progress(str(ticker))
             continue
 
-        validation_error = _validate_trading_value_frames(
+        validation_detail = _validate_trading_value_frames(
             buy_frame=buy_frame,
             sell_frame=sell_frame,
             net_frame=net_frame,
             investor_types=investor_types,
+            leg_details=leg_details,
         )
-        if validation_error is not None:
-            failed_codes[str(ticker)] = validation_error
+        if validation_detail is not None:
+            final_reason, detail = _classify_failed_ticker(
+                ticker=str(ticker),
+                validation_detail=validation_detail,
+                leg_details=leg_details,
+            )
+            failed_codes[str(ticker)] = final_reason
+            failed_detail[str(ticker)] = detail
+            _emit_collection_progress(str(ticker))
             continue
 
         ticker_name = ""
@@ -822,11 +993,20 @@ def _collect_ticker_flow_rows(
             investor_types=investor_types,
         )
         if normalized.empty:
-            failed_codes[str(ticker)] = "Empty investor-flow frame"
+            final_reason, detail = _classify_failed_ticker(
+                ticker=str(ticker),
+                validation_detail=None,
+                leg_details=leg_details,
+                normalized_empty=True,
+            )
+            failed_codes[str(ticker)] = final_reason
+            failed_detail[str(ticker)] = detail
+            _emit_collection_progress(str(ticker))
             continue
         raw_frames.append(normalized)
+        _emit_collection_progress(str(ticker))
 
-    return raw_frames, failed_codes, processed_requests
+    return raw_frames, failed_codes, processed_requests, failed_detail
 
 
 def collect_sector_investor_flow(
@@ -836,7 +1016,15 @@ def collect_sector_investor_flow(
     end: str,
     investor_types: tuple[str, ...] = DEFAULT_INVESTOR_TYPES,
     market: str = "KR",
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    _emit_progress(
+        progress_callback,
+        task="투자자수급 갱신",
+        phase="거래일 범위 확인 중",
+        pct=10,
+        detail=f"{start} ~ {end}",
+    )
     _check_socket_stack()
     ensure_pykrx_transport_compat()
     from pykrx import stock  # type: ignore[import]
@@ -851,6 +1039,13 @@ def collect_sector_investor_flow(
     universe = _build_sector_universe(sector_map, reference_date=reference_date, market=market)
     relevant_tickers = set(universe.ticker_to_sector_codes)
     sorted_tickers = sorted(relevant_tickers)
+    _emit_progress(
+        progress_callback,
+        task="투자자수급 갱신",
+        phase="구성종목 확인 완료",
+        pct=15,
+        detail=f"{len(universe.sector_codes)} sectors · {len(relevant_tickers)} tickers",
+    )
 
     failed_days: list[str] = []
     failed_codes: dict[str, str] = {
@@ -858,7 +1053,7 @@ def collect_sector_investor_flow(
         for code, detail in universe.failed_sector_codes.items()
     }
     request_metric_semantics = "logical_ticker_steps"
-    initial_raw_frames, initial_failed_tickers, processed_requests = _collect_ticker_flow_rows(
+    initial_raw_frames, initial_failed_tickers, processed_requests, initial_failed_ticker_detail = _collect_ticker_flow_rows(
         stock_module=stock,
         tickers=sorted_tickers,
         start=start,
@@ -867,32 +1062,51 @@ def collect_sector_investor_flow(
         reset_session_between_batches=False,
         allow_wrapper_fallback=True,
         ticker_name_resolver=stock.get_market_ticker_name,
+        progress_callback=progress_callback,
+        progress_floor=20,
+        progress_ceiling=70,
+        progress_phase="1차 수집 중",
     )
     raw_frames = list(initial_raw_frames)
     failed_codes.update(initial_failed_tickers)
+    failed_ticker_detail = dict(initial_failed_ticker_detail)
 
     retry_targets = sorted(initial_failed_tickers)
     retried_ticker_count = len(retry_targets)
     retried_recovered_ticker_count = 0
     retry_processed_requests = 0
     if retry_targets:
-        retry_raw_frames, retry_failed_tickers, retry_processed_requests = _collect_ticker_flow_rows(
+        _emit_progress(
+            progress_callback,
+            task="투자자수급 갱신",
+            phase="재시도 준비 중",
+            pct=70,
+            detail=f"{len(retry_targets)} tickers",
+        )
+        retry_raw_frames, retry_failed_tickers, retry_processed_requests, retry_failed_ticker_detail = _collect_ticker_flow_rows(
             stock_module=stock,
             tickers=retry_targets,
             start=start,
             end=end,
             investor_types=investor_types,
             reset_session_between_batches=True,
-            allow_wrapper_fallback=False,
+            allow_wrapper_fallback=True,
             ticker_name_resolver=stock.get_market_ticker_name,
+            progress_callback=progress_callback,
+            progress_floor=70,
+            progress_ceiling=90,
+            progress_phase="재시도 수집 중",
         )
         retry_recovered_tickers = sorted(set(retry_targets) - set(retry_failed_tickers))
         retried_recovered_ticker_count = len(retry_recovered_tickers)
         raw_frames.extend(retry_raw_frames)
         for ticker in retry_recovered_tickers:
             failed_codes.pop(ticker, None)
+            failed_ticker_detail.pop(ticker, None)
         for ticker, detail in retry_failed_tickers.items():
             failed_codes[ticker] = detail
+        for ticker, detail in retry_failed_ticker_detail.items():
+            failed_ticker_detail[ticker] = detail
 
     processed_requests += retry_processed_requests
     predicted_requests = (len(sorted_tickers) + retried_ticker_count) * 3
@@ -912,7 +1126,15 @@ def collect_sector_investor_flow(
         failed_days = list(requested_days) if failed_day_truth_confident else []
 
     sector_frame = _aggregate_sector_flow(raw_frame, universe)
+    _emit_progress(
+        progress_callback,
+        task="투자자수급 갱신",
+        phase="섹터 집계 완료",
+        pct=90,
+        detail=f"{len(sector_frame)} rows",
+    )
     failed_sector_codes, failed_ticker_codes = _split_failed_code_map(failed_codes)
+    failed_ticker_family_counts = _build_failed_ticker_family_counts(failed_ticker_detail)
     summary = {
         "status": "LIVE" if not sector_frame.empty else "SAMPLE",
         "provider": FLOW_PROVIDER,
@@ -928,6 +1150,8 @@ def collect_sector_investor_flow(
         "failed_codes": failed_codes,
         "failed_sector_codes": failed_sector_codes,
         "failed_ticker_codes": failed_ticker_codes,
+        "failed_ticker_detail": failed_ticker_detail,
+        "failed_ticker_family_counts": failed_ticker_family_counts,
         "failed_sector_count": len(failed_sector_codes),
         "failed_ticker_count": len(failed_ticker_codes),
         "failed_day_source": failed_day_source,
@@ -1023,6 +1247,111 @@ def _build_historical_backfill_failure_summary(
     }
 
 
+def _summarize_operational_failure_shape(run: Mapping[str, Any]) -> dict[str, Any]:
+    summary = dict(run.get("summary") or {})
+    failed_codes = {
+        str(key).strip(): str(value).strip()
+        for key, value in dict(run.get("failed_codes") or {}).items()
+        if str(key).strip() and str(value).strip()
+    }
+    failed_days = sorted(
+        {
+            normalized
+            for normalized in (
+                _normalize_yyyymmdd(day)
+                for day in list(run.get("failed_days") or [])
+            )
+            if normalized
+        }
+    )
+    date_scoped_code_days = sorted(
+        {
+            normalized
+            for normalized in (_normalize_yyyymmdd(key) for key in failed_codes)
+            if normalized
+        }
+    )
+    failed_days = sorted(set(failed_days).union(date_scoped_code_days))
+    sector_failures = sum(1 for key in failed_codes if key.startswith("sector:"))
+    ticker_failures = sum(
+        1
+        for key in failed_codes
+        if not key.startswith("sector:") and not _normalize_yyyymmdd(key)
+    )
+    sector_failures = max(sector_failures, int(summary.get("failed_sector_count", 0) or 0))
+    ticker_failures = max(ticker_failures, int(summary.get("failed_ticker_count", 0) or 0))
+    return {
+        "failed_days": failed_days,
+        "failed_day_truth_confident": bool(summary.get("failed_day_truth_confident", False)),
+        "failed_sector_count": sector_failures,
+        "failed_ticker_count": ticker_failures,
+    }
+
+
+def _resolve_unresolved_operational_replay(
+    *,
+    market: str,
+    complete_cursor: str,
+) -> dict[str, Any]:
+    """Return a durable replay plan when unresolved manual-refresh history exists."""
+    unresolved_runs: list[dict[str, Any]] = []
+    for run in read_investor_flow_runs(market=market, reasons=OPERATIONAL_INVESTOR_FLOW_REASONS):
+        requested_end = _normalize_yyyymmdd(str(run.get("requested_end", "")))
+        if complete_cursor and requested_end and requested_end <= complete_cursor:
+            break
+        if bool(run.get("coverage_complete")):
+            if complete_cursor:
+                break
+            continue
+        unresolved_runs.append(run)
+
+    if not unresolved_runs:
+        return {}
+
+    anchor_candidates = [
+        _normalize_yyyymmdd(str(run.get("requested_start", "")))
+        for run in unresolved_runs
+    ]
+    anchor_candidates = [value for value in anchor_candidates if value]
+    if not anchor_candidates:
+        return {}
+
+    shapes = [_summarize_operational_failure_shape(run) for run in unresolved_runs]
+    failed_days = sorted({day for shape in shapes for day in shape["failed_days"]})
+    has_ticker_failures = any(int(shape["failed_ticker_count"]) > 0 for shape in shapes)
+    has_sector_failures = any(int(shape["failed_sector_count"]) > 0 for shape in shapes)
+    truth_confident = all(bool(shape["failed_day_truth_confident"]) for shape in shapes)
+    anchor_start = min(anchor_candidates)
+    latest_run = unresolved_runs[0]
+    latest_run_end = _normalize_yyyymmdd(str(latest_run.get("requested_end", "")))
+    strictly_day_scoped = bool(failed_days) and truth_confident and not has_ticker_failures and not has_sector_failures
+    if strictly_day_scoped:
+        start = failed_days[0]
+        mode = "repair_from_failed_day"
+        anchor_reason = "earliest_failed_day_in_unresolved_history"
+        repaired_days = list(failed_days)
+    else:
+        start = anchor_start
+        mode = "replay_uncertain_span"
+        anchor_reason = "earliest_unresolved_requested_start"
+        repaired_days = []
+    return {
+        "mode": mode,
+        "start": start,
+        "complete_cursor": complete_cursor,
+        "anchor_start": anchor_start,
+        "anchor_reason": anchor_reason,
+        "metadata_durable": True,
+        "latest_run_reason": str(latest_run.get("reason", "")),
+        "latest_run_end": latest_run_end,
+        "failed_days_repaired": repaired_days,
+        "failed_day_truth_confident": truth_confident,
+        "has_ticker_failures": has_ticker_failures,
+        "has_sector_failures": has_sector_failures,
+        "history_run_count": len(unresolved_runs),
+    }
+
+
 def resolve_investor_flow_refresh_window(
     *,
     end_date_str: str,
@@ -1038,11 +1367,23 @@ def resolve_investor_flow_refresh_window(
     )
 
     if not complete_cursor:
+        unresolved = _resolve_unresolved_operational_replay(
+            market=market,
+            complete_cursor="",
+        )
+        if unresolved:
+            start = str(unresolved.get("start", "")).strip()
+            window_meta = dict(unresolved)
+            window_meta.pop("start", None)
+            return start, end, window_meta
         requested_start = (requested_end - timedelta(days=int(lookback_days))).normalize()
         start = requested_start.strftime("%Y%m%d")
         return start, end, {
             "mode": "bootstrap_seed",
             "complete_cursor": "",
+            "anchor_start": start,
+            "anchor_reason": "bootstrap_lookback",
+            "metadata_durable": False,
             "latest_run_reason": str(latest_run.get("reason", "")),
             "latest_run_end": str(latest_run.get("requested_end", "")),
             "failed_days_repaired": [],
@@ -1065,6 +1406,9 @@ def resolve_investor_flow_refresh_window(
     return start, end, {
         "mode": "incremental",
         "complete_cursor": complete_cursor,
+        "anchor_start": start,
+        "anchor_reason": "next_business_day_after_complete_cursor" if not repaired_days else "failed_days_after_complete_cursor",
+        "metadata_durable": True,
         "latest_run_reason": str(latest_run.get("reason", "")),
         "latest_run_end": str(latest_run.get("requested_end", "")),
         "failed_days_repaired": repaired_days,
@@ -1339,6 +1683,7 @@ def run_manual_investor_flow_refresh(
     start_date_str: str | None = None,
     lookback_days: int = DEFAULT_LOOKBACK_CALENDAR_DAYS,
     market: str = "KR",
+    progress_callback: ProgressCallback | None = None,
 ) -> tuple[LoaderResult, dict[str, Any]]:
     resolved_end = _normalize_yyyymmdd(end_date_str)
     if not resolved_end:
@@ -1360,6 +1705,13 @@ def run_manual_investor_flow_refresh(
             lookback_days=lookback_days,
             market=market,
         )
+    _emit_progress(
+        progress_callback,
+        task="투자자수급 갱신",
+        phase="갱신 구간 확정",
+        pct=8,
+        detail=f"{start} ~ {resolved_end}",
+    )
     end = resolved_end
     if pd.Timestamp(start) > pd.Timestamp(end):
         cached = load_sector_investor_flow(
@@ -1379,6 +1731,14 @@ def run_manual_investor_flow_refresh(
             "rows": int(len(cached)),
             "window": window_meta,
         }
+        _emit_progress(
+            progress_callback,
+            task="투자자수급 갱신",
+            phase="이미 최신 구간",
+            pct=100,
+            detail="complete cursor 기준 이미 최신입니다.",
+            status="complete",
+        )
         return ("CACHED", cached), summary
 
     try:
@@ -1387,6 +1747,7 @@ def run_manual_investor_flow_refresh(
             start=start,
             end=end,
             market=market,
+            progress_callback=progress_callback,
         )
         summary["window"] = window_meta
         if sector_frame.empty:
@@ -1426,6 +1787,13 @@ def run_manual_investor_flow_refresh(
             )
 
         try:
+            _emit_progress(
+                progress_callback,
+                task="투자자수급 갱신",
+                phase="웨어하우스 저장 중",
+                pct=94,
+                detail=f"{len(sector_frame)} rows",
+            )
             write_investor_flow_operational_result(
                 raw_frame=raw_frame,
                 sector_frame=sector_frame,
@@ -1451,6 +1819,14 @@ def run_manual_investor_flow_refresh(
             summary["warehouse_write_skipped"] = True
             summary["warehouse_write_error"] = str(exc)
             summary["rows"] = int(len(sector_frame))
+            _emit_progress(
+                progress_callback,
+                task="투자자수급 갱신",
+                phase="미리보기 완료",
+                pct=100,
+                detail="웨어하우스 쓰기는 건너뛰고 메모리 미리보기를 유지합니다.",
+                status="complete",
+            )
             return ("LIVE", sector_frame.copy()), summary
         cached = load_sector_investor_flow(
             sector_map=sector_map,
@@ -1459,6 +1835,14 @@ def run_manual_investor_flow_refresh(
             market=market,
             allow_bootstrap_partial_preview=True,
         )[1]
+        _emit_progress(
+            progress_callback,
+            task="투자자수급 갱신",
+            phase="캐시 재로드 완료",
+            pct=100,
+            detail=f"{len(cached)} rows",
+            status="complete",
+        )
         return ("LIVE", cached), summary
     except Exception as exc:
         logger.exception("Investor-flow refresh failed")
@@ -1493,6 +1877,14 @@ def run_manual_investor_flow_refresh(
             )
         except Exception:
             logger.debug("Investor-flow failure bookkeeping skipped", exc_info=True)
+        _emit_progress(
+            progress_callback,
+            task="투자자수급 갱신",
+            phase="갱신 실패",
+            pct=100,
+            detail=str(exc),
+            status="error",
+        )
         return (fallback_status, fallback_frame), summary
 
 
@@ -1511,6 +1903,12 @@ def read_warm_status() -> dict[str, Any]:
         "failed_codes": failed_codes,
         "failed_sector_codes": failed_sector_codes,
         "failed_ticker_codes": failed_ticker_codes,
+        "failed_ticker_detail": dict(latest_summary.get("failed_ticker_detail") or {}),
+        "failed_ticker_family_counts": {
+            str(key).strip(): int(value or 0)
+            for key, value in dict(latest_summary.get("failed_ticker_family_counts") or {}).items()
+            if str(key).strip()
+        },
         "failed_sector_count": len(failed_sector_codes),
         "failed_ticker_count": len(failed_ticker_codes),
         "reason": str(latest_operational.get("reason", "")).strip(),
@@ -1526,12 +1924,36 @@ def read_warm_status() -> dict[str, Any]:
         "failed_day_truth_confident": bool(latest_summary.get("failed_day_truth_confident", False)),
         "request_metric_semantics": str(latest_summary.get("request_metric_semantics", "")).strip(),
     }
+    if status["failed_days"] and not status["failed_day_truth_confident"]:
+        requested_start = _normalize_yyyymmdd(str(latest_operational.get("requested_start", "")))
+        requested_end = _normalize_yyyymmdd(str(latest_operational.get("requested_end", "")))
+        if requested_start and requested_end:
+            requested_days, source, confident = _resolve_frozen_trading_day_truth(
+                requested_start,
+                requested_end,
+                market="KR",
+            )
+            if confident:
+                requested_day_set = set(requested_days)
+                status["failed_days"] = [day for day in status["failed_days"] if day in requested_day_set]
+                status["failed_day_source"] = source
+                status["failed_day_truth_confident"] = True
+    window = dict(latest_summary.get("window") or {})
     cursor = read_investor_flow_operational_complete_cursor()
     if cursor:
         status["watermark_key"] = cursor
         status["end"] = cursor
     else:
         status["end"] = ""
+    if not window and not cursor:
+        window = _resolve_unresolved_operational_replay(market="KR", complete_cursor="")
+        window.pop("start", None)
+    if window:
+        status["window"] = window
+        status["window_mode"] = str(window.get("mode", "")).strip()
+        status["anchor_start"] = str(window.get("anchor_start", "")).strip()
+        status["anchor_reason"] = str(window.get("anchor_reason", "")).strip()
+        status["metadata_durable"] = bool(window.get("metadata_durable"))
     return status
 
 

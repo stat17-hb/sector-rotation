@@ -20,24 +20,18 @@ INVESTOR_LABEL_TO_GROUP: dict[str, str] = {
     "기관합계": "institutional",
     "개인": "retail",
 }
-STATE_VALUES: dict[str, float] = {
-    "supportive": 1.0,
-    "neutral": 0.0,
-    "adverse": -1.0,
-    "unavailable": 0.0,
-}
 PROFILE_CONFIG: dict[str, dict[str, Any]] = {
     "foreign_lead": {
-        "weights": {"foreign": 1.0, "institutional": 0.6, "retail": -0.4},
-        "primary": "foreign",
+        "score_group": "foreign",
+        "score_sign": 1.0,
     },
     "institutional_confirmation": {
-        "weights": {"foreign": 0.5, "institutional": 1.0, "retail": -0.4},
-        "primary": "institutional",
+        "score_group": "institutional",
+        "score_sign": 1.0,
     },
     "contrarian_retail": {
-        "weights": {"foreign": 0.75, "institutional": 0.75, "retail": -0.8},
-        "primary": "foreign",
+        "score_group": "retail",
+        "score_sign": -1.0,
     },
 }
 UPGRADE_MAP: dict[str, str] = {
@@ -135,37 +129,34 @@ def summarize_sector_investor_flow(
             )
 
         config = PROFILE_CONFIG[profile]
-        weighted_score = 0.0
-        available_components = 0
-        for group_key, component in component_summaries.items():
-            if component.state == "unavailable":
-                continue
-            available_components += 1
-            weighted_score += config["weights"][group_key] * STATE_VALUES[component.state]
-
-        primary_state = component_summaries[config["primary"]].state
-        if available_components == 0 or primary_state == "unavailable":
+        score_group = str(config["score_group"])
+        score_sign = float(config["score_sign"])
+        score_component = component_summaries[score_group]
+        if score_component.state == "unavailable" or score_component.zscore is None:
             flow_state = "unavailable"
-        elif primary_state == "adverse" or weighted_score <= -0.75:
-            flow_state = "adverse"
-        elif primary_state == "supportive" and weighted_score >= 0.75:
-            flow_state = "supportive"
+            flow_score = 0.0
         else:
-            flow_state = "neutral"
+            flow_score = float(score_component.zscore) * score_sign
+            if flow_score >= 0.5:
+                flow_state = "supportive"
+            elif flow_score <= -0.5:
+                flow_state = "adverse"
+            else:
+                flow_state = "neutral"
 
         foreign_state = component_summaries["foreign"].state
         institutional_state = component_summaries["institutional"].state
         retail_state = component_summaries["retail"].state
         flow_reason = (
-            f"foreign={foreign_state}, institutional={institutional_state}, retail={retail_state}, "
-            f"profile={profile}, score={weighted_score:+.2f}"
+            f"profile={profile}, score_group={score_group}, sigma={flow_score:+.2f}, "
+            f"foreign={foreign_state}, institutional={institutional_state}, retail={retail_state}"
         )
         summaries[str(sector_code)] = SectorFlowSummary(
             sector_code=str(sector_code),
             sector_name=sector_name,
             flow_profile=profile,
             flow_state=flow_state,
-            flow_score=float(weighted_score),
+            flow_score=float(flow_score),
             flow_reason=flow_reason,
             foreign=component_summaries["foreign"],
             institutional=component_summaries["institutional"],

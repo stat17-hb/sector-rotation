@@ -36,7 +36,9 @@ from src.data_sources.warehouse import (
     export_market_parquet,
     get_dataset_artifact_key,
     is_market_coverage_complete,
+    is_legacy_kr_index_subset,
     probe_dataset_mode,
+    read_active_index_dimension,
     record_ingest_run,
     read_dataset_status,
     read_market_prices,
@@ -71,6 +73,18 @@ STALE_INDEX_CODE_REPLACEMENTS: dict[str, str] = {
     "1166": "1157",
 }
 INDEX_TICKER_MARKETS: tuple[str, ...] = ("KRX", "KOSPI", "KOSDAQ", "테마")
+INDEX_FINDER_MARKETS: tuple[tuple[str, str], ...] = (
+    ("2", "KRX"),
+    ("3", "KOSPI"),
+    ("4", "KOSDAQ"),
+    ("5", "테마"),
+)
+INDEX_FINDER_SOURCE_PRIORITY: dict[str, int] = {
+    "KRX": 0,
+    "KOSPI": 1,
+    "KOSDAQ": 2,
+    "테마": 3,
+}
 _BACKGROUND_WARM_LOCK = threading.Lock()
 _BACKGROUND_WARM_THREADS: dict[str, threading.Thread] = {}
 
@@ -85,6 +99,30 @@ class KRXInteractiveRangeLimitError(KRXMarketDataError):
 
 class KRXMarketDataAccessDeniedError(KRXMarketDataError):
     """Raised when KRX OpenAPI denies interactive market-data access."""
+
+
+def _derive_taxonomy_kind(
+    *,
+    index_code: str,
+    source_market: str,
+    benchmark_code: str,
+) -> str:
+    code = str(index_code).strip()
+    if code and code == str(benchmark_code).strip():
+        return "BENCHMARK"
+    if str(source_market).strip() == "테마":
+        return "THEME"
+    return "INDEX"
+
+
+def _derive_taxonomy_label(*, taxonomy_kind: str, index_name: str) -> str:
+    name = str(index_name or "").strip()
+    if not name:
+        return ""
+    if str(taxonomy_kind).strip().upper() in {"BENCHMARK", "THEME"}:
+        return name
+    head, sep, tail = name.partition(" ")
+    return tail.strip() if sep and tail.strip() else name
 
 
 def _resolve_provider_mode() -> KRXProvider:
@@ -164,6 +202,11 @@ def _configured_index_metadata() -> dict[str, dict[str, Any]]:
     benchmark_name = str(payload.get("benchmark", {}).get("name", "")).strip()
     metadata: dict[str, dict[str, Any]] = {}
     if benchmark_code:
+        benchmark_taxonomy_kind = _derive_taxonomy_kind(
+            index_code=benchmark_code,
+            source_market="KOSPI",
+            benchmark_code=benchmark_code,
+        )
         metadata[benchmark_code] = {
             "index_code": benchmark_code,
             "index_name": benchmark_name or get_index_display_name(benchmark_code),
@@ -171,6 +214,11 @@ def _configured_index_metadata() -> dict[str, dict[str, Any]]:
             "is_benchmark": True,
             "is_active": True,
             "export_sector": False,
+            "taxonomy_kind": benchmark_taxonomy_kind,
+            "taxonomy_label": _derive_taxonomy_label(
+                taxonomy_kind=benchmark_taxonomy_kind,
+                index_name=benchmark_name or get_index_display_name(benchmark_code),
+            ),
         }
 
     for regime_data in (payload.get("regimes", {}) or {}).values():
@@ -178,13 +226,24 @@ def _configured_index_metadata() -> dict[str, dict[str, Any]]:
             code = str(sector.get("code", "")).strip()
             if not code:
                 continue
+            index_name = str(sector.get("name", "")).strip() or get_index_display_name(code)
+            taxonomy_kind = _derive_taxonomy_kind(
+                index_code=code,
+                source_market="KOSPI" if code.startswith("11") else "KRX",
+                benchmark_code=benchmark_code,
+            )
             metadata[code] = {
                 "index_code": code,
-                "index_name": str(sector.get("name", "")).strip() or get_index_display_name(code),
+                "index_name": index_name,
                 "family": resolve_openapi_api_id(code),
                 "is_benchmark": code == benchmark_code,
                 "is_active": True,
                 "export_sector": bool(sector.get("export_sector", False)),
+                "taxonomy_kind": taxonomy_kind,
+                "taxonomy_label": _derive_taxonomy_label(
+                    taxonomy_kind=taxonomy_kind,
+                    index_name=index_name,
+                ),
             }
     return metadata
 
@@ -314,21 +373,34 @@ def _warehouse_coverage_complete(index_codes: list[str], start: str, end: str) -
 def _sync_index_dimension(index_codes: list[str]) -> None:
     """Upsert active index metadata for the requested codes into the warehouse."""
     configured = _configured_index_metadata()
+    benchmark_code = _configured_benchmark_code()
+    discovered = _discovered_index_rows_by_code(benchmark_code)
     rows: list[dict[str, Any]] = []
     for code in [str(value).strip() for value in index_codes if str(value).strip()]:
-        row = configured.get(code)
+        row = discovered.get(code) or configured.get(code)
         if row is None:
             try:
                 family = resolve_openapi_api_id(code)
             except Exception:
                 family = "UNKNOWN"
+            index_name = get_index_display_name(code)
+            taxonomy_kind = _derive_taxonomy_kind(
+                index_code=code,
+                source_market="KOSPI" if code.startswith("11") else "KRX",
+                benchmark_code=benchmark_code,
+            )
             row = {
                 "index_code": code,
-                "index_name": get_index_display_name(code),
+                "index_name": index_name,
                 "family": family,
-                "is_benchmark": False,
+                "is_benchmark": code == benchmark_code,
                 "is_active": True,
                 "export_sector": False,
+                "taxonomy_kind": taxonomy_kind,
+                "taxonomy_label": _derive_taxonomy_label(
+                    taxonomy_kind=taxonomy_kind,
+                    index_name=index_name,
+                ),
             }
         rows.append(dict(row))
     if rows:
@@ -429,35 +501,199 @@ def probe_market_status() -> str:
     return probe_dataset_mode("market_prices")
 
 
+def _discover_kr_index_rows_via_finder() -> list[dict[str, str]]:
+    """Return official KRX finder rows across KRX/KOSPI/KOSDAQ/테마 markets."""
+    ensure_pykrx_transport_compat()
+    from pykrx.website.krx.market.core import 주가지수검색  # type: ignore[import]
+
+    finder = 주가지수검색()
+    discovered: list[dict[str, str]] = []
+    for mktsel, source_market in INDEX_FINDER_MARKETS:
+        frame = finder.fetch(mktsel)
+        if frame is None or frame.empty:
+            continue
+        for row in frame.to_dict("records"):
+            full_code = str(row.get("full_code", "")).strip()
+            short_code = str(row.get("short_code", "")).strip()
+            if not full_code or not short_code:
+                continue
+            code = f"{full_code}{short_code.zfill(3)}"
+            discovered.append(
+                {
+                    "index_code": code,
+                    "index_name": str(row.get("codeName", "")).strip(),
+                    "source_market": source_market,
+                }
+            )
+    return discovered
+
+
+def _finder_source_rank(source_market: str) -> int:
+    return int(INDEX_FINDER_SOURCE_PRIORITY.get(str(source_market).strip(), 99))
+
+
+def _dedupe_discovered_kr_index_rows(
+    discovered_rows: list[dict[str, str]],
+) -> list[dict[str, str]]:
+    """Preserve raw finder identities, then choose one canonical row per code."""
+    seen_identities: set[tuple[str, str, str]] = set()
+    grouped: dict[str, list[dict[str, str]]] = {}
+
+    for row in discovered_rows:
+        code = str(row.get("index_code", "")).strip()
+        name = str(row.get("index_name", "")).strip()
+        source_market = str(row.get("source_market", "")).strip() or "KRX"
+        if not code:
+            continue
+        identity = (code, source_market, name)
+        if identity in seen_identities:
+            continue
+        seen_identities.add(identity)
+        grouped.setdefault(code, []).append(
+            {
+                "index_code": code,
+                "index_name": name,
+                "source_market": source_market,
+            }
+        )
+
+    selected: list[dict[str, str]] = []
+    for code in sorted(grouped):
+        candidates = grouped[code]
+        candidates.sort(
+            key=lambda row: (
+                _finder_source_rank(str(row.get("source_market", ""))),
+                str(row.get("index_name", "")).strip(),
+            )
+        )
+        selected.append(dict(candidates[0]))
+    return selected
+
+
+def discover_kr_index_rows(benchmark_code: str | None = None) -> list[dict[str, Any]]:
+    """Discover the broad KR index universe with taxonomy metadata."""
+    resolved_benchmark = str(benchmark_code or _configured_benchmark_code()).strip() or "1001"
+    configured = _configured_index_metadata()
+    rows_by_code: dict[str, dict[str, Any]] = {}
+    try:
+        for discovered in _dedupe_discovered_kr_index_rows(_discover_kr_index_rows_via_finder()):
+            code = str(discovered.get("index_code", "")).strip()
+            if not code:
+                continue
+            source_market = str(discovered.get("source_market", "")).strip() or "KRX"
+            overlay = configured.get(code, {})
+            discovered_name = str(discovered.get("index_name", "")).strip()
+            configured_name = str(overlay.get("index_name", "")).strip()
+            is_benchmark = bool(overlay.get("is_benchmark")) or code == resolved_benchmark
+            index_name = configured_name if is_benchmark and configured_name else discovered_name or configured_name or get_index_display_name(code) or code
+            taxonomy_kind = _derive_taxonomy_kind(
+                index_code=code,
+                source_market=source_market,
+                benchmark_code=resolved_benchmark,
+            )
+            rows_by_code[code] = {
+                "index_code": code,
+                "index_name": index_name,
+                "family": str(overlay.get("family", "")).strip() or resolve_openapi_api_id(code),
+                "is_benchmark": is_benchmark,
+                "is_active": bool(overlay.get("is_active", True)),
+                "export_sector": overlay.get("export_sector", False),
+                "taxonomy_kind": str(overlay.get("taxonomy_kind", "")).strip() or taxonomy_kind,
+                "taxonomy_label": str(overlay.get("taxonomy_label", "")).strip() or _derive_taxonomy_label(
+                    taxonomy_kind=taxonomy_kind,
+                    index_name=index_name,
+                ),
+            }
+    except Exception as exc:
+        raise ValueError(f"KRX official index finder failed: {exc}") from exc
+
+    if not rows_by_code:
+        raise ValueError("KRX official index finder returned empty index universe")
+
+    return [rows_by_code[code] for code in sorted(rows_by_code)]
+
+
+def _is_placeholder_index_name(index_code: str, index_name: str) -> bool:
+    code = str(index_code or "").strip()
+    name = str(index_name or "").strip()
+    return bool(code) and (not name or name == code)
+
+
+@lru_cache(maxsize=4)
+def _discovered_index_rows_by_code(benchmark_code: str | None = None) -> dict[str, dict[str, Any]]:
+    try:
+        rows = discover_kr_index_rows(benchmark_code)
+    except Exception as exc:
+        logger.warning("KRX official index discovery unavailable for dim sync/repair: %s", exc)
+        return {}
+    return {
+        str(row.get("index_code", "")).strip(): dict(row)
+        for row in rows
+        if str(row.get("index_code", "")).strip()
+    }
+
+
 @lru_cache(maxsize=1)
 def _get_index_universe() -> frozenset[str]:
-    """Fetch and cache pykrx index ticker universe across markets.
-
-    Raises ValueError if the universe is empty or pykrx fails, so that
-    lru_cache does NOT persist the failure (lru_cache only caches return
-    values, not exceptions).
-    """
-    ensure_pykrx_transport_compat()
-    from pykrx import stock  # type: ignore[import]
-
-    universe: set[str] = set()
-    try:
-        for market in INDEX_TICKER_MARKETS:
-            tickers = stock.get_index_ticker_list(market=market)
-            universe.update(str(code) for code in tickers)
-    except Exception as exc:
-        # IndexTicker singleton may have an empty df due to KRX server changes.
-        # Reset it now so the next process restart can re-initialise cleanly.
-        from src.data_sources.pykrx_compat import _reset_index_ticker_singleton
-        _reset_index_ticker_singleton()
-        raise ValueError(f"pykrx index ticker list failed: {exc}") from exc
-
-    if not universe:
-        from src.data_sources.pykrx_compat import _reset_index_ticker_singleton
-        _reset_index_ticker_singleton()
-        raise ValueError("pykrx returned empty index ticker universe")
-
+    """Fetch and cache pykrx index ticker universe across markets."""
+    universe = {
+        str(row.get("index_code", "")).strip()
+        for row in discover_kr_index_rows()
+        if str(row.get("index_code", "")).strip()
+    }
     return frozenset(universe)
+
+
+def seed_kr_index_dimension_if_empty(benchmark_code: str) -> pd.DataFrame:
+    """Bootstrap KR dim_index rows once when no active KR rows exist."""
+    active_rows = read_active_index_dimension(market="KR")
+    if not active_rows.empty:
+        return active_rows
+
+    discovered_rows = discover_kr_index_rows(benchmark_code)
+    if discovered_rows:
+        upsert_index_dimension(discovered_rows, market="KR")
+    return read_active_index_dimension(market="KR")
+
+
+def repair_legacy_kr_index_dimension(benchmark_code: str) -> pd.DataFrame:
+    """Expand a persisted legacy 12-row KR subset into the broad discovered universe."""
+    if not is_legacy_kr_index_subset(market="KR"):
+        return read_active_index_dimension(market="KR")
+
+    discovered_rows = discover_kr_index_rows(benchmark_code)
+    if discovered_rows:
+        upsert_index_dimension(discovered_rows, market="KR")
+    return read_active_index_dimension(market="KR")
+
+
+def repair_stale_kr_index_dimension_names(benchmark_code: str) -> pd.DataFrame:
+    """Repair KR dim_index rows whose names are still raw numeric codes."""
+    active_rows = read_active_index_dimension(market="KR")
+    if active_rows.empty:
+        return active_rows
+
+    stale_codes = [
+        str(row["index_code"]).strip()
+        for _, row in active_rows.iterrows()
+        if _is_placeholder_index_name(
+            str(row.get("index_code", "")).strip(),
+            str(row.get("index_name", "")).strip(),
+        )
+    ]
+    if not stale_codes:
+        return active_rows
+
+    discovered = _discovered_index_rows_by_code(benchmark_code)
+    repair_rows = [
+        dict(discovered[code])
+        for code in stale_codes
+        if code in discovered
+        and not _is_placeholder_index_name(code, str(discovered[code].get("index_name", "")))
+    ]
+    if repair_rows:
+        upsert_index_dimension(repair_rows, market="KR")
+    return read_active_index_dimension(market="KR")
 
 
 def _filter_supported_codes(index_codes: list[str]) -> tuple[list[str], list[str]]:

@@ -76,6 +76,19 @@ def candidate_reference_dates(reference_date: str, *, periods: int = 5) -> list[
     return [value for value in values if str(value) >= PYKRX_CONSTITUENT_HISTORY_FLOOR]
 
 
+def _build_constituent_request_params(*, trade_date: str, sector_code: str) -> dict[str, str]:
+    code = str(sector_code).strip()
+    if len(code) < 2:
+        raise ValueError(f"Invalid sector code for constituent lookup: {sector_code!r}")
+    return {
+        "bld": "dbms/MDC/STAT/standard/MDCSTAT00601",
+        "locale": "ko_KR",
+        "indIdx2": code[1:],
+        "indIdx": code[0],
+        "trdDd": str(trade_date),
+    }
+
+
 def _extract_rows(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
         return [row for row in payload if isinstance(row, Mapping)]
@@ -96,6 +109,24 @@ def _extract_rows(payload: Any) -> list[dict[str, Any]]:
         if nested:
             return nested
     return []
+
+
+def _resolve_extraction_block(payload: Any) -> str:
+    if not isinstance(payload, Mapping):
+        return type(payload).__name__
+    for key in CONSTITUENT_PAYLOAD_KEYS:
+        candidate = payload.get(key)
+        if isinstance(candidate, list):
+            return str(key)
+        if isinstance(candidate, Mapping):
+            nested = _resolve_extraction_block(candidate)
+            if nested:
+                return f"{key}.{nested}"
+    for key, value in payload.items():
+        nested = _resolve_extraction_block(value)
+        if nested:
+            return f"{key}.{nested}"
+    return ""
 
 
 def _first_present(row: Mapping[str, Any], candidates: tuple[str, ...]) -> str:
@@ -196,23 +227,103 @@ def _classify_non_json_response(response) -> str:
 def read_index_constituent_payload(*, trade_date: str, sector_code: str) -> Any:
     """Return raw KRX payload for one sector/date lookup via pykrx transport."""
     ensure_pykrx_transport_compat()
-    code = str(sector_code).strip()
-    if len(code) < 2:
-        raise ValueError(f"Invalid sector code for constituent lookup: {sector_code!r}")
+    request_params = _build_constituent_request_params(trade_date=trade_date, sector_code=sector_code)
     response = request_krx_data(
-        {
-            "bld": "dbms/MDC/STAT/standard/MDCSTAT00601",
-            "locale": "ko_KR",
-            "indIdx2": code[1:],
-            "indIdx": code[0],
-            "trdDd": str(trade_date),
-        },
+        request_params,
         referer=KRX_REFERER,
     )
     try:
         return response.json()
     except ValueError as exc:
         raise RuntimeError(_classify_non_json_response(response)) from exc
+
+
+def _collect_constituent_request_evidence(
+    *,
+    trade_date: str,
+    sector_code: str,
+    target_ticker: str = "",
+) -> dict[str, Any]:
+    request_params = _build_constituent_request_params(trade_date=trade_date, sector_code=sector_code)
+    payload = read_index_constituent_payload(trade_date=trade_date, sector_code=sector_code)
+    extracted_tickers = _extract_tickers(payload)
+    rows = _extract_rows(payload)
+    normalized_target = _normalize_ticker(target_ticker)
+    matched_rows = [
+        dict(row)
+        for row in rows
+        if normalized_target and _normalize_ticker(_first_present(row, CONSTITUENT_TICKER_KEYS)) == normalized_target
+    ]
+    payload_keys = list(payload.keys()) if isinstance(payload, Mapping) else [type(payload).__name__]
+    return {
+        "sector_code": str(sector_code),
+        "trade_date": str(trade_date),
+        "request_params": dict(request_params),
+        "payload_keys": payload_keys,
+        "matched_rows": matched_rows,
+        "extracted_tickers": list(extracted_tickers),
+        "resolved_from": str(trade_date),
+        "source": "krx_raw_payload",
+        "extraction_block": _resolve_extraction_block(payload),
+    }
+
+
+def _classify_overlap_evidences(
+    *,
+    evidences: list[dict[str, Any]],
+    target_ticker: str,
+) -> str:
+    normalized_target = _normalize_ticker(target_ticker)
+    param_signatures = []
+    for evidence in evidences:
+        request_params = dict(evidence.get("request_params") or {})
+        sector_code = str(evidence.get("sector_code", "")).strip()
+        param_signature = tuple(
+            str(request_params.get(key, "")).strip()
+            for key in ("bld", "indIdx", "indIdx2", "trdDd")
+        )
+        param_signatures.append(param_signature)
+        if sector_code and (
+            str(request_params.get("indIdx", "")).strip() != sector_code[:1]
+            or str(request_params.get("indIdx2", "")).strip() != sector_code[1:]
+        ):
+            return "request_mapping_bug"
+    if len(param_signatures) != len(set(param_signatures)):
+        return "request_mapping_bug"
+
+    for evidence in evidences:
+        extracted = {str(item).strip() for item in evidence.get("extracted_tickers", []) if str(item).strip()}
+        matched_rows = list(evidence.get("matched_rows", []))
+        has_matched_rows = bool(matched_rows)
+        in_extracted = normalized_target in extracted
+        if has_matched_rows != in_extracted:
+            return "payload_parse_bug"
+
+    return "upstream_source_behavior"
+
+
+def collect_same_date_ticker_overlap_artifact(
+    *,
+    trade_date: str,
+    sector_codes: list[str],
+    target_ticker: str,
+) -> dict[str, Any]:
+    evidences = [
+        _collect_constituent_request_evidence(
+            trade_date=trade_date,
+            sector_code=sector_code,
+            target_ticker=target_ticker,
+        )
+        for sector_code in sector_codes
+    ]
+    verdict = _classify_overlap_evidences(evidences=evidences, target_ticker=target_ticker)
+    return {
+        "trade_date": str(trade_date),
+        "target_ticker": _normalize_ticker(target_ticker),
+        "sector_codes": [str(code) for code in sector_codes],
+        "verdict": verdict,
+        "evidences": evidences,
+    }
 
 
 def lookup_index_constituents(
@@ -316,6 +427,7 @@ def lookup_index_constituents(
 __all__ = [
     "ConstituentLookupResult",
     "candidate_reference_dates",
+    "collect_same_date_ticker_overlap_artifact",
     "lookup_index_constituents",
     "normalize_constituent_result",
     "read_index_constituent_payload",

@@ -75,6 +75,7 @@ class DashboardDataBundle:
     investor_flow_profile: str = "foreign_lead"
     investor_flow_frame: pd.DataFrame = field(default_factory=pd.DataFrame)
     investor_flow_detail: dict[str, Any] = field(default_factory=dict)
+    shared_flow_summary_map: dict[str, Any] = field(default_factory=dict)
     investor_flow_refresh_notice: tuple[str, str] | None = None
 
 

@@ -36,3 +36,12 @@ def test_top_pick_sort_key_prioritizes_action_then_rs_divergence():
     ordered = sorted([watch, strong, stronger], key=analysis._top_pick_sort_key)
     assert ordered == [stronger, strong, watch]
 
+
+def test_top_pick_sort_key_uses_hybrid_rank_then_raw_when_active():
+    signal_a = SimpleNamespace(action="Strong Buy", momentum_method="hybrid_return_rank_v1", mom_rank=2, mom_raw=0.12)
+    signal_b = SimpleNamespace(action="Strong Buy", momentum_method="hybrid_return_rank_v1", mom_rank=1, mom_raw=0.08)
+    signal_c = SimpleNamespace(action="Strong Buy", momentum_method="hybrid_return_rank_v1", mom_rank=2, mom_raw=0.25)
+
+    ordered = sorted([signal_a, signal_b, signal_c], key=analysis._top_pick_sort_key)
+
+    assert ordered == [signal_b, signal_c, signal_a]

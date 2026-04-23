@@ -404,3 +404,29 @@ def test_resolve_index_name_aliases_skips_overbroad_kospi200_official_name(tmp_p
 
     assert "\ucf54\uc2a4\ud53c 200" not in aliases
     assert "\ucf54\uc2a4\ud53c 200 \uc815\ubcf4\uae30\uc220" in aliases
+
+
+def test_get_index_display_name_prefers_official_name_over_config_name(monkeypatch):
+    monkeypatch.setattr(
+        krx_openapi,
+        "_load_index_name_metadata",
+        lambda: {"5042": {"official_name": "KRX 100", "alias_history": (), "last_synced_at": "2026-04-20T00:00:00Z"}},
+    )
+    monkeypatch.setattr(
+        krx_openapi,
+        "_load_config_index_display_names",
+        lambda: {"5042": "KRX 산업재"},
+    )
+
+    assert krx_openapi.get_index_display_name("5042") == "KRX 100"
+
+
+def test_get_index_display_name_falls_back_to_config_name_when_official_missing(monkeypatch):
+    monkeypatch.setattr(krx_openapi, "_load_index_name_metadata", lambda: {})
+    monkeypatch.setattr(
+        krx_openapi,
+        "_load_config_index_display_names",
+        lambda: {"5044": "KRX 반도체"},
+    )
+
+    assert krx_openapi.get_index_display_name("5044") == "KRX 반도체"

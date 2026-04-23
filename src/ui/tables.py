@@ -129,16 +129,23 @@ def render_signal_table(
         return
 
     filtered = sorted(filtered, key=lambda signal: signal_display_sort_key(signal, held_sectors))
+    kr_momentum_only = any(str(getattr(signal, "action_policy", "") or "") == "KR_MOMENTUM_ONLY" for signal in filtered)
 
     rows: list[dict[str, object]] = []
     for signal in filtered:
         thesis = describe_signal_decision(signal, held_sectors, locale=locale)
+        taxonomy_bits = [
+            str(getattr(signal, "taxonomy_kind", "") or "").strip(),
+            str(getattr(signal, "taxonomy_label", "") or "").strip(),
+        ]
+        taxonomy_text = " · ".join(bit for bit in taxonomy_bits if bit)
         row: dict[str, object] = {
             "Sector": signal.sector_name + (" *" if signal.is_provisional else ""),
             "Held": bool(thesis["held"]),
             "Decision": thesis["decision"],
-            "In Regime": bool(signal.macro_fit),
+            "Macro Context" if kr_momentum_only else "In Regime": thesis["regime_fit"] if kr_momentum_only else bool(signal.macro_fit),
             "Action": format_action_label(signal.action, locale=locale),
+            "Taxonomy": taxonomy_text,
             "ETF": _format_etfs((etf_map or {}).get(signal.index_code, [])),
             "Reason": thesis["reason"],
             "Invalidation": thesis["invalidation"],
@@ -163,8 +170,13 @@ def render_signal_table(
             "Sector": st.column_config.TextColumn(get_ui_text("col_sector", locale), width="medium"),
             "Held": st.column_config.CheckboxColumn(get_ui_text("col_held", locale), width="small"),
             "Decision": st.column_config.TextColumn(get_ui_text("col_decision", locale), width="medium"),
-            "In Regime": st.column_config.CheckboxColumn(get_ui_text("col_in_regime", locale), width="small"),
+            "Macro Context" if kr_momentum_only else "In Regime": (
+                st.column_config.TextColumn(get_ui_text("col_macro_context", locale), width="medium")
+                if kr_momentum_only
+                else st.column_config.CheckboxColumn(get_ui_text("col_in_regime", locale), width="small")
+            ),
             "Action": st.column_config.TextColumn(get_ui_text("col_action", locale), width="small"),
+            "Taxonomy": st.column_config.TextColumn(get_ui_text("col_taxonomy", locale), width="medium"),
             "ETF": st.column_config.TextColumn(get_ui_text("col_etf", locale), width="medium"),
             "Reason": st.column_config.TextColumn(get_ui_text("col_reason", locale), width="large"),
             "Invalidation": st.column_config.TextColumn(get_ui_text("col_invalidation", locale), width="large"),

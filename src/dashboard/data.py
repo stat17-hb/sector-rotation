@@ -7,12 +7,14 @@ import logging
 import os
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import pandas as pd
 import streamlit as st
 
 from src.data_sources.common import shift_month_token
+from src.data_sources.krx_sector_authority import canonicalize_kr_sector_universe_rows
+from src.signals.flow import summarize_sector_investor_flow
 from src.macro.series_utils import (
     build_regime_history_from_macro,
     build_regime_inflation_series,
@@ -22,7 +24,11 @@ from src.macro.series_utils import (
     extract_macro_series,
     to_plotly_time_index,
 )
-from src.data_sources.warehouse import read_market_prices
+from src.data_sources.warehouse import (
+    is_legacy_kr_index_subset,
+    read_active_index_dimension,
+    read_market_prices,
+)
 from src.ui.data_status import (
     resolve_dashboard_status_banner,
     resolve_price_cache_banner_case,
@@ -39,6 +45,39 @@ market_profile: Any | None = None
 CACHE_TTL = 21600
 CURATED_SECTOR_PRICES_PATH = Path("data/curated/sector_prices.parquet")
 INVESTOR_FLOW_TRANSIENT_OVERRIDE_KEY = "_investor_flow_transient_override"
+DashboardProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _clamp_progress_pct(pct: float | int) -> int:
+    try:
+        value = int(round(float(pct)))
+    except Exception:
+        return 0
+    return max(0, min(100, value))
+
+
+def _emit_progress(
+    progress_callback: DashboardProgressCallback | None,
+    *,
+    task: str,
+    phase: str,
+    pct: float | int,
+    detail: str = "",
+    status: str = "running",
+    meta: dict[str, Any] | None = None,
+) -> None:
+    if progress_callback is None:
+        return
+    event = {
+        "task": str(task).strip(),
+        "phase": str(phase).strip(),
+        "pct": _clamp_progress_pct(pct),
+        "detail": str(detail).strip(),
+        "status": str(status).strip().lower() or "running",
+    }
+    if meta:
+        event["meta"] = dict(meta)
+    progress_callback(event)
 
 
 def configure_dashboard_env(
@@ -298,6 +337,144 @@ def _probe_investor_flow_status() -> str:
     return probe_investor_flow_status()
 
 
+def _is_placeholder_kr_name(index_code: str, index_name: str) -> bool:
+    code = str(index_code or "").strip()
+    name = str(index_name or "").strip()
+    return bool(code) and (not name or name == code)
+
+
+def _kr_active_index_metadata_lookup() -> dict[str, dict[str, str]]:
+    active_rows = read_active_index_dimension(market="KR")
+    lookup = {
+        str(row["index_code"]).strip(): {
+            "index_name": str(row["index_name"]).strip(),
+            "taxonomy_label": str(row.get("taxonomy_label", "")).strip(),
+        }
+        for _, row in active_rows.iterrows()
+        if str(row.get("index_code", "")).strip()
+    }
+    missing_codes = [
+        str(row["index_code"]).strip()
+        for _, row in active_rows.iterrows()
+        if _is_placeholder_kr_name(
+            str(row.get("index_code", "")).strip(),
+            str(row.get("index_name", "")).strip(),
+        )
+        or _is_placeholder_kr_name(
+            str(row.get("index_code", "")).strip(),
+            str(row.get("taxonomy_label", "")).strip(),
+        )
+    ]
+    for code, meta in list(lookup.items()):
+        if _is_placeholder_kr_name(code, meta.get("index_name", "")):
+            meta["index_name"] = ""
+        if _is_placeholder_kr_name(code, meta.get("taxonomy_label", "")):
+            meta["taxonomy_label"] = ""
+
+    try:
+        from src.data_sources.krx_indices import discover_kr_index_rows
+
+        discovered = {
+            str(row.get("index_code", "")).strip(): {
+                "index_name": str(row.get("index_name", "")).strip(),
+                "taxonomy_label": str(row.get("taxonomy_label", "")).strip(),
+            }
+            for row in discover_kr_index_rows(str(settings.get("benchmark_code", "1001")))
+            if str(row.get("index_code", "")).strip()
+        }
+    except Exception as exc:
+        logger.warning("KR official name lookup fallback failed: %s", exc)
+        return lookup
+
+    for code in missing_codes:
+        discovered_meta = discovered.get(code)
+        if not discovered_meta:
+            continue
+        current = lookup.setdefault(code, {"index_name": "", "taxonomy_label": ""})
+        if not current.get("index_name") and not _is_placeholder_kr_name(code, discovered_meta.get("index_name", "")):
+            current["index_name"] = discovered_meta["index_name"]
+        if not current.get("taxonomy_label") and not _is_placeholder_kr_name(code, discovered_meta.get("taxonomy_label", "")):
+            current["taxonomy_label"] = discovered_meta["taxonomy_label"]
+    return lookup
+
+
+def _kr_active_index_name_lookup() -> dict[str, str]:
+    return {
+        code: str(meta.get("index_name", "")).strip()
+        for code, meta in _kr_active_index_metadata_lookup().items()
+        if str(meta.get("index_name", "")).strip()
+    }
+
+
+def _normalize_kr_named_frame(
+    frame: pd.DataFrame,
+    *,
+    code_col: str,
+    name_col: str,
+) -> pd.DataFrame:
+    if frame.empty or code_col not in frame.columns or name_col not in frame.columns:
+        return frame
+    name_lookup = _kr_active_index_name_lookup()
+    if not name_lookup:
+        return frame
+
+    normalized = frame.copy()
+    normalized[code_col] = normalized[code_col].astype(str)
+    normalized[name_col] = [
+        name_lookup.get(code, name) if _is_placeholder_kr_name(code, name) else name
+        for code, name in zip(
+            normalized[code_col].astype(str).tolist(),
+            normalized[name_col].astype(str).tolist(),
+        )
+    ]
+    return normalized
+
+
+def _normalize_kr_sector_universe_rows(
+    rows: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if not rows:
+        return rows
+    metadata_lookup = _kr_active_index_metadata_lookup()
+    if not metadata_lookup:
+        return rows
+    normalized: list[dict[str, Any]] = []
+    for row in rows:
+        code = str(dict(row or {}).get("index_code", "")).strip()
+        name = str(dict(row or {}).get("index_name", "")).strip()
+        taxonomy_label = str(dict(row or {}).get("taxonomy_label", "")).strip()
+        meta = metadata_lookup.get(code, {})
+        normalized.append(
+            {
+                **dict(row or {}),
+                "index_code": code,
+                "index_name": meta.get("index_name", name) if _is_placeholder_kr_name(code, name) else name,
+                "taxonomy_label": (
+                    meta.get("taxonomy_label", taxonomy_label)
+                    if _is_placeholder_kr_name(code, taxonomy_label)
+                    else taxonomy_label
+                ),
+            }
+        )
+    return normalized
+
+
+def _canonicalize_kr_sector_universe_rows(
+    rows: list[dict[str, Any]],
+    *,
+    benchmark_code: str = "",
+    include_benchmark: bool = False,
+) -> list[dict[str, Any]]:
+    normalized_rows = _normalize_kr_sector_universe_rows(rows)
+    if not normalized_rows:
+        return normalized_rows
+    return canonicalize_kr_sector_universe_rows(
+        normalized_rows,
+        benchmark_code=benchmark_code,
+        include_benchmark=include_benchmark,
+    )
+
+
 def _all_sector_codes(benchmark_code: str) -> list[str]:
     """Return the unique sector universe used by the dashboard."""
     all_codes: list[str] = []
@@ -309,6 +486,59 @@ def _all_sector_codes(benchmark_code: str) -> list[str]:
     if benchmark_code and str(benchmark_code) not in all_codes:
         all_codes.append(str(benchmark_code))
     return all_codes
+
+
+def get_market_index_universe_codes(benchmark_code: str, market_id_arg: str) -> list[str]:
+    """Return the runtime market universe, using dim_index as KR authority."""
+    normalized_market = str(market_id_arg or market_id).strip().upper() or market_id
+    if normalized_market != "KR":
+        return _all_sector_codes(benchmark_code)
+
+    from src.data_sources.krx_indices import (
+        repair_stale_kr_index_dimension_names,
+        repair_legacy_kr_index_dimension,
+        seed_kr_index_dimension_if_empty,
+    )
+
+    universe_rows = read_active_index_dimension(market=normalized_market)
+    if universe_rows.empty:
+        try:
+            universe_rows = seed_kr_index_dimension_if_empty(str(benchmark_code))
+        except Exception as exc:
+            logger.warning("KR dim_index bootstrap failed: %s", exc)
+    elif is_legacy_kr_index_subset(market=normalized_market):
+        try:
+            repaired_rows = repair_legacy_kr_index_dimension(str(benchmark_code))
+        except Exception as exc:
+            logger.warning("KR dim_index legacy repair failed: %s", exc)
+        else:
+            if not repaired_rows.empty:
+                universe_rows = repaired_rows
+    else:
+        try:
+            repaired_rows = repair_stale_kr_index_dimension_names(str(benchmark_code))
+        except Exception as exc:
+            logger.warning("KR dim_index stale-name repair failed: %s", exc)
+        else:
+            if not repaired_rows.empty:
+                universe_rows = repaired_rows
+
+    universe_codes = [
+        str(row.get("index_code", "")).strip()
+        for row in _canonicalize_kr_sector_universe_rows(
+            universe_rows.to_dict("records"),
+            benchmark_code=str(benchmark_code),
+            include_benchmark=True,
+        )
+        if str(row.get("index_code", "")).strip()
+    ]
+    if universe_codes:
+        return list(dict.fromkeys(universe_codes))
+
+    logger.warning(
+        "KR dim_index universe unavailable after bootstrap/repair; falling back to legacy configured subset."
+    )
+    return _all_sector_codes(benchmark_code)
 
 
 def _resolve_market_end_date(benchmark_code: str) -> date:
@@ -433,6 +663,17 @@ def _build_investor_flow_refresh_notice(summary: dict[str, object]) -> tuple[str
     sector_fail_count = sum(1 for k in failed_codes if k.startswith("sector:"))
     ticker_fail_count = sum(1 for k in failed_codes if not k.startswith("sector:"))
     auth_fail_count = sum(1 for v in failed_codes.values() if str(v).startswith("AUTH_REQUIRED:"))
+    mode = str(window.get("mode", "")).strip()
+    anchor_start = _format_yyyymmdd(str(window.get("anchor_start", "")))
+    anchor_reason = str(window.get("anchor_reason", "")).strip()
+    window_parts: list[str] = []
+    if mode:
+        window_parts.append(f"resolver={mode}")
+    if anchor_start:
+        window_parts.append(f"anchor={anchor_start}")
+    if anchor_reason:
+        window_parts.append(f"reason={anchor_reason}")
+    window_detail = f" [{' / '.join(window_parts)}]" if window_parts else ""
 
     if warehouse_write_skipped and rows > 0:
         return (
@@ -451,8 +692,8 @@ def _build_investor_flow_refresh_notice(summary: dict[str, object]) -> tuple[str
             parts.append(f"종목 {ticker_fail_count}개 수급 수집 실패")
         detail = f" ({', '.join(parts)})" if parts else ""
         if bootstrap_partial_preview:
-            return ("warning", f"투자자수급 갱신 완료 (부분 커버리지{detail}). complete cursor가 없어 이번 partial preview를 표시합니다.")
-        return ("warning", f"투자자수급 갱신 완료 (부분 커버리지{detail}). complete cursor 기준 기존 데이터를 유지합니다.")
+            return ("warning", f"투자자수급 갱신 완료 (부분 커버리지{detail}). complete cursor가 없어 이번 partial preview를 표시합니다.{window_detail}")
+        return ("warning", f"투자자수급 갱신 완료 (부분 커버리지{detail}). complete cursor 기준 기존 데이터를 유지합니다.{window_detail}")
     if status == "CACHED":
         if coverage_complete:
             return ("info", "투자자수급 데이터가 이미 최신 complete cursor까지 반영되어 있습니다.")
@@ -463,11 +704,11 @@ def _build_investor_flow_refresh_notice(summary: dict[str, object]) -> tuple[str
                 "환경변수 또는 Streamlit secrets에 KRX_ID / KRX_PW를 설정한 뒤 다시 시도하세요.",
             )
         if bootstrap_partial_preview:
-            return ("warning", "실시간 투자자수급 갱신은 완료되지 않았지만, bootstrap partial preview 데이터를 표시합니다.")
+            return ("warning", f"실시간 투자자수급 갱신은 완료되지 않았지만, bootstrap partial preview 데이터를 표시합니다.{window_detail}")
         snap_detail = ""
         if failed_codes:
             snap_detail = f" — {len(failed_codes)}개 항목 실패로 캐시 사용"
-        return ("warning", f"투자자수급 갱신 실패 → 캐시 데이터 사용{snap_detail}.")
+        return ("warning", f"투자자수급 갱신 실패 → 캐시 데이터 사용{snap_detail}.{window_detail}")
     return ("error", "투자자수급 갱신이 완료되지 않았습니다.")
 
 
@@ -617,7 +858,7 @@ def _cached_sector_prices(
     else:
         from src.data_sources.krx_indices import load_sector_prices
 
-    all_codes = _all_sector_codes(benchmark_code)
+    all_codes = get_market_index_universe_codes(benchmark_code, market_id_arg)
     start_str, end_str = _market_range_strings(end_date_str, price_years)
 
     status, df = load_sector_prices(all_codes, start_str, end_str)
@@ -658,7 +899,7 @@ def _load_analysis_sector_prices_from_cache(
     benchmark_code: str,
 ) -> pd.DataFrame:
     """Load the widest cached analysis history without triggering live refreshes."""
-    all_codes = _all_sector_codes(benchmark_code)
+    all_codes = get_market_index_universe_codes(benchmark_code, market_id_arg)
     cached = _filter_cached_sector_prices(
         read_market_prices(all_codes, "19000101", end_date_str, market=market_id_arg),
         index_codes=all_codes,
@@ -727,6 +968,8 @@ def _cached_investor_flow(
     )
     if transient is not None:
         status, status_detail, frame = transient
+        if not frame.empty:
+            frame = _normalize_kr_named_frame(frame, code_col="sector_code", name_col="sector_name")
         return status, _investor_flow_is_fresh(status_detail, market_end_date_str=end_str), status_detail, frame
 
     status, frame = load_sector_investor_flow(
@@ -739,6 +982,8 @@ def _cached_investor_flow(
     status_detail = dict(read_warm_status())
     if status == "CACHED" and not frame.empty and not bool(status_detail.get("coverage_complete")):
         status_detail["bootstrap_partial_preview"] = True
+    if not frame.empty:
+        frame = _normalize_kr_named_frame(frame, code_col="sector_code", name_col="sector_name")
     return status, _investor_flow_is_fresh(status_detail, market_end_date_str=end_str), status_detail, frame
 
 
@@ -786,46 +1031,16 @@ def _cached_macro(market_id_arg: str, macro_cache_token: str, market_end_date_st
     return combined_status, combined_df
 
 
-@st.cache_data(ttl=CACHE_TTL)
-def _cached_signals(
+def _load_price_stage(
+    *,
     market_id_arg: str,
     market_end_date_str: str,
-    prices_key: tuple,
-    macro_key: tuple,
-    params_hash: str,
-    macro_cache_token: str,
+    price_years: int,
     price_cache_token: str,
     price_artifact_key: tuple,
-    flow_artifact_key: tuple = (),
-    epsilon: float = 0.0,
-    rs_ma_period: int = 20,
-    ma_fast: int = 20,
-    ma_slow: int = 60,
-    price_years: int = 3,
-    flow_profile: str = "foreign_lead",
-):
-    """Compute signals. Keyed by parquet file metadata + params hash."""
-    from src.signals.matrix import build_signal_table
-
-    if not isinstance(flow_artifact_key, tuple):
-        legacy_epsilon = float(flow_artifact_key)
-        legacy_rs_ma_period = int(epsilon)
-        legacy_ma_fast = int(rs_ma_period)
-        legacy_ma_slow = int(ma_fast)
-        legacy_price_years = int(ma_slow)
-        flow_artifact_key = ()
-        epsilon = legacy_epsilon
-        rs_ma_period = legacy_rs_ma_period
-        ma_fast = legacy_ma_fast
-        ma_slow = legacy_ma_slow
-        price_years = legacy_price_years
-
+) -> tuple[str, pd.DataFrame, str]:
     normalized_market = str(market_id_arg or market_id).strip().upper() or market_id
     market_blocking_error = ""
-    flow_status = "SAMPLE"
-    flow_fresh = False
-    flow_detail: dict[str, Any] = {}
-    sector_flow = pd.DataFrame()
     if normalized_market == "KR":
         from src.data_sources.krx_indices import (
             KRXInteractiveRangeLimitError,
@@ -845,37 +1060,31 @@ def _cached_signals(
             price_status = "BLOCKED"
             sector_prices = pd.DataFrame()
             market_blocking_error = str(exc)
-        flow_status, flow_fresh, flow_detail, sector_flow = _cached_investor_flow(
-            normalized_market,
-            market_end_date_str,
-            flow_artifact_key,
-        )
-    else:
-        price_status, sector_prices = _cached_sector_prices(
-            normalized_market,
-            market_end_date_str,
-            str(settings.get("benchmark_code", "SPY")),
-            price_years,
-            price_cache_token,
-            price_artifact_key,
-        )
-        flow_status, flow_fresh, flow_detail, sector_flow = _cached_investor_flow(
-            normalized_market,
-            market_end_date_str,
-            flow_artifact_key,
-        )
+        if not sector_prices.empty:
+            sector_prices = _normalize_kr_named_frame(
+                sector_prices,
+                code_col="index_code",
+                name_col="index_name",
+            )
+        return price_status, sector_prices, market_blocking_error
 
-    macro_status, macro_df = _cached_macro(normalized_market, macro_cache_token, market_end_date_str)
+    price_status, sector_prices = _cached_sector_prices(
+        normalized_market,
+        market_end_date_str,
+        str(settings.get("benchmark_code", "SPY")),
+        price_years,
+        price_cache_token,
+        price_artifact_key,
+    )
+    return price_status, sector_prices, market_blocking_error
 
-    # Benchmark prices from sector_prices (benchmark_code row)
-    bench_code = str(settings.get("benchmark_code", "1001"))
-    if not sector_prices.empty and "index_code" in sector_prices.columns:
-        bench_mask = sector_prices["index_code"].astype(str) == bench_code
-        bench_series = sector_prices[bench_mask]["close"] if bench_mask.any() else pd.Series(dtype=float)
-    else:
-        bench_series = pd.Series(dtype=float)
 
-    # Macro regime history
+def _compute_macro_result(
+    *,
+    macro_df: pd.DataFrame,
+    normalized_market: str,
+    epsilon: float,
+) -> pd.DataFrame:
     macro_result = pd.DataFrame()
     if not macro_df.empty:
         try:
@@ -894,7 +1103,6 @@ def _cached_signals(
             logger.warning("compute_regime_history failed: %s", exc)
 
     if macro_result.empty:
-        # Fallback: create minimal mock result for display
         macro_result = pd.DataFrame(
             {
                 "growth_dir": ["Flat"],
@@ -904,6 +1112,65 @@ def _cached_signals(
             },
             index=pd.DatetimeIndex([date.today()]),
         )
+    return macro_result
+
+
+def _compute_fx_change_pct(*, macro_df: pd.DataFrame) -> float:
+    fx_change_pct = float("nan")
+    if macro_df.empty:
+        return fx_change_pct
+    fx_series_alias = str(settings.get("fx_series_alias", "usdkrw"))
+    fx_series = extract_macro_series(
+        macro_df=macro_df,
+        macro_series_cfg=macro_series_cfg,
+        alias=fx_series_alias,
+    )
+    if len(fx_series) < 2:
+        return fx_change_pct
+    prev_fx = float(fx_series.iloc[-2])
+    curr_fx = float(fx_series.iloc[-1])
+    if pd.isna(prev_fx) or pd.isna(curr_fx) or prev_fx == 0:
+        return fx_change_pct
+    return float((curr_fx / prev_fx - 1) * 100)
+
+
+def _build_signal_payload(
+    *,
+    normalized_market: str,
+    price_status: str,
+    sector_prices: pd.DataFrame,
+    macro_df: pd.DataFrame,
+    flow_status: str,
+    flow_fresh: bool,
+    flow_detail: dict[str, Any],
+    sector_flow: pd.DataFrame,
+    epsilon: float,
+    rs_ma_period: int,
+    ma_fast: int,
+    ma_slow: int,
+    momentum_method: str,
+    momentum_skip_recent_days: int,
+    momentum_lookback_6m_days: int,
+    momentum_lookback_12m_days: int,
+    momentum_rank_threshold_pct: float,
+    momentum_abs_filter: str,
+    price_years: int,
+    flow_profile: str,
+) -> tuple[list[Any], pd.DataFrame]:
+    from src.signals.matrix import build_signal_table
+
+    macro_result = _compute_macro_result(
+        macro_df=macro_df,
+        normalized_market=normalized_market,
+        epsilon=epsilon,
+    )
+
+    bench_code = str(settings.get("benchmark_code", "1001"))
+    if not sector_prices.empty and "index_code" in sector_prices.columns:
+        bench_mask = sector_prices["index_code"].astype(str) == bench_code
+        bench_series = sector_prices[bench_mask]["close"] if bench_mask.any() else pd.Series(dtype=float)
+    else:
+        bench_series = pd.Series(dtype=float)
 
     runtime_settings = dict(settings)
     runtime_settings.update(
@@ -912,50 +1179,304 @@ def _cached_signals(
             "rs_ma_period": int(rs_ma_period),
             "ma_fast": int(ma_fast),
             "ma_slow": int(ma_slow),
+            "momentum_method": str(momentum_method),
+            "momentum_skip_recent_days": int(momentum_skip_recent_days),
+            "momentum_lookback_6m_days": int(momentum_lookback_6m_days),
+            "momentum_lookback_12m_days": int(momentum_lookback_12m_days),
+            "momentum_rank_threshold_pct": float(momentum_rank_threshold_pct),
+            "momentum_abs_filter": str(momentum_abs_filter),
             "price_years": price_years,
         }
     )
-    fx_change_pct = float("nan")
-    if not macro_df.empty:
-        fx_series_alias = str(settings.get("fx_series_alias", "usdkrw"))
-        fx_series = extract_macro_series(
-            macro_df=macro_df,
-            macro_series_cfg=macro_series_cfg,
-            alias=fx_series_alias,
-        )
-        if len(fx_series) >= 2:
-            prev_fx = float(fx_series.iloc[-2])
-            curr_fx = float(fx_series.iloc[-1])
-            if not (pd.isna(prev_fx) or pd.isna(curr_fx)) and prev_fx != 0:
-                fx_change_pct = float((curr_fx / prev_fx - 1) * 100)
 
     if price_status == "BLOCKED":
-        signals = []
-    else:
-        signals = build_signal_table(
-            sector_prices=sector_prices,
-            benchmark_prices=bench_series,
-            macro_result=macro_result,
-            sector_map=sector_map,
-            settings=runtime_settings,
-            fx_change_pct=fx_change_pct,
-            sector_investor_flow=sector_flow,
-            flow_profile=flow_profile,
-            flow_enabled=_investor_flow_is_actionable(
-                market_id_arg=normalized_market,
-                flow_status=flow_status,
-                flow_fresh=flow_fresh,
-                flow_detail=flow_detail,
-            ),
+        return [], macro_result
+
+    sector_universe_rows: list[dict[str, Any]] | None = None
+    if normalized_market == "KR":
+        sector_universe_rows = _canonicalize_kr_sector_universe_rows(
+            read_active_index_dimension(market=normalized_market).to_dict("records"),
+            benchmark_code=str(bench_code),
+            include_benchmark=False,
         )
 
+    signals = build_signal_table(
+        sector_prices=sector_prices,
+        benchmark_prices=bench_series,
+        macro_result=macro_result,
+        sector_map=sector_map,
+        settings=runtime_settings,
+        market_id=normalized_market,
+        sector_universe_rows=sector_universe_rows,
+        fx_change_pct=_compute_fx_change_pct(macro_df=macro_df),
+        sector_investor_flow=sector_flow,
+        flow_profile=flow_profile,
+        flow_enabled=_investor_flow_is_actionable(
+            market_id_arg=normalized_market,
+            flow_status=flow_status,
+            flow_fresh=flow_fresh,
+            flow_detail=flow_detail,
+        ),
+    )
+    return signals, macro_result
+
+
+@st.cache_data(ttl=CACHE_TTL)
+def _cached_signals(
+    market_id_arg: str,
+    market_end_date_str: str,
+    prices_key: tuple,
+    macro_key: tuple,
+    params_hash: str,
+    macro_cache_token: str,
+    price_cache_token: str,
+    price_artifact_key: tuple,
+    flow_artifact_key: tuple = (),
+    epsilon: float = 0.0,
+    rs_ma_period: int = 20,
+    ma_fast: int = 20,
+    ma_slow: int = 60,
+    price_years: int = 3,
+    flow_profile: str = "foreign_lead",
+    momentum_method: str = "legacy_rs_ma_v0",
+    momentum_skip_recent_days: int = 21,
+    momentum_lookback_6m_days: int = 126,
+    momentum_lookback_12m_days: int = 252,
+    momentum_rank_threshold_pct: float = 0.60,
+    momentum_abs_filter: str = "price_gt_200dma",
+):
+    """Compute signals. Keyed by parquet file metadata + params hash."""
+    if not isinstance(flow_artifact_key, tuple):
+        legacy_epsilon = float(flow_artifact_key)
+        legacy_rs_ma_period = int(epsilon)
+        legacy_ma_fast = int(rs_ma_period)
+        legacy_ma_slow = int(ma_fast)
+        legacy_price_years = int(ma_slow)
+        flow_artifact_key = ()
+        epsilon = legacy_epsilon
+        rs_ma_period = legacy_rs_ma_period
+        ma_fast = legacy_ma_fast
+        ma_slow = legacy_ma_slow
+        price_years = legacy_price_years
+
+    normalized_market = str(market_id_arg or market_id).strip().upper() or market_id
+    price_status, sector_prices, market_blocking_error = _load_price_stage(
+        market_id_arg=normalized_market,
+        market_end_date_str=market_end_date_str,
+        price_years=price_years,
+        price_cache_token=price_cache_token,
+        price_artifact_key=price_artifact_key,
+    )
+    flow_status, flow_fresh, flow_detail, sector_flow = _cached_investor_flow(
+        normalized_market,
+        market_end_date_str,
+        flow_artifact_key,
+    )
+    macro_status, macro_df = _cached_macro(normalized_market, macro_cache_token, market_end_date_str)
+    signals, macro_result = _build_signal_payload(
+        normalized_market=normalized_market,
+        price_status=price_status,
+        sector_prices=sector_prices,
+        macro_df=macro_df,
+        flow_status=flow_status,
+        flow_fresh=flow_fresh,
+        flow_detail=flow_detail,
+        sector_flow=sector_flow,
+        epsilon=epsilon,
+        rs_ma_period=rs_ma_period,
+        ma_fast=ma_fast,
+        ma_slow=ma_slow,
+        momentum_method=momentum_method,
+        momentum_skip_recent_days=momentum_skip_recent_days,
+        momentum_lookback_6m_days=momentum_lookback_6m_days,
+        momentum_lookback_12m_days=momentum_lookback_12m_days,
+        momentum_rank_threshold_pct=momentum_rank_threshold_pct,
+        momentum_abs_filter=momentum_abs_filter,
+        price_years=price_years,
+        flow_profile=flow_profile,
+    )
     return signals, macro_result, price_status, macro_status, market_blocking_error
+
+
+def _compute_shared_flow_summary_map(
+    flow_frame: pd.DataFrame | None,
+    *,
+    flow_profile: str,
+    short_window: int,
+    long_window: int,
+) -> dict[str, object]:
+    """Compute display-only investor-flow summary for downstream fallback surfaces."""
+    if not isinstance(flow_frame, pd.DataFrame) or flow_frame.empty:
+        return {}
+    required_columns = {"sector_code", "sector_name", "investor_type", "net_flow_ratio"}
+    if not required_columns.issubset(flow_frame.columns):
+        return {}
+    return dict(
+        summarize_sector_investor_flow(
+            flow_frame,
+            flow_profile=flow_profile,
+            short_window=short_window,
+            long_window=long_window,
+        )
+    )
+
+
+def load_dashboard_runtime_data(
+    market_id_arg: str,
+    market_end_date_str: str,
+    prices_key: tuple,
+    macro_key: tuple,
+    params_hash: str,
+    macro_cache_token: str,
+    price_cache_token: str,
+    price_artifact_key: tuple,
+    flow_artifact_key: tuple = (),
+    *,
+    epsilon: float = 0.0,
+    rs_ma_period: int = 20,
+    ma_fast: int = 20,
+    ma_slow: int = 60,
+    price_years: int = 3,
+    flow_profile: str = "foreign_lead",
+    momentum_method: str = "legacy_rs_ma_v0",
+    momentum_skip_recent_days: int = 21,
+    momentum_lookback_6m_days: int = 126,
+    momentum_lookback_12m_days: int = 252,
+    momentum_rank_threshold_pct: float = 0.60,
+    momentum_abs_filter: str = "price_gt_200dma",
+    progress_callback: DashboardProgressCallback | None = None,
+) -> dict[str, Any]:
+    normalized_market = str(market_id_arg or market_id).strip().upper() or market_id
+    task = "대시보드 데이터 로드"
+    _emit_progress(
+        progress_callback,
+        task=task,
+        phase="준비 중",
+        pct=5,
+        detail=f"{normalized_market} · {market_end_date_str}",
+    )
+    try:
+        price_status, sector_prices, market_blocking_error = _load_price_stage(
+            market_id_arg=normalized_market,
+            market_end_date_str=market_end_date_str,
+            price_years=price_years,
+            price_cache_token=price_cache_token,
+            price_artifact_key=price_artifact_key,
+        )
+        _emit_progress(
+            progress_callback,
+            task=task,
+            phase="시장 데이터 로드 완료",
+            pct=25,
+            detail=f"상태 {price_status}",
+        )
+        flow_status, flow_fresh, flow_detail, sector_flow = _cached_investor_flow(
+            normalized_market,
+            market_end_date_str,
+            flow_artifact_key,
+        )
+        _emit_progress(
+            progress_callback,
+            task=task,
+            phase="수급 데이터 로드 완료",
+            pct=45,
+            detail=(
+                f"상태 {flow_status}"
+                f"{'' if (flow_fresh and not bool(flow_detail.get('warehouse_write_skipped'))) else ' · reference-only'}"
+            ),
+        )
+        macro_status, macro_df = _cached_macro(
+            normalized_market,
+            macro_cache_token,
+            market_end_date_str,
+        )
+        _emit_progress(
+            progress_callback,
+            task=task,
+            phase="매크로 데이터 로드 완료",
+            pct=65,
+            detail=f"상태 {macro_status}",
+        )
+        signals, macro_result, price_status, macro_status, market_blocking_error = _cached_signals(
+            normalized_market,
+            market_end_date_str,
+            prices_key,
+            macro_key,
+            params_hash,
+            macro_cache_token,
+            price_cache_token,
+            price_artifact_key,
+            flow_artifact_key,
+            epsilon=epsilon,
+            rs_ma_period=rs_ma_period,
+            ma_fast=ma_fast,
+            ma_slow=ma_slow,
+            momentum_method=momentum_method,
+            momentum_skip_recent_days=momentum_skip_recent_days,
+            momentum_lookback_6m_days=momentum_lookback_6m_days,
+            momentum_lookback_12m_days=momentum_lookback_12m_days,
+            momentum_rank_threshold_pct=momentum_rank_threshold_pct,
+            momentum_abs_filter=momentum_abs_filter,
+            price_years=price_years,
+            flow_profile=flow_profile,
+        )
+        flow_display_fresh = flow_fresh and not bool(flow_detail.get("warehouse_write_skipped"))
+        shared_flow_summary_map = (
+            _compute_shared_flow_summary_map(
+                sector_flow,
+                flow_profile=flow_profile,
+                short_window=int(settings.get("investor_flow_short_window", 20)),
+                long_window=int(settings.get("investor_flow_long_window", 60)),
+            )
+            if normalized_market == "KR"
+            else {}
+        )
+        _emit_progress(
+            progress_callback,
+            task=task,
+            phase="신호 계산 완료",
+            pct=85,
+            detail=f"{len(signals)} sectors",
+        )
+        payload = {
+            "signals": signals,
+            "macro_result": macro_result,
+            "macro_df": macro_df,
+            "price_status": price_status,
+            "macro_status": macro_status,
+            "market_blocking_error": market_blocking_error,
+            "investor_flow_status": flow_status,
+            "investor_flow_fresh": flow_display_fresh,
+            "investor_flow_detail": dict(flow_detail),
+            "investor_flow_frame": sector_flow,
+            "shared_flow_summary_map": shared_flow_summary_map,
+        }
+        _emit_progress(
+            progress_callback,
+            task=task,
+            phase="표시 데이터 준비 완료",
+            pct=100,
+            detail="대시보드 표시에 필요한 데이터가 준비되었습니다.",
+            status="complete",
+        )
+        return payload
+    except Exception as exc:
+        _emit_progress(
+            progress_callback,
+            task=task,
+            phase="로드 실패",
+            pct=100,
+            detail=str(exc),
+            status="error",
+        )
+        raise
 
 
 get_all_sector_codes = _all_sector_codes
 build_market_refresh_notice = _build_market_refresh_notice
 build_macro_refresh_notice = _build_macro_refresh_notice
 build_investor_flow_refresh_notice = _build_investor_flow_refresh_notice
+compute_shared_flow_summary_map = _compute_shared_flow_summary_map
 cached_analysis_sector_prices = _cached_analysis_sector_prices
 cached_api_preflight = _cached_api_preflight
 cached_investor_flow = _cached_investor_flow
@@ -997,6 +1518,7 @@ __all__ = [
     "cached_sector_prices",
     "cached_signals",
     "clear_investor_flow_transient_override",
+    "compute_shared_flow_summary_map",
     "configure_dashboard_env",
     "get_all_sector_codes",
     "get_investor_flow_artifact_key",
@@ -1005,6 +1527,7 @@ __all__ = [
     "get_krx_provider_effective",
     "get_macro_artifact_key",
     "get_macro_cache_token",
+    "get_market_index_universe_codes",
     "get_market_range_strings",
     "get_openapi_cache_fallback_note",
     "get_parquet_key",
@@ -1012,6 +1535,7 @@ __all__ = [
     "get_price_cache_token",
     "get_secrets_mtime_ns",
     "is_mobile_client",
+    "load_dashboard_runtime_data",
     "load_analysis_sector_prices_from_cache",
     "load_api_key",
     "maybe_schedule_startup_krx_warm",

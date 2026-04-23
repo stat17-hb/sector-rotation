@@ -739,13 +739,16 @@ def update_index_name_metadata(observed_names_by_code: dict[str, list[str] | tup
 def get_index_display_name(index_code: str) -> str:
     """Return canonical UI display name for an index code when known."""
     code = str(index_code).strip()
+    metadata = _load_index_name_metadata()
+    official = str(metadata.get(code, {}).get("official_name", "")).strip()
+    if official:
+        return official
+
     display_names = _load_config_index_display_names()
     if code in display_names:
         return display_names[code]
 
-    metadata = _load_index_name_metadata()
-    official = str(metadata.get(code, {}).get("official_name", "")).strip()
-    return official or code
+    return code
 
 
 def resolve_index_name_aliases(index_code: str) -> tuple[str, ...]:
@@ -753,15 +756,17 @@ def resolve_index_name_aliases(index_code: str) -> tuple[str, ...]:
     code = str(index_code).strip()
     metadata = _load_index_name_metadata().get(code, {})
     display_name = get_index_display_name(code)
+    config_display_name = _normalize_index_name(_load_config_index_display_names().get(code, ""))
+    comparison_display_name = config_display_name or display_name
     aliases: list[str] = []
 
     official_name = _normalize_index_name(str(metadata.get("official_name", "")).strip())
-    if official_name and not _is_overbroad_alias(official_name, display_name):
+    if official_name and not _is_overbroad_alias(official_name, comparison_display_name):
         aliases.append(official_name)
 
     for alias in metadata.get("alias_history", ()):
         normalized = _normalize_index_name(str(alias).strip())
-        if normalized and not _is_overbroad_alias(normalized, display_name):
+        if normalized and not _is_overbroad_alias(normalized, comparison_display_name):
             aliases.append(normalized)
 
     for alias in EMERGENCY_INDEX_NAME_ALIASES.get(code, ()):
@@ -769,7 +774,7 @@ def resolve_index_name_aliases(index_code: str) -> tuple[str, ...]:
         if normalized:
             aliases.append(normalized)
 
-    for alias in _bootstrap_aliases_from_display_name(display_name):
+    for alias in _bootstrap_aliases_from_display_name(comparison_display_name):
         aliases.append(alias)
 
     deduped = tuple(dict.fromkeys(alias for alias in aliases if alias))

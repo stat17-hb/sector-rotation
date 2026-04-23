@@ -96,6 +96,33 @@ class TestBuildSectorNameMap:
         assert result["5044"] == "KRX 반도체"
 
 
+class TestResolveSharedFlowSummaryMap:
+    def test_returns_empty_map_when_runtime_payload_missing(self):
+        assert app_module._resolve_shared_flow_summary_map(None) == {}
+        assert app_module._resolve_shared_flow_summary_map({}) == {}
+
+    def test_returns_summary_map_when_present(self):
+        payload = {"shared_flow_summary_map": {"5044": {"dummy": True}}}
+        assert app_module._resolve_shared_flow_summary_map(payload) == {"5044": {"dummy": True}}
+
+
+class TestLookupErrorResult:
+    def test_build_lookup_error_result_matches_normalized_schema(self):
+        result = app_module._build_lookup_error_result(
+            market_id="KR",
+            query="005930",
+            exc=RuntimeError("boom"),
+        )
+
+        assert result["status"] == "error"
+        assert result["market"] == "KR"
+        assert result["query"] == "005930"
+        assert result["canonicalization_applied"] is False
+        assert result["canonicalization_basis"] == "not_applicable"
+        assert result["match_date_mode"] == "not_applicable"
+        assert result["matched_sector_candidates"] == []
+
+
 # ---------------------------------------------------------------------------
 # _build_prices_wide
 # ---------------------------------------------------------------------------

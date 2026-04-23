@@ -6,6 +6,11 @@ import pandas as pd
 import pytest
 
 from src.indicators.momentum import (
+    compute_descending_rank,
+    compute_percentile_rank,
+    compute_price_above_sma,
+    compute_relative_return_excluding_recent,
+    compute_return_excluding_recent,
     compute_rs,
     compute_rs_ma,
     compute_sma,
@@ -70,3 +75,58 @@ class TestMomentum:
         assert len(weekly_rsi.dropna()) < len(daily_rsi.dropna()), (
             "Weekly RSI should have fewer non-null observations than daily RSI"
         )
+
+    def test_return_excluding_recent_uses_skip_window(self):
+        close = pd.Series(
+            [100.0, 102.0, 104.0, 106.0, 108.0, 110.0],
+            index=pd.date_range("2024-01-01", periods=6, freq="B"),
+        )
+
+        result = compute_return_excluding_recent(
+            close,
+            lookback_days=3,
+            skip_recent_days=2,
+        )
+
+        assert result == pytest.approx((108.0 / 102.0) - 1.0)
+
+    def test_relative_return_excluding_recent_subtracts_benchmark(self):
+        sector = pd.Series(
+            [100.0, 101.0, 103.0, 106.0, 108.0, 110.0],
+            index=pd.date_range("2024-01-01", periods=6, freq="B"),
+        )
+        benchmark = pd.Series(
+            [100.0, 101.0, 102.0, 103.0, 104.0, 105.0],
+            index=sector.index,
+        )
+
+        result = compute_relative_return_excluding_recent(
+            sector,
+            benchmark,
+            lookback_days=3,
+            skip_recent_days=2,
+        )
+
+        expected = (108.0 / 101.0 - 1.0) - (104.0 / 101.0 - 1.0)
+        assert result == pytest.approx(expected)
+
+    def test_percentile_rank_and_descending_rank_handle_ties(self):
+        values = {"A": 0.1, "B": 0.5, "C": 0.5, "D": -0.2}
+
+        pct = compute_percentile_rank(values)
+        rank = compute_descending_rank(values)
+
+        assert pct["D"] == pytest.approx(0.25)
+        assert pct["B"] == pytest.approx(0.875)
+        assert pct["C"] == pytest.approx(0.875)
+        assert rank["B"] == 1
+        assert rank["C"] == 1
+        assert rank["D"] == 4
+
+    def test_price_above_sma_200_gate(self):
+        close = pd.Series(
+            [100.0 + idx for idx in range(220)],
+            index=pd.date_range("2024-01-01", periods=220, freq="B"),
+        )
+
+        assert compute_price_above_sma(close, window=200) is True

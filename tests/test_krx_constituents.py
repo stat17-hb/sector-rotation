@@ -172,3 +172,145 @@ def test_candidate_reference_dates_applies_constituent_history_floor():
 
     assert dates
     assert min(dates) >= constituents.PYKRX_CONSTITUENT_HISTORY_FLOOR
+
+
+def test_collect_constituent_request_evidence_captures_request_payload_and_matches(monkeypatch):
+    class _Response:
+        @staticmethod
+        def json():
+            return {
+                "output": [
+                    {"ISU_SRT_CD": "005930", "ISU_ABBRV": "삼성전자"},
+                    {"ISU_SRT_CD": "000660", "ISU_ABBRV": "SK하이닉스"},
+                ]
+            }
+
+    monkeypatch.setattr(constituents, "request_krx_data", lambda *args, **kwargs: _Response())
+
+    evidence = constituents._collect_constituent_request_evidence(
+        trade_date="20260417",
+        sector_code="5044",
+        target_ticker="005930",
+    )
+
+    assert evidence["sector_code"] == "5044"
+    assert evidence["trade_date"] == "20260417"
+    assert evidence["request_params"] == {
+        "bld": "dbms/MDC/STAT/standard/MDCSTAT00601",
+        "locale": "ko_KR",
+        "indIdx2": "044",
+        "indIdx": "5",
+        "trdDd": "20260417",
+    }
+    assert evidence["payload_keys"] == ["output"]
+    assert evidence["matched_rows"] == [{"ISU_SRT_CD": "005930", "ISU_ABBRV": "삼성전자"}]
+    assert evidence["extracted_tickers"] == ["005930", "000660"]
+    assert evidence["extraction_block"] == "output"
+    assert evidence["source"] == "krx_raw_payload"
+
+
+def test_classify_overlap_evidences_detects_upstream_source_behavior():
+    evidences = [
+        {
+            "sector_code": "1155",
+            "request_params": {"bld": "x", "indIdx": "1", "indIdx2": "155", "trdDd": "20260417"},
+            "matched_rows": [{"ISU_SRT_CD": "005930"}],
+            "extracted_tickers": ["005930", "000660"],
+        },
+        {
+            "sector_code": "5042",
+            "request_params": {"bld": "x", "indIdx": "5", "indIdx2": "042", "trdDd": "20260417"},
+            "matched_rows": [{"ISU_SRT_CD": "005930"}],
+            "extracted_tickers": ["005930", "005380"],
+        },
+    ]
+
+    verdict = constituents._classify_overlap_evidences(evidences=evidences, target_ticker="005930")
+
+    assert verdict == "upstream_source_behavior"
+
+
+def test_classify_overlap_evidences_detects_request_mapping_bug():
+    evidences = [
+        {
+            "sector_code": "5042",
+            "request_params": {"bld": "x", "indIdx": "5", "indIdx2": "042", "trdDd": "20260417"},
+            "matched_rows": [{"ISU_SRT_CD": "005930"}],
+            "extracted_tickers": ["005930"],
+        },
+        {
+            "sector_code": "5044",
+            "request_params": {"bld": "x", "indIdx": "5", "indIdx2": "042", "trdDd": "20260417"},
+            "matched_rows": [{"ISU_SRT_CD": "005930"}],
+            "extracted_tickers": ["005930"],
+        },
+    ]
+
+    verdict = constituents._classify_overlap_evidences(evidences=evidences, target_ticker="005930")
+
+    assert verdict == "request_mapping_bug"
+
+
+def test_classify_overlap_evidences_detects_payload_parse_bug():
+    evidences = [
+        {
+            "sector_code": "5042",
+            "request_params": {"bld": "x", "indIdx": "5", "indIdx2": "042", "trdDd": "20260417"},
+            "matched_rows": [{"ISU_SRT_CD": "005930"}],
+            "extracted_tickers": ["000660"],
+        }
+    ]
+
+    verdict = constituents._classify_overlap_evidences(evidences=evidences, target_ticker="005930")
+
+    assert verdict == "payload_parse_bug"
+
+
+def test_classify_overlap_evidences_detects_non_colliding_request_mapping_bug():
+    evidences = [
+        {
+            "sector_code": "5044",
+            "request_params": {"bld": "x", "indIdx": "5", "indIdx2": "042", "trdDd": "20260417"},
+            "matched_rows": [{"ISU_SRT_CD": "005930"}],
+            "extracted_tickers": ["005930"],
+        }
+    ]
+
+    verdict = constituents._classify_overlap_evidences(evidences=evidences, target_ticker="005930")
+
+    assert verdict == "request_mapping_bug"
+
+
+def test_collect_same_date_ticker_overlap_artifact_builds_verdict(monkeypatch):
+    monkeypatch.setattr(
+        constituents,
+        "_collect_constituent_request_evidence",
+        lambda **kwargs: {
+            "sector_code": kwargs["sector_code"],
+            "trade_date": kwargs["trade_date"],
+            "request_params": {
+                "bld": "dbms/MDC/STAT/standard/MDCSTAT00601",
+                "indIdx": kwargs["sector_code"][0],
+                "indIdx2": kwargs["sector_code"][1:],
+                "trdDd": kwargs["trade_date"],
+            },
+            "payload_keys": ["output"],
+            "matched_rows": [{"ISU_SRT_CD": "005930"}],
+            "extracted_tickers": ["005930"],
+            "resolved_from": kwargs["trade_date"],
+            "source": "krx_raw_payload",
+            "extraction_block": "output",
+        },
+    )
+
+    artifact = constituents.collect_same_date_ticker_overlap_artifact(
+        trade_date="20260417",
+        sector_codes=["1155", "5042", "5044"],
+        target_ticker="005930",
+    )
+
+    assert artifact["trade_date"] == "20260417"
+    assert artifact["target_ticker"] == "005930"
+    assert artifact["sector_codes"] == ["1155", "5042", "5044"]
+    assert artifact["verdict"] == "upstream_source_behavior"
+    assert len(artifact["evidences"]) == 3

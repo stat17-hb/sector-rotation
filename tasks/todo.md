@@ -1,3 +1,1049 @@
+# 2026-04-20 - Ralph: Investor Flow Lower Tabs Blank
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Ground the lower-tab blank-state report and capture a fresh context snapshot
+- [x] Write minimal PRD/test-spec artifacts for the Ralph execution gate
+- [x] Reproduce the blank tab behavior and isolate the exact failing render path
+- [x] Implement the smallest durable fix for KR lower investor-flow / monitoring tab rendering
+- [x] Add or adjust regression coverage for the blank-tab failure mode
+- [x] Run targeted verification, diagnostics, architect verification, deslop, and post-deslop regression
+
+## Review
+- Scope:
+  KR 대시보드 하단 `투자자 수급`, `데이터 모니터링` 탭이 클릭 시 비어 보이는 문제를 진단하고 닫는다.
+- Artifacts:
+  `.omx/context/investor-flow-lower-tabs-blank-20260420T133445Z.md`
+  `.omx/plans/prd-investor-flow-lower-tabs-blank.md`
+  `.omx/plans/test-spec-investor-flow-lower-tabs-blank.md`
+- Root cause:
+  탭 인덱스나 CSS 숨김 문제는 재현되지 않았다.
+  실제 문제 클래스는 하단 모니터링 탭이 현재 세션 runtime payload를 재사용하지 않고 warehouse 이력만 다시 읽는 경로 차이였다.
+  상단 수급 스냅샷은 이미 보이는 상태에서도, warehouse history/bounds가 비거나 write-skip 상태면 하단 탭이 체감상 빈 상태에 가까워질 수 있었다.
+- Fix applied:
+  `src/dashboard/tabs.py`에서 `render_monitoring_tab()`이 선택적으로 runtime `investor_flow_status`, `investor_flow_fresh`, `investor_flow_detail`, `investor_flow_frame`를 받도록 바꿨다.
+  warehouse 이력이 비었을 때는 현재 세션 runtime snapshot 메타데이터를 명시적으로 표시하고,
+  warehouse coverage가 없을 때는 이를 warehouse 범위로 오인시키지 않고 `runtime snapshot 범위`로만 보여주도록 분리했다.
+  `render_dashboard_tabs()`는 하단 모니터링 탭에 현재 runtime 수급 payload를 그대로 넘기도록 연결했다.
+- Changed files:
+  `src/dashboard/tabs.py`
+  `tests/test_dashboard_tabs.py`
+  `tasks/todo.md`
+  `.omx/context/investor-flow-lower-tabs-blank-20260420T133445Z.md`
+  `.omx/plans/prd-investor-flow-lower-tabs-blank.md`
+  `.omx/plans/test-spec-investor-flow-lower-tabs-blank.md`
+- Simplifications made:
+  별도 persistence layer나 새 cache를 추가하지 않고 기존 runtime payload를 하단 모니터링 탭 fallback으로만 재사용했다.
+  synthetic history는 warehouse provenance를 흉내 내지 않도록 `row_count` 추정과 coverage backfill을 제거했다.
+  deslop pass는 changed-files 범위만 다시 점검했고 추가 simplification edit 없이 no-op으로 종료했다.
+- Verification:
+  `python -m py_compile src\dashboard\tabs.py tests\test_dashboard_tabs.py`
+  `pytest -q tests\test_dashboard_tabs.py` -> `19 passed`
+  `pytest -q tests\test_dashboard_runtime.py` -> `20 passed`
+  `pytest -q tests\test_dashboard_tabs.py tests\test_dashboard_runtime.py` -> `39 passed`
+  diagnostics:
+  `src\dashboard\tabs.py` -> `0` errors
+  `tests\test_dashboard_tabs.py` -> `0` errors
+  runtime harness:
+  Streamlit `AppTest` with real KR runtime payload -> `투자자 수급` child count `9`, `데이터 모니터링` child count `10`, `exceptions=0`
+  architect verification -> `APPROVE`
+- Remaining risks:
+  실제 브라우저 세션의 Streamlit client-side tab interaction 자체는 CLI에서 완전 재현하지 못했다.
+  `pytest` 종료 시 Windows temp cleanup 경고(`pytest-current` 접근 거부)는 있었지만 테스트 본문은 모두 통과했다.
+
+# 2026-04-20 - Ralph: KR Dashboard Sector Name Runtime Repair
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Ground the unresolved dashboard-wide raw-code exposure and capture a fresh context snapshot
+- [x] Write minimal PRD/test-spec artifacts for the runtime name-repair pass
+- [x] Fix KR dim-index sync to prefer official discovered names when available
+- [x] Add a stale-name dim repair path for existing KR active universe rows
+- [x] Add in-memory KR frame normalization so visible UI no longer depends on acquiring a warehouse write lock
+- [x] Run targeted verification, diagnostics, architect verification, deslop, and post-deslop regression
+
+## Review
+- Scope:
+  lookup UI를 넘어서 대시보드 본체 전반에서 raw sector code가 노출되는 문제를 닫았다.
+  핵심 원인은 active KR `dim_index`와 그 이름을 재사용하는 price/flow frames가 이미 code-like `index_name`을 품고 있다는 점이었다.
+- Artifacts:
+  `.omx/context/kr-dashboard-sector-name-runtime-20260420T110608Z.md`
+  `.omx/plans/prd-kr-dashboard-sector-name-runtime.md`
+  `.omx/plans/test-spec-kr-dashboard-sector-name-runtime.md`
+- Changed files:
+  `src/data_sources/krx_indices.py`
+  `src/dashboard/data.py`
+  `tests/test_krx_indices.py`
+  `tests/test_dashboard_data.py`
+  `tasks/todo.md`
+- Implementation:
+  `src/data_sources/krx_indices.py`는 이제 `_sync_index_dimension()`에서 official discovered rows를 우선 사용한다.
+  그래서 future sync가 `1002`, `1013` 같은 코드를 다시 raw name으로 저장하지 않는다.
+  추가로 `repair_stale_kr_index_dimension_names()`를 넣어 기존 active KR dimension에서 `index_name == index_code`인 stale rows를 discovered official names로 복구할 수 있게 했다.
+  `src/dashboard/data.py`에는 KR active-name lookup과 frame normalization helper를 추가했다.
+  이 helper는 active `dim_index`가 여전히 stale이어도 official discovery를 read-only fallback으로 사용해
+  `sector_prices.index_name`, `investor_flow_frame.sector_name`, `sector_universe_rows.index_name`를 runtime에서 즉시 보정한다.
+  따라서 heatmap, selected-sector detail, 신규 매수 탐색, lower tabs가 warehouse write 성공 여부와 무관하게 이름을 표시할 수 있다.
+- Simplifications made:
+  UI surface별 개별 patch 대신 KR runtime name normalization seam 하나로 묶었다.
+  warehouse fact를 재기록하는 migration은 추가하지 않았고, read-time normalization과 dim sync repair만 넣었다.
+  deslop pass는 changed-files 범위만 재점검했고 추가 simplification edit 없이 no-op으로 종료했다.
+- Verification:
+  `python -m py_compile src\data_sources\krx_indices.py src\dashboard\data.py tests\test_krx_indices.py tests\test_dashboard_data.py`
+  `pytest -q tests\test_krx_indices.py tests\test_dashboard_data.py` -> `11 passed`
+  `pytest -q tests\test_dashboard_runtime.py -k "cached_investor_flow or cached_signals or investor_flow_refresh_notice"` -> `13 passed, 7 deselected`
+  read-only runtime proof:
+  `_kr_active_index_name_lookup()` -> `1002=코스피 대형주`, `1003=코스피 중형주`, `1013=전기전자`, `1024=증권`
+  `_normalize_kr_sector_universe_rows(...)` sample -> code-like names replaced with official labels
+  diagnostics:
+  `src\data_sources\krx_indices.py` -> `0` errors
+  `src\dashboard\data.py` -> `0` errors
+  architect verification -> `APPROVE`
+  local warehouse write repair attempt:
+  blocked by DuckDB write lock from running Python/Streamlit processes, so no external one-shot repair was applied from the shell
+- Remaining risks:
+  currently running app/workers holding `warehouse.duckdb` can still block the one-shot persistent dim repair from an external shell.
+  visible runtime labels are fixed by read-only fallback, but persisted stale rows remain until a process with write access executes the repair path successfully.
+
+# 2026-04-20 - Ralph: KR Sector Code Display Mapping
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Ground the 4-digit KR sector-code display gap and capture a fresh context snapshot
+- [x] Write minimal PRD/test-spec artifacts for the Ralph execution gate
+- [x] Merge KR official-universe sector names with config-backed lookup names so code-only candidates are enriched
+- [x] Add focused regression coverage for code-only candidate display enrichment
+- [x] Run targeted verification, diagnostics, architect verification, deslop, and post-deslop regression
+
+## Review
+- Scope:
+  KR 종목→섹터 조회에서 official universe rows를 쓰는 경로에서도
+  `1155`, `5042`, `5044` 같은 4자리 코드가 이름 없이 노출되지 않도록
+  resolver/result/display 세 경계 중 필요한 최소 범위만 보강했다.
+- Artifacts:
+  `.omx/context/kr-sector-code-display-mapping-20260420T192353Z.md`
+  `.omx/plans/prd-kr-sector-code-display-mapping.md`
+  `.omx/plans/test-spec-kr-sector-code-display-mapping.md`
+- Changed files:
+  `src/data_sources/stock_sector_lookup.py`
+  `src/dashboard/state.py`
+  `tests/test_stock_sector_lookup.py`
+  `tests/test_dashboard_state.py`
+  `tasks/todo.md`
+- Implementation:
+  KR lookup는 이제 official universe rows와 config `sector_map.yml` entries를 merge해서 사용한다.
+  같은 code가 양쪽에 있으면 official name을 우선하고,
+  config 쪽 `lookup_priority` 같은 canonicalization metadata는 유지한다.
+  그래서 official universe에 없는 overlap 후보 code도 이름을 잃지 않는다.
+  display model에는 방어적 name enrichment를 추가해,
+  persisted lookup result에 code-only sector name이 들어와도
+  sector_map 기반 이름으로 치환해서 보여준다.
+- Simplifications made:
+  canonical winner logic는 건드리지 않고 sector-entry assembly만 보강했다.
+  display layer는 별도 taxonomy 구조를 만들지 않고 기존 `sector_map`에서 code→name lookup만 추출했다.
+  deslop pass는 changed files만 다시 점검했고 추가 simplification edit 없이 no-op으로 종료했다.
+- Verification:
+  `python -m py_compile src\data_sources\stock_sector_lookup.py src\dashboard\state.py tests\test_stock_sector_lookup.py tests\test_dashboard_state.py`
+  `pytest -q tests\test_stock_sector_lookup.py tests\test_dashboard_state.py` -> `30 passed`
+  diagnostics:
+  `src\data_sources\stock_sector_lookup.py` -> `0` errors
+  `src\dashboard\state.py` -> `0` errors
+  architect verification -> `APPROVE`
+  broader regression attempts:
+  `pytest -q` -> timed out at 244s and again at 604s
+  `pytest -q tests/test_ui_components.py tests/test_app_transforms.py -k stock_lookup` -> timed out
+- Remaining risks:
+  `apply_stock_lookup_result()`는 raw result의 `sector_name`을 그대로 selected sector에 저장한다.
+  현재 resolver 경로는 이름을 반환하도록 닫혔지만, 외부에서 code-only success payload를 직접 주입하면 selected state까지 이름 보강되지는 않는다.
+
+# 2026-04-19 - Ralph: Dashboard Control-Ownership Risk Closure
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Ground the real ownership mismatch after the hierarchy-clarification pass
+- [x] Capture a fresh context snapshot for the control-unification follow-up
+- [x] Move command-bar ownership out of the upper decision stack and into the lower research layer
+- [x] Keep held/new boards on `held_sectors` ownership and keep the analysis canvas on research-scope ownership
+- [x] Lock the new ownership boundary with focused regressions
+- [x] Run py_compile, targeted pytest, full pytest, diagnostics, architect verification, deslop, and post-deslop re-verification
+
+## Review
+- Scope:
+  남아 있던 리스크는 `command bar`의 filter state가 실제로는 lower research layer만 바꾸는데,
+  orchestration 상으로는 page-global owner처럼 다뤄진다는 점이었다.
+  이번 패스는 그 leakage를 닫고 ownership을 코드 구조에 맞게 다시 배치했다.
+- Artifacts:
+  `.omx/context/dashboard-control-unification-20260419T083713Z.md`
+  `.omx/plans/ralplan-dashboard-action-execution-review-2026-04-19.md`
+- Changed files:
+  `app.py`
+  `src/dashboard/tabs.py`
+  `src/ui/panels.py`
+  `src/ui/copy.py`
+  `docs/dashboard-control-surface-matrix-2026-04-18.md`
+  `tests/test_dashboard_tabs.py`
+  `tests/test_ui_components.py`
+  `tests/test_ui_copy.py`
+  `tasks/todo.md`
+- Implementation:
+  `render_decision_first_sections()`는 이제 hero/status/flow/boards/canvas만 렌더하는 upper-lane surface로 남고,
+  반환값도 `held_sectors`만 유지한다.
+  `render_dashboard_tabs()`가 lower research layer owner가 되어 `render_top_bar_filters()`를 직접 렌더하고,
+  그 filter bundle로 `signals_filtered`와 `top_pick_signals`를 계산해 summary/charts/all-signals에만 전달한다.
+  screening과 flow tab은 minimal pass 범위에서 raw `signals`를 유지한다.
+  command-bar copy와 control-surface matrix 문서도 이 boundary에 맞게 다시 정렬했다.
+- Simplifications made:
+  upper decision stack에서 command-bar state 왕복과 filtered-signal 계산을 제거했다.
+  deslop pass에서는 `render_decision_first_sections()`의 미사용 인자만 제거했다.
+- Verification:
+  `python -m py_compile app.py src\ui\copy.py src\ui\panels.py src\dashboard\tabs.py tests\test_ui_components.py tests\test_dashboard_tabs.py tests\test_ui_copy.py`
+  `pytest -q tests/test_ui_components.py tests/test_dashboard_tabs.py tests/test_ui_copy.py` -> `84 passed`
+  `pytest -q` -> `455 passed`
+  post-deslop:
+  `python -m py_compile src\dashboard\tabs.py`
+  `pytest -q tests/test_dashboard_tabs.py` -> `17 passed`
+  diagnostics: affected files `0` errors
+  architect verification -> `APPROVE`
+  post-deslop architect re-check -> `APPROVE`
+- Remaining risks:
+  minimal pass intentionally leaves screening tab과 flow tab을 lower filter bundle 밖에 둔다.
+  이 둘까지 같은 owner로 묶으려면 separate plan에서 semantics를 다시 검토해야 한다.
+
+# 2026-04-19 - Ralph: Dashboard Action-Execution UX Clarification
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Reuse the approved dashboard action-execution review artifacts and context snapshot
+- [x] Ground the current toolbar / decision lane / command-bar / analysis-canvas seams in code and tests
+- [x] Clarify the analysis-toolbar framing so it reads as analysis-context setup, not the primary action surface
+- [x] Clarify the lower command bar as downstream-only filtered-view control
+- [x] Clarify the analysis canvas as conviction-building / research support rather than execution authority
+- [x] Tighten investor-flow reference-only wording without widening semantics
+- [x] Add focused regression coverage for the updated framing/copy contracts
+- [x] Run targeted pytest, full pytest, py_compile, diagnostics, architect verification, deslop, and post-deslop regression
+
+## Review
+- Scope:
+  최신 `ralplan-dashboard-action-execution-review-2026-04-19.md`의 Option B를 구현한다.
+  목표는 control unification 없이 hierarchy / framing / copy만 정리하는 것이다.
+- Constraints:
+  기존 signal/scoring semantics는 유지한다.
+  summary tab additive contract는 건드리지 않는다.
+  lower command bar가 board/canvas를 제어하는 것처럼 보이게 만드는 문구를 제거한다.
+- Artifacts:
+  `.omx/context/dashboard-action-execution-review-20260419T160838Z.md`
+  `.omx/plans/ralplan-dashboard-action-execution-review-2026-04-19.md`
+- Changed files:
+  `src/ui/copy.py`
+  `src/ui/panels.py`
+  `src/dashboard/tabs.py`
+  `tests/test_ui_components.py`
+  `tests/test_dashboard_tabs.py`
+  `tests/test_ui_copy.py`
+  `tasks/todo.md`
+- Simplifications made:
+  toolbar submit 테스트는 값 흐름 검증만 맡기고, hierarchy/copy assertions는 전용 테스트로 분리했다.
+  hierarchy clarification은 기존 state ownership과 render order를 유지한 채 copy/framing만 조정했다.
+- Verification:
+  `python -m py_compile src\ui\copy.py src\ui\panels.py src\dashboard\tabs.py tests\test_ui_components.py tests\test_dashboard_tabs.py tests\test_ui_copy.py`
+  `pytest -q tests/test_ui_components.py tests/test_dashboard_tabs.py tests/test_ui_copy.py` -> `83 passed`
+  `pytest -q` -> `454 passed`
+  diagnostics: affected files `0` errors
+  architect verification -> `APPROVE`
+  post-deslop architect re-check -> `APPROVE`
+- Remaining risks:
+  이번 패스는 wording/hierarchy clarification만 다뤘다.
+  toolbar, board, tabs 사이의 실제 control ownership 통합은 future plan 범위다.
+
+# 2026-04-19 - Ralph: Dashboard Action-Execution UX Implementation
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Attempt team-first execution from the approved PRD/test-spec
+- [x] Detect OMX team runtime blocker and preserve user workspace changes instead of stash/commit fallback
+- [x] Implement the approved hierarchy/framing/copy changes locally without widening signal semantics
+- [x] Extend focused UI tests for command-bar scope, analysis-toolbar framing, research-canvas framing, and flow reference-only copy
+- [x] Run py_compile, focused pytest, diagnostics, architect review, deslop review, and post-deslop re-verification
+
+## Review
+- Scope:
+  approved `dashboard-action-execution-review` plan을 구현했다.
+  범위는 `hierarchy / framing / copy / tests`로 제한했고,
+  signal/scoring logic나 control ownership은 바꾸지 않았다.
+- Runtime note:
+  `$team`은 실제로 시도했지만 현재 leader workspace가 dirty라
+  `leader_workspace_dirty_for_worktrees ... commit_or_stash_before_omx_team`
+  guard에 막혔다.
+  user changes를 치우기 위해 stash/commit하는 것은 리스크가 커서,
+  같은 승인안 그대로 현재 workspace에서 Ralph-style execution으로 전환했다.
+- Changed files:
+  `app.py`
+  `src/ui/copy.py`
+  `src/ui/panels.py`
+  `src/dashboard/tabs.py`
+  `tests/test_ui_components.py`
+  `tests/test_dashboard_tabs.py`
+  `tests/test_ui_copy.py`
+  `tasks/todo.md`
+- Implementation:
+  page header description은 이제 held/new decision boards를 먼저 보고,
+  research canvas와 audit tabs로 검증하라고 안내한다.
+  analysis toolbar는 `리서치 범위`로 재프레이밍했고,
+  상단 decision boards의 기본 판단 규칙은 바꾸지 않는다는 점을 명시했다.
+  command bar는 `하단 상세 뷰 필터`로 재라벨링했고,
+  downstream research views만 바꾸며 상단 decision boards와 analysis canvas는 바꾸지 않는다고 명시했다.
+  decision-board shell은 `실행 레인`으로 명확히 표시했다.
+  analysis canvas 앞에는 `리서치 캔버스` header를 추가해,
+  action authority가 아니라 validation / conviction surface임을 드러냈다.
+  summary tab 시작부에는 additive recap/audit layer라는 caption을 추가했다.
+  investor-flow summary와 reference-only copy는
+  상단 execution board의 final action을 바꾸지 않는다는 점을 더 명확히 말했다.
+- Simplifications made:
+  new state, branching, or contract changes 없이 copy/presentation boundary 안에서만 수정했다.
+  control unification이나 signal-table reorder 같은 넓은 변경은 하지 않았다.
+  deslop pass에서는 changed-files 범위를 다시 점검했고 추가 simplification edit는 필요 없다고 판단했다.
+- Verification:
+  team runtime attempt:
+  `omx team 3:executor '...'` -> dirty-worktree guard로 blocked
+  `python -m py_compile app.py src\ui\copy.py src\ui\panels.py src\dashboard\tabs.py tests\test_ui_components.py tests\test_dashboard_tabs.py tests\test_ui_copy.py`
+  `pytest -q tests\test_ui_components.py tests\test_dashboard_tabs.py tests\test_ui_copy.py` -> `82 passed`
+  diagnostics:
+  `app.py`, `src/ui/copy.py`, `src/ui/panels.py`, `src/dashboard/tabs.py`, `tests/test_ui_components.py`, `tests/test_dashboard_tabs.py`, `tests/test_ui_copy.py` -> `0` errors
+  architect verification:
+  scoped hunks only -> `APPROVE`
+- Remaining risks:
+  analysis canvas는 여전히 시각적으로 큰 surface라,
+  future pass에서 copy/header가 다시 흐려지면 decision authority로 오해될 수 있다.
+  `$team` runtime은 current dirty workspace에서는 여전히 직접 사용 불가하다.
+
+# 2026-04-19 - Ralplan: Dashboard Action-Execution UX Review
+
+Status: Completed
+Owner: Codex
+
+## Planning Checklist
+- [x] Reuse the latest relevant dashboard-efficiency and action-why context artifacts
+- [x] Ground the current page/surface hierarchy in `app.py`, `src/dashboard/tabs.py`, and `src/ui/panels.py`
+- [x] Run a planner -> architect -> critic consensus loop on the action-execution review
+- [x] Revise the draft to add fair alternatives, explicit mitigations, acceptance criteria, and verification
+- [x] Write the review artifacts and record the approved recommendation
+
+## Review
+- Scope:
+  현재 대시보드의 UX/UI 구조를 `실전투자 액션 실행` 관점에서 평가했다.
+  구현이 아니라 review / planning-only pass다.
+- Artifacts:
+  `.omx/context/dashboard-action-execution-review-20260419T160838Z.md`
+  `.omx/plans/ralplan-dashboard-action-execution-review-2026-04-19.md`
+  `.omx/plans/prd-dashboard-action-execution-review.md`
+  `.omx/plans/test-spec-dashboard-action-execution-review.md`
+- Consensus outcome:
+  Planner 초안은 `hierarchy clarification first`를 제안했고,
+  Architect는 이를 `execution lane vs research lane` 모델로 정교화하라고 요구했다.
+  Critic은 three-class surface model, fair alternatives, concrete mitigations,
+  acceptance criteria, verification path를 추가한 뒤 `APPROVE`를 반환했다.
+- Approved recommendation:
+  현재 구조는 전면 재설계가 필요한 상태는 아니다.
+  핵심 문제는 action surface 부족보다
+  `무엇이 실행 판단을 직접 이끄는지`와
+  `어떤 control이 실제로 어디까지 영향을 주는지`
+  가 충분히 읽히지 않는 데 있다.
+  따라서 우선순위는 `no-semantic-widening` 조건에서
+  hierarchy / framing / copy를 정리하는 것이다.
+- Surface model:
+  `action-driving`
+  - hero
+  - status cards
+  - held/new decision boards
+  `conditional action overlay`
+  - fresh non-reference inline flow summary
+  `downstream/reference-only`
+  - analysis toolbar
+  - lower command bar
+  - analysis canvas
+  - summary recap surfaces
+  - downstream tabs
+  - stale/partial/transient flow states
+- Highest-friction findings:
+  lower command bar는 main action stack 안에 있으면서도 downstream filtered views에만 영향을 준다.
+  analysis toolbar는 실제 root context setter인데 action lane보다 앞에 나와 research-first로 읽히기 쉽다.
+  investor-flow는 actionable overlay와 reference-only 상태가 섞여 있어 권한 경계가 약간 흐리다.
+  analysis canvas는 conviction-building에는 유용하지만 first-response execution UI로는 해석 비용이 높다.
+- Recommended follow-up:
+  1. execution lane vs research lane hierarchy contract를 명시한다.
+  2. command-bar / flow / analysis-canvas copy를 scope-honest하게 재라벨링한다.
+  3. summary tab additive contract와 flow reference-only downgrade 규칙을 테스트로 더 고정한다.
+- Remaining risks:
+  이번 추천안은 hierarchy clarification까지만 다룬다.
+  실제 control ownership 통합이 필요하면 별도 future plan으로 분리해야 한다.
+
+# 2026-04-19 - Ralph: KR Flow Sigma Legacy Cleanup
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Ground the current KR investor-flow sigma and legacy aggregation paths
+- [x] Capture a dedicated context snapshot for KR flow sigma cleanup
+- [x] Replace sector-level legacy weighted/discrete flow aggregation with sigma-aligned semantics
+- [x] Remove fallback/grouped KR flow score logic that still depends on raw-ratio strength
+- [x] Update KR flow labels/tests so `Flow score` means `Flow sigma`
+- [x] Re-run targeted flow regressions, full pytest, diagnostics, and architect verification
+
+## Review
+- Scope:
+  KR investor-flow path의 남은 레거시 모멘텀 구조를 제거하고,
+  `σ = (단기 평균 - 장기 평균) / 장기 표준편차`
+  기준에 맞춰 sector-level flow semantics와 fallback UI를 정렬.
+- Changed files:
+  `src/signals/flow.py`
+  `src/ui/base.py`
+  `src/ui/copy.py`
+  `src/ui/panels.py`
+  `src/dashboard/tabs.py`
+  `tests/test_investor_flow_scoring.py`
+  `tests/test_ui_components.py`
+  `tests/test_dashboard_tabs.py`
+  `tasks/todo.md`
+- Implementation:
+  `summarize_sector_investor_flow(...)`는 더 이상 discrete state weighted score를 쓰지 않고,
+  profile-selected participant의 실제 `zscore`를 sector-level `flow_score`로 사용한다.
+  `flow_state`는 이 sigma 값에 대해 `>= 0.5`, `<= -0.5`, 그 외 중립 규칙으로 직접 판정한다.
+  KR raw snapshot fallback row도 더 이상 latest-ratio 절대값 합계로 정렬/점수화하지 않고,
+  canonical sigma summary의 `flow_score`를 그대로 사용한다.
+  KR flow UI label은 `Flow sigma` / `수급 σ`로 바뀌었고,
+  signal-backed participant chip tone도 latest ratio sign이 아니라 sigma state를 따라간다.
+- Simplifications made:
+  profile별 가중 상태합계 규칙을 제거하고, profile-selected sigma만 남겼다.
+  snapshot fallback strength 계산을 삭제하고 canonical summary reuse로 통일했다.
+  signal-backed KR flow card에서 raw ratio 기반 tone leak를 제거했다.
+- Verification:
+  targeted flow regression:
+  `pytest -q tests/test_investor_flow_scoring.py tests/test_ui_components.py tests/test_dashboard_tabs.py tests/test_dashboard_runtime.py` -> `99 passed`
+  full regression:
+  `pytest -q` -> `450 passed`
+  `python -m py_compile src\signals\flow.py src\ui\base.py src\ui\panels.py src\dashboard\tabs.py src\ui\copy.py tests\test_investor_flow_scoring.py tests\test_ui_components.py tests\test_dashboard_tabs.py`
+  diagnostics:
+  `src/signals/flow.py`, `src/ui/base.py`, `src/ui/panels.py`, `src/dashboard/tabs.py`, `src/ui/copy.py` -> `0` errors
+  architect verification -> `APPROVE`
+- Remaining risks:
+  profile semantics still exist via selected participant choice (`foreign_lead`, `institutional_confirmation`, `contrarian_retail`), so if the user later wants a fully profile-free KR flow model that would be a separate change.
+
+# 2026-04-19 - Ralph: KR Hybrid Momentum Cutover
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Reuse the approved momentum-methodology PRD and test spec artifacts
+- [x] Replace the KR action-driving momentum engine with the approved hybrid return-rank method
+- [x] Keep US on legacy momentum semantics in phase 1
+- [x] Wire momentum method + hybrid settings into runtime params and cached signal identity
+- [x] Switch KR canonical ordering/reasoning away from RS divergence and quarantine RS views as diagnostic-only
+- [x] Add the script-backed momentum comparison evidence path and generate dated/current artifacts
+- [x] Add regression coverage for hybrid positive/negative paths, state/runtime behavior, and diagnostic-only RS labeling
+- [x] Run py_compile, targeted pytest, full pytest, evidence script, diagnostics, architect review, deslop, and post-deslop re-verification
+
+## Review
+- Scope:
+  KR 대시보드의 canonical 모멘텀 판단을 `RS > RS_MA` + `SMA20/60`에서
+  `6M ex-1M` + `12M ex-1M` benchmark-relative 모멘텀, percentile rank, `price > 200DMA`
+  기반 hybrid 방식으로 전환.
+  US는 phase 1에서 기존 legacy 로직을 유지.
+- Changed files:
+  `app.py`
+  `config/settings.yml`
+  `config/settings_us.yml`
+  `src/indicators/momentum.py`
+  `src/signals/matrix.py`
+  `src/dashboard/data.py`
+  `src/dashboard/tabs.py`
+  `src/dashboard/analysis.py`
+  `src/ui/base.py`
+  `src/ui/copy.py`
+  `src/ui/figures.py`
+  `src/ui/panels.py`
+  `scripts/evaluate_momentum_method.py`
+  `tests/test_momentum.py`
+  `tests/test_signals.py`
+  `tests/test_signal_pipeline_integration.py`
+  `tests/test_dashboard_analysis.py`
+  `tests/test_dashboard_state.py`
+  `tests/test_ui_components.py`
+  generated artifacts:
+  `docs/momentum-method-comparison-2026-04-19.md`
+  `docs/momentum-method-comparison-2026-04-19.csv`
+  `docs/momentum-method-comparison-current.md`
+  `docs/momentum-method-comparison-current.csv`
+- Implementation:
+  KR config defaults now select `hybrid_return_rank_v1`, while US remains `legacy_rs_ma_v0`.
+  `build_signal_table(...)` now computes hybrid momentum from `6M ex-1M` / `12M ex-1M`
+  benchmark-relative returns, percentile rank, positive raw confirmation, and `price > 200DMA`.
+  Legacy RS/RS MA semantics remain available as additive diagnostics through `rs_strong`,
+  `legacy_trend_ok`, and `legacy_momentum_strong`, but they no longer drive canonical KR action logic.
+  KR top-pick ordering now uses hybrid rank/raw, runtime cache identity includes the new momentum settings,
+  and RS panels/copy are explicitly labeled diagnostic-only when hybrid is active.
+  The new evidence script compares legacy vs hybrid across KR month-end snapshots and writes repo-native docs/csv artifacts.
+- Simplifications made:
+  phase 1 stayed KR-only and config-driven; no in-app method toggle was added.
+  percentile rank was used instead of z-score/vol-adjusted production scoring for the small sector universe.
+  screening stayed legacy execution-support logic instead of being coupled into the same cutover.
+  the deslop pass removed low-signal unused imports and tightened the evidence-script stdout/market guard without widening scope.
+- Verification:
+  `python -m py_compile app.py src\indicators\momentum.py src\signals\matrix.py src\dashboard\data.py src\dashboard\tabs.py src\dashboard\analysis.py src\ui\base.py src\ui\panels.py src\ui\figures.py src\ui\copy.py scripts\evaluate_momentum_method.py tests\test_momentum.py tests\test_signals.py tests\test_signal_pipeline_integration.py tests\test_dashboard_analysis.py tests\test_dashboard_state.py tests\test_ui_components.py`
+  targeted regression:
+  `pytest -q tests/test_momentum.py tests/test_signals.py tests/test_signal_pipeline_integration.py tests/test_dashboard_analysis.py tests/test_dashboard_tabs.py tests/test_dashboard_data.py tests/test_dashboard_runtime.py tests/test_ui_components.py tests/test_app_transforms.py tests/test_us_signal_pipeline.py` -> `144 passed`
+  full regression:
+  `pytest -q` -> `448 passed`
+  evidence:
+  `python scripts/evaluate_momentum_method.py --market KR --benchmark-code 1001 --asof 2026-04-19 --window-months 36 --update-current`
+  -> `whipsaws legacy=87 hybrid=25 reduction_pct=71.3`, `median_rho=0.83`, `p10_rho=0.73`, `gate_state=approved`
+  diagnostics:
+  `app.py`, `src/signals/matrix.py`, `src/dashboard/tabs.py`, `src/ui/base.py`, `src/ui/figures.py`, `scripts/evaluate_momentum_method.py` -> `0` errors
+  architect verification -> `APPROVE`
+- Remaining risks:
+  phase 1 intentionally leaves US and the stock screener on legacy logic, so semantics are temporarily split by market/surface.
+  legacy RS diagnostics still exist for comparison, which is intentional, but they should be removed or further reduced once the hybrid method settles in production.
+
+# 2026-04-19 - Ralplan: Momentum Methodology Review
+
+Status: Completed
+Owner: Codex
+
+## Planning Checklist
+- [x] Ground the current momentum implementation, settings, and prior repo context
+- [x] Capture a fresh context snapshot for momentum methodology review
+- [x] Research authoritative external momentum papers and official methodologies
+- [x] Draft planner proposal with principles, options, ADR, and verification path
+- [x] Run architect review on methodology choice, migration risk, and UX impact
+- [x] Run critic review and revise until execution-ready
+- [x] Write final PRD / test-spec artifacts and record the approved recommendation
+
+## Review
+- Scope:
+  기존 `RS > RS_MA` + `SMA20 > SMA60` 기반 모멘텀 휴리스틱을 외부 연구와 비교해, 더 합리적인 계산방식이 있는지 판단하고 반영계획을 수립.
+- Research conclusion:
+  현재 로직은 단기 교차 기반이라 `3-12개월` 모멘텀 문헌 및 공식 팩터 방법론과 정합성이 약하다.
+  KR phase 1에서는 `6M ex-1M` + `12M ex-1M` benchmark-relative 모멘텀과 `price > 200DMA` 절대 게이트를 결합한 hybrid가 가장 타당하다.
+- Approved planning direction:
+  KR만 먼저 `hybrid_return_rank_v1`로 전환하고, US는 phase 1에서 `legacy_rs_ma_v0`를 유지한다.
+  production control은 `config-only`로 두고, in-app method toggle은 만들지 않는다.
+  screening은 legacy execution-support로 남기고 cutover evidence에서 제외한다.
+  RS/RS MA는 diagnostic-only로 격리하고 canonical decision/risk/invalidation reasoning에서는 제거한다.
+- Artifacts:
+  `.omx/context/momentum-methodology-review-20260419T040151Z.md`
+  `.omx/plans/ralplan-momentum-methodology-consensus-draft.md`
+  `.omx/plans/ralplan-momentum-methodology-consensus-draft-v2.md`
+  `.omx/plans/ralplan-momentum-methodology-consensus-draft-v3.md`
+  `.omx/plans/ralplan-momentum-methodology-consensus-draft-v4.md`
+  `.omx/plans/ralplan-momentum-methodology-consensus-draft-v5.md`
+  `.omx/plans/ralplan-momentum-methodology-consensus-draft-v6.md`
+  `.omx/plans/prd-momentum-methodology-review.md`
+  `.omx/plans/test-spec-momentum-methodology-review.md`
+- Remaining risks:
+  final consensus draft is execution-ready from the leader perspective, but no additional implementation or replay artifact was produced in this turn because this was a planning-only request.
+
+# 2026-04-19 - Flow Sigma Explainer Toggle
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Add a user-facing explanation toggle for how investor-flow sigma is calculated
+- [x] Show the current short/long runtime window values inside the explainer
+- [x] Cover the explainer copy and render path with focused regressions
+- [x] Run py_compile, focused pytest, full pytest, and diagnostics
+
+## Review
+- Scope:
+  `수급 상태 σ`가 어떤 계산인지 사용자가 UI 안에서 바로 확인할 수 있도록 summary와 investor-flow tab에 설명 토글을 추가.
+- Changed files:
+  `app.py`
+  `src/dashboard/tabs.py`
+  `src/ui/copy.py`
+  `src/ui/panels.py`
+  `tests/test_dashboard_tabs.py`
+  `tests/test_ui_copy.py`
+  `tests/test_ui_components.py`
+  `tasks/todo.md`
+- Implementation:
+  summary card surface와 KR investor-flow tab header 아래에 `수급 상태 σ 계산 설명` expander를 추가했다.
+  설명문은 현재 runtime `short_window` / `long_window` 값을 포함해
+  `(단기 평균 - 장기 평균) / 장기 표준편차`
+  식과 판정 기준(`>= 0.5`, `<= -0.5`)을 보여 준다.
+  cue 문자열은 기존 centralized copy formatter를 그대로 사용한다.
+- Simplifications made:
+  별도 help component를 새로 만들지 않고 기존 render 함수 안의 `st.expander(...)`만 추가했다.
+  설명 본문은 새 copy key 2개로 제한하고, runtime window 값은 기존 settings에서 그대로 전달한다.
+- Verification:
+  `python -m py_compile app.py src\dashboard\tabs.py src\ui\copy.py src\ui\panels.py tests\test_dashboard_tabs.py tests\test_ui_copy.py tests\test_ui_components.py`
+  `pytest -q tests\test_dashboard_tabs.py tests\test_ui_copy.py tests\test_ui_components.py` -> `74 passed`
+  `pytest -q` -> `434 passed`
+  LSP diagnostics:
+  `src/dashboard/tabs.py` -> `0` errors
+  `src/ui/copy.py` -> `0` errors
+  `src/ui/panels.py` -> `0` errors
+  `tests/test_dashboard_tabs.py` -> `0` errors
+  `tests/test_ui_copy.py` -> `0` errors
+  `tests/test_ui_components.py` -> `0` errors
+- Remaining risks:
+  explanation text is static and copy-driven; if sigma thresholds/window policy changes later, the explainer copy must be updated with the code.
+
+# 2026-04-19 - Ralph: Investor-Flow Recent Momentum Risk Closure
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Reuse the approved investor-flow recent-momentum context and execution contract
+- [x] Move shared flow-summary ownership from `app.py` display seam into runtime/data payload preparation
+- [x] Replace inline cue-string assembly with copy-driven cue formatting
+- [x] Extend runtime-payload and copy regression coverage for the closed risks
+- [x] Run py_compile, targeted pytest, full pytest, diagnostics, architect review, deslop, and post-deslop re-verification
+
+## Review
+- Scope:
+  previous implementation의 남은 리스크 두 개를 닫는다:
+  `shared_flow_summary_map`를 `app.py` 밖으로 내려 runtime/data payload에서 준비하고,
+  최근 수급 cue 문구를 copy-driven formatter로 바꿔 phrasing flexibility를 확보한다.
+- Changed files:
+  `app.py`
+  `src/dashboard/data.py`
+  `src/dashboard/types.py`
+  `src/dashboard/tabs.py`
+  `src/ui/base.py`
+  `src/ui/copy.py`
+  `src/ui/panels.py`
+  `tests/test_dashboard_data.py`
+  `tests/test_dashboard_tabs.py`
+  `tests/test_ui_copy.py`
+  `tasks/todo.md`
+- Implementation:
+  `shared_flow_summary_map` 계산을 `src/dashboard/data.py::load_dashboard_runtime_data()` payload preparation으로 이동했다.
+  `app.py`는 더 이상 canonical summary를 직접 재계산하지 않고 runtime payload에서 전달받은 값을 두 render path에 그대로 사용한다.
+  cue 문구는 `src/ui.copy.format_flow_cue_label()`로 통일했고,
+  `src/ui.base`와 lower raw-table participant cue path가 이 formatter를 공유한다.
+  `tests/test_dashboard_data.py`는 runtime payload가 shared summary를 포함하는지 고정하고,
+  `tests/test_ui_copy.py`는 cue formatter의 copy-template 동작을 고정한다.
+- Simplifications made:
+  `app.py`에서 display-only summary recomputation logic를 제거했다.
+  cue string assembly를 `src/ui.copy` 한 곳으로 모아 UI layer별 중복 formatting을 없앴다.
+  existing state labels/template를 재사용해 새 copy surface를 최소화했다.
+- Verification:
+  `python -m py_compile app.py src\dashboard\data.py src\dashboard\types.py src\dashboard\tabs.py src\ui\copy.py src\ui\base.py src\ui\panels.py tests\test_dashboard_data.py tests\test_app_transforms.py tests\test_dashboard_tabs.py tests\test_ui_copy.py tests\test_ui_components.py`
+  `pytest -q tests\test_dashboard_data.py tests\test_app_transforms.py tests\test_dashboard_tabs.py tests\test_ui_copy.py tests\test_ui_components.py tests\test_investor_flow_scoring.py` -> `102 passed`
+  `pytest -q` -> `433 passed`
+  LSP diagnostics:
+  `src/dashboard/data.py` -> `0` errors
+  `src/ui/copy.py` -> `0` errors
+  `tests/test_dashboard_data.py` -> `0` errors
+  `tests/test_ui_copy.py` -> `0` errors
+  final architect verification after deslop -> `APPROVE`
+- Remaining risks:
+  no blocking residual risk remains for this pass.
+  future enhancement only:
+  the shared summary is now in runtime/data payload, but it is still display-only and not yet a first-class warehouse/runtime contract outside these UI surfaces.
+  cue phrasing is now copy-driven, but the current template intentionally stays simple (`state + sigma`) rather than introducing a broader “momentum narrative” system.
+
+# 2026-04-19 - Ralplan: Investor-Flow Recent Momentum
+
+Status: Completed
+Owner: Codex
+
+## Planning Checklist
+- [x] Ground the current investor-flow summary/tab surfaces and reusable prior artifacts
+- [x] Capture a fresh context snapshot for recent investor-flow momentum
+- [x] Draft a planner proposal with principles, options, acceptance criteria, and verification path
+- [x] Run architect review on data-contract and UI-density tradeoffs
+- [x] Run critic review and fold the required contract/verification deltas back into the plan
+- [x] Write final PRD / test-spec artifacts and record the approved recommendation
+
+## Review
+- Scope:
+  KR 투자자 수급 UI에서 최신 snapshot뿐 아니라 최근 모멘텀을 함께 보이게 하되, 기존 수급 overlay/action semantics는 유지.
+- Consensus outcome:
+  planner draft 여러 차례 수정 후 architect는 `APPROVE`, critic이 요구한 wiring/contract/test deltas를 v7에 반영해 execution-ready plan으로 수렴.
+- Approved direction:
+  `build_signal_table(...)` 계약은 유지한다.
+  `app.py`에서 canonical `summarize_sector_investor_flow(...)`를 같은 runtime windows/profile로 한 번 더 호출해 `shared_flow_summary_map`을 계산한다.
+  이 object는
+  `app.py -> render_decision_first_sections(...) -> render_investor_flow_summary(...)`
+  와
+  `app.py -> DashboardDataBundle -> render_dashboard_tabs(...) -> render_investor_flow_tab(...)`
+  두 경로로 전달한다.
+  signal-backed compact surfaces는 기존 `*_flow_ratio` / `*_flow_z`를 우선 사용한다.
+  grouped fallback rows는 raw fields를 유지한 채 hidden `sector_code` join key와 additive `*_cue` fields만 추가한다.
+  lower raw table은 one-row-per-investor raw anchor를 유지하고 participant-matched reference cue만 덧붙인다.
+- Artifacts:
+  `.omx/context/investor-flow-recent-momentum-20260419T085946Z.md`
+  `.omx/plans/prd-investor-flow-recent-momentum.md`
+  `.omx/plans/test-spec-investor-flow-recent-momentum.md`
+  working drafts:
+  `.omx/plans/ralplan-investor-flow-momentum-consensus-draft-v4.md`
+  `.omx/plans/ralplan-investor-flow-momentum-consensus-draft-v5.md`
+  `.omx/plans/ralplan-investor-flow-momentum-consensus-draft-v6.md`
+  `.omx/plans/ralplan-investor-flow-momentum-consensus-draft-v7.md`
+
+## Execution Review
+- Changed files:
+  `app.py`
+  `src/dashboard/types.py`
+  `src/dashboard/tabs.py`
+  `src/ui/base.py`
+  `src/ui/panels.py`
+  `tests/test_app_transforms.py`
+  `tests/test_dashboard_tabs.py`
+  `tests/test_ui_components.py`
+  `tasks/todo.md`
+- Implementation:
+  `app.py` now computes a display-only `shared_flow_summary_map` from the canonical summarizer with the same runtime flow windows/profile and threads it into both the decision-first summary path and the dashboard-tab path.
+  `DashboardDataBundle` now carries that shared summary object.
+  signal-backed compact surfaces continue using existing `*_flow_ratio` and `*_flow_z` fields first.
+  grouped fallback rows now keep existing raw/latest values, add hidden `sector_code` join data, and expose additive `*_cue` fields without changing `flow_score` ordering semantics.
+  the lower raw investor table now adds participant-matched reference cues while keeping `Latest ratio` and `net_buy_amount` as the raw anchor columns.
+- Simplifications made:
+  avoided widening `build_signal_table(...)` or `SectorSignal`.
+  reused `summarize_sector_investor_flow(...)` instead of inventing a second momentum heuristic.
+  reused existing copy keys and existing `INVESTOR_LABEL_TO_GROUP` mapping rather than adding a new translation/mapping layer.
+  post-deslop pass removed one needless dict copy in `app.py` and one repeated summary-map materialization inside the lower raw-table participant cue path.
+- Verification:
+  `python -m py_compile app.py src\dashboard\types.py src\dashboard\tabs.py src\ui\base.py src\ui\panels.py tests\test_app_transforms.py tests\test_dashboard_tabs.py tests\test_ui_components.py`
+  `pytest -q tests\test_app_transforms.py tests\test_dashboard_tabs.py tests\test_ui_components.py tests\test_investor_flow_scoring.py` -> `92 passed`
+  `pytest -q` -> `431 passed`
+  LSP diagnostics:
+  `app.py` -> `0` errors
+  `src/dashboard/types.py` -> `0` errors
+  `src/dashboard/tabs.py` -> `0` errors
+  `src/ui/base.py` -> `0` errors
+  `src/ui/panels.py` -> `0` errors
+  `tests/test_app_transforms.py` -> `0` errors
+  `tests/test_dashboard_tabs.py` -> `0` errors
+  `tests/test_ui_components.py` -> `0` errors
+- Remaining risks:
+  recent momentum is intentionally display-only in this pass and recomputed once in `app.py`, so if another surface needs the same summary later the object should move down into runtime/data payloads.
+  compact cue strings currently lean on existing state labels and sigma formatting rather than a dedicated copy system, which keeps the diff small but limits phrasing flexibility.
+
+# 2026-04-18 - Ralph: Action/Why Glance UX Implementation
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Reuse the approved action/why PRD and test spec artifacts
+- [x] Replace main-body decision-board dataframe usage with dedicated action-card rendering
+- [x] Keep summary and all-signals audit tables on native dataframe lanes
+- [x] Preserve held/new semantics, ordering parity, empty states, and lower-command-bar non-scope
+- [x] Add focused regressions for board-card routing/content, summary-tab additivity, and scope-note behavior
+- [x] Fix Watch badge tone mismatch and lock it with regression coverage
+- [x] Run py_compile, focused pytest, full pytest, LSP diagnostics, Streamlit smoke, architect review, deslop, and post-deslop re-verification
+
+## Review
+- Scope:
+  승인된 action/why glance UX 계획을 구현하되, 기존 `보유 포지션 대응 / 신규 아이디어` 보드를 유일한 canonical action-entry surface로 유지.
+- Changed files:
+  `src/ui/panels.py`
+  `src/ui/copy.py`
+  `src/dashboard/tabs.py`
+  `tests/test_ui_components.py`
+  `tests/test_dashboard_tabs.py`
+- Implementation:
+  main-body decision boards now render dedicated action cards instead of reusing the shared dataframe-based top-picks renderer.
+  each card shows action, context, confidence/thesis summary, why chips, invalidation, and compact supporting metrics.
+  summary tab stays additive and explicitly reads as an audit snapshot.
+  summary tab now takes `held_sectors` explicitly instead of reaching into session state.
+  Watch decision pills are normalized onto a supported badge tone so semantic styling remains intact.
+- Simplifications made:
+  preserved `render_top_picks_table()` and `render_signal_table()` as audit lanes instead of overloading one renderer for both primary and audit surfaces.
+  kept filter/sort semantics on the shared helper path by reusing `filter_signals_for_display()`, `describe_signal_decision()`, and `signal_display_sort_key()`.
+  tightened one implicit dependency by passing `held_sectors` into `render_summary_tab()` explicitly.
+- Verification:
+  `python -m py_compile app.py src\dashboard\tabs.py src\ui\panels.py src\ui\tables.py src\ui\base.py src\ui\copy.py tests\test_dashboard_tabs.py tests\test_ui_components.py`
+  `pytest tests\test_ui_components.py tests\test_dashboard_tabs.py -q` -> `66 passed`
+  `pytest -q` -> `427 passed`
+  LSP diagnostics:
+  `src/ui/panels.py` -> `0` errors
+  `src/dashboard/tabs.py` -> `0` errors
+  `src/ui/copy.py` -> `0` errors
+  `tests/test_ui_components.py` -> `0` errors
+  `tests/test_dashboard_tabs.py` -> `0` errors
+  Streamlit smoke:
+  `python -m streamlit run app.py --server.headless true --server.port 8517` hit the local timeout, but `.tmp_streamlit_action_why_glance_final.log` reached the startup banner and printed `Local URL: http://localhost:8517`
+  final architect verification -> `APPROVE`
+- Remaining risks:
+  card layout and wrapping are still validated by content-focused tests plus smoke startup, not browser-level visual regression.
+  `render_progress_panel()` running/error branches remain less exercised than the new decision-card path.
+
+# 2026-04-18 - Ralplan: Action/Why Glance UX
+
+Status: Completed
+Owner: Codex
+
+## Planning Checklist
+- [x] Ground current table-first and fragmented decision surfaces from code and prior artifacts
+- [x] Capture a fresh context snapshot for the action/why glance problem
+- [x] Draft PRD and test-spec artifacts for an action-first UX direction
+- [x] Run architect review on IA tradeoffs and scope boundaries
+- [x] Run critic review on acceptance criteria and verification strength
+- [x] Revise to an approved recommendation and record the final outcome
+
+## Review
+- Scope:
+  현재 표 중심 정보 전달을 `무엇을 해야 하는가 / 왜 해야 하는가 / 무엇이 깨는가` 중심의 한눈형 decision surface로 재구성하는 UX/UI 개선안 수립.
+- Consensus outcome:
+  planner draft -> architect iterate -> critic iterate -> critic approve.
+- Approved direction:
+  새로운 별도 landing board를 추가하지 않는다.
+  기존 main-body `보유 포지션 대응 / 신규 아이디어` 보드를 canonical action-entry surface로 유지하고,
+  여기에 전용 action-card renderer를 도입한다.
+  `render_top_picks_table()`와 `render_signal_table()`는 각각 summary/all-signals의 audit dataframe lane으로 유지한다.
+  summary tab은 additive surface로 유지하고, copy/labeling만 필요시 조정한다.
+- Key constraints locked:
+  held/new semantics 유지.
+  `signal_display_sort_key()` ordering parity 유지.
+  lower command-bar는 여전히 상단 boards/canvas를 지배하지 않음.
+  empty-state contracts 유지.
+  모바일 `390px` / 데스크톱 `1280px` 검증 포함.
+- Artifacts:
+  `.omx/context/action-why-glance-ux-20260418T122500Z.md`
+  `.omx/plans/prd-action-why-glance-ux.md`
+  `.omx/plans/test-spec-action-why-glance-ux.md`
+
+# 2026-04-18 - Ralph: Data-Load Progress UI Implementation
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Add a shared progress panel renderer for page-load and sidebar data actions
+- [x] Replace spinner-only manual refresh UX with progress-aware runtime callbacks
+- [x] Refactor initial dashboard load to surface staged progress without dropping the cached signal path
+- [x] Add granular KR investor-flow progress with honest logical-step semantics
+- [x] Add focused regressions for runtime progress order, dashboard-load progress, investor-flow callback propagation, and progress panel rendering
+- [x] Run compile, targeted pytest, full pytest, diagnostics, architect review, deslop, and post-deslop re-verification
+
+## Review
+- Scope:
+  implement the approved percent-progress UI for dashboard load and data refresh actions.
+- Changed files:
+  `app.py`
+  `src/dashboard/data.py`
+  `src/dashboard/runtime.py`
+  `src/data_sources/krx_investor_flow.py`
+  `src/ui/panels.py`
+  `tests/test_dashboard_data.py`
+  `tests/test_dashboard_runtime.py`
+  `tests/test_krx_investor_flow_data_source.py`
+  `tests/test_ui_components.py`
+- Implementation:
+  the app now renders progress panels instead of spinner-only UX for sidebar data actions and the main dashboard load.
+  `src/dashboard/runtime.py` exposes optional progress callbacks for market, macro, and investor-flow refreshes.
+  `src/dashboard/data.py` adds a progress-aware runtime wrapper for initial page load while delegating signal computation back to `_cached_signals()` so reruns keep the existing cached signal path.
+  `src/data_sources/krx_investor_flow.py` emits granular progress during collection using honest `logical steps` semantics and no longer labels that counter as raw requests.
+  `warehouse_write_skipped` investor-flow previews are now displayed as reference-only rather than fresh/actionable in the progress-aware load path.
+- Simplifications made:
+  the new UI reuses one shared progress renderer instead of adding separate sidebar and main-page components.
+  the runtime wrapper only emits its own final investor-flow completion when the inner loader emitted no progress, which keeps the callback contract monotonic.
+  signal computation was deslopped back onto the existing cached signal path instead of keeping a second uncached signal-building route alive.
+- Verification:
+  `python -m py_compile app.py src\dashboard\data.py src\dashboard\runtime.py src\data_sources\krx_investor_flow.py src\ui\panels.py tests\test_dashboard_runtime.py tests\test_dashboard_data.py tests\test_krx_investor_flow_data_source.py tests\test_ui_components.py`
+  `pytest -q tests\test_dashboard_runtime.py tests\test_dashboard_data.py tests\test_krx_investor_flow_data_source.py tests\test_ui_components.py` -> `117 passed`
+  `pytest -q` -> `417 passed`
+  LSP diagnostics:
+  `app.py` -> `0` errors
+  `src/dashboard/data.py` -> `0` errors
+  `src/dashboard/runtime.py` -> `0` errors
+  `src/data_sources/krx_investor_flow.py` -> `0` errors
+  `tests/test_dashboard_data.py` -> `0` errors
+  `tests/test_dashboard_runtime.py` -> `0` errors
+  architect verification -> `APPROVE`
+- Remaining risks:
+  progress is still stage-based for market and macro refresh in phase 1; only KR investor-flow has finer-grained intermediate percentages.
+  the page-load progress panel intentionally remains visible on failure for that run so terminal load errors are not hidden.
+
+# 2026-04-18 - Ralplan: Data-Load Progress UI
+
+Status: Completed
+Owner: Codex
+
+## Planning Checklist
+- [x] Ground the current spinner-only data-load UX in app and runtime paths
+- [x] Verify which loaders already expose real request counters vs only stage boundaries
+- [x] Capture a fresh context snapshot for percent-progress UI
+- [x] Draft PRD and test-spec artifacts for the bounded progress UI change
+- [x] Run planner findings on viable progress-UI options
+- [x] Run architect review on orchestration honesty and callback boundaries
+- [x] Run critic review, converge on an approved plan, and record the final recommendation
+
+## Review
+- Scope:
+  add percent progress UI for dashboard data-loading work without introducing async jobs, polling, or new dependencies.
+- Grounded facts so far:
+  `app.py` currently wraps all manual refresh actions and the main dashboard load in `st.spinner(...)` only.
+  `src/dashboard/runtime.py` exposes synchronous refresh functions that return only a final notice tuple.
+  `src/dashboard/data.py` already performs dashboard loading in stages, but that orchestration is invisible to the user.
+  `app.py` does a second `cached_investor_flow(...)` call after the main `cached_signals(...)` block, so the current spinner can finish before all visible data is ready.
+  KR investor-flow refresh already computes `predicted_requests` and `processed_requests`, giving a trustworthy basis for real intermediate percentages on that path.
+  macro sync currently aggregates provider summaries but does not expose request-level counters, so macro percent must stay stage-based in phase 1.
+- Consensus outcome:
+  planner -> architect -> critic review converged on `APPROVE`.
+  the approved plan chooses a reusable progress controller with stage-based percent for all load paths and request-based percent only for KR investor-flow refresh.
+  the architect constraint is that progress must remain honest:
+  the load bar cannot claim `100%` before the visible investor-flow detail hydrate is complete.
+  the critic constraint is that percent semantics must be explicit and testable, especially on mixed stage-based vs request-based paths.
+- Approved implementation direction:
+  add an optional progress callback contract plus a shared progress panel helper.
+  refactor dashboard loading into a progress-aware wrapper that reuses existing cached stage loaders instead of bypassing cache.
+  thread optional progress callbacks through `run_market_refresh()`, `run_macro_refresh()`, and `run_investor_flow_refresh()`.
+  add granular callback updates only in `src/data_sources/krx_investor_flow.py`; keep market and macro refresh stage-based for this pass.
+- Verification path for execution:
+  `python -m py_compile app.py src\dashboard\data.py src\dashboard\runtime.py src\data_sources\krx_investor_flow.py tests\test_dashboard_runtime.py tests\test_dashboard_tabs.py tests\test_krx_investor_flow_data_source.py`
+  `pytest -q tests\test_dashboard_runtime.py tests\test_dashboard_tabs.py tests\test_krx_investor_flow_data_source.py`
+  manual app verification of initial load, market refresh, macro refresh, and KR investor-flow refresh percent UI
+
+# 2026-04-18 - Ralplan: Investor-Flow Ticker Failure Diagnosis
+
+Status: Completed
+Owner: Codex
+
+## Planning Checklist
+- [x] Ground the current failed ticker count and latest investor-flow run metadata
+- [x] Verify whether holidays are the main cause of the current monitoring errors
+- [x] Sample failed tickers against the current collector to distinguish structural vs transient failures
+- [x] Capture a fresh context snapshot for ticker-failure diagnosis
+- [x] Run planner findings on likely root causes and fix options
+- [x] Run architect review on diagnosis boundaries and repair strategy
+- [x] Run critic review, revise if needed, and finalize the approved plan
+
+## Review
+- Scope:
+  explain why `오류 종목 188건` appears in investor-flow monitoring and produce a bounded fix plan.
+- Grounded facts so far:
+  the latest `manual_refresh` run spans `20251211 -> 20260417` and has `coverage_complete=False`.
+  it records `188` failed ticker codes, and every one currently collapses to `buy frame empty`.
+  the same run already had retry behavior: `retried_ticker_count=234`, `retried_recovered_ticker_count=46`, `retry_processed_requests=702`.
+  current calendar truth excludes the older holiday dates, so the current `오류 종목 188건` issue is not primarily a holiday/day-truth problem.
+  spot re-probes on representative failed tickers now succeed for all `buy/sell/net` legs, which points to transient per-run collection failure rather than a permanently unsupported ticker class.
+  the collector currently loses provenance because `_fetch_first_non_empty_frame()` swallows exceptions and `_validate_trading_value_frames()` reduces many causes to `buy frame empty`.
+- Revised planning direction:
+  phase 1 should do provenance-first diagnosis plus one explicit retry-parity fix.
+  the retry contract is now concrete:
+  after `reset_krx_shared_session()`, retry the same builder chain as the initial pass once.
+  `failed_ticker_codes` stays backward-compatible as a flat `ticker -> reason` map.
+  detailed provenance moves into a sidecar summary structure and grouped failure-family counts.
+  monitoring wording should explicitly say the ticker count reflects the latest stored incomplete `manual_refresh` history, not a present-time live probe.
+- Implementation:
+  `src/data_sources/krx_investor_flow.py` now captures per-builder attempt provenance, preserves exception-backed empties in diagnostic sidecars, and keeps `failed_codes` flat for compatibility.
+  retry after `reset_krx_shared_session()` now reuses the same fallback-enabled builder chain as the initial pass.
+  `read_warm_status()` now exposes `failed_ticker_detail` and `failed_ticker_family_counts`.
+  `src/dashboard/tabs.py` now states that `오류 종목 N건` is the latest stored incomplete `manual_refresh` history and shows grouped failure-family counts.
+  focused regressions now lock provenance capture, wrapper-dependent retry recovery, warm-status sidecar exposure, and monitoring wording.
+  follow-up root-cause closure now addresses the dominant `exception_backed_empty` family:
+  `src/data_sources/pykrx_compat.py` validates that raw KRX endpoint responses are actually JSON, resets the shared session, retries once, and re-raises descriptive `RuntimeError` messages for access-denied / HTML / generic non-JSON payloads.
+  this keeps the collector from collapsing raw transport corruption into plain empty frames.
+- Verification:
+  `python -m py_compile src\data_sources\pykrx_compat.py src\data_sources\krx_investor_flow.py src\dashboard\tabs.py tests\test_pykrx_compat.py tests\test_krx_investor_flow_data_source.py tests\test_dashboard_tabs.py`
+  `pytest -q tests\test_pykrx_compat.py tests\test_krx_investor_flow_data_source.py tests\test_dashboard_tabs.py tests\test_dashboard_runtime.py tests\test_warehouse_investor_flow.py` -> `93 passed`
+  LSP diagnostics:
+  `src/data_sources/pykrx_compat.py` -> `0` errors
+  `src/data_sources/krx_investor_flow.py` -> `0` errors
+  `src/dashboard/tabs.py` -> `0` errors
+  `tests/test_pykrx_compat.py` -> `0` errors
+  `tests/test_krx_investor_flow_data_source.py` -> `0` errors
+  `tests/test_dashboard_tabs.py` -> `0` errors
+  final architect verification -> `APPROVE`
+
+# 2026-04-18 - Ralplan: Investor-Flow Refresh Latency
+
+Status: Completed
+Owner: Codex
+
+## Planning Checklist
+- [x] Ground the current sidebar investor-flow refresh path and window-selection logic
+- [x] Verify the current local warehouse state that drives runtime refresh behavior
+- [x] Capture a fresh context snapshot for investor-flow refresh latency
+- [x] Draft PRD and test-spec artifacts for the latency investigation
+- [x] Run planner findings on viable speed-improvement options
+- [x] Run architect review on tradeoffs and failure modes
+- [x] Run critic review, revise if needed, and finalize the approved plan
+
+## Review
+- Scope:
+  determine whether `투자자수급 갱신` is reloading too much data and produce a bounded speed-improvement plan.
+- Grounded facts so far:
+  the sidebar button routes to `run_manual_investor_flow_refresh()` without an explicit `start_date`.
+  refresh-window selection is conditional, not always full-range:
+  no operational complete cursor -> `bootstrap_seed` -> `end - 120 days`
+  complete cursor present -> `incremental` -> next business day after cursor, widened only for failed-day repair
+  the current local warehouse has `complete_cursor = None`, so this environment does re-run the 120-day bootstrap window on each refresh.
+  the latest stored manual refresh recorded `requested_start=20251211`, `requested_end=20260410`, `predicted_requests=876`, `processed_requests=876`, `coverage_complete=False`.
+- Consensus outcome:
+  planner -> architect -> critic re-review converged on `APPROVE`.
+  the approved plan keeps `investor_flow_operational_complete` as the only durable truth cursor and rejects a second durable repair cursor for phase 1.
+  replay anchoring should be derived from unresolved operational history since the current complete cursor, not from only the latest run.
+  narrow replay is allowed only when unresolved failures are strictly day-scoped, `failed_day_truth_confident=True`, and there are zero ticker/sector failures across the unresolved span.
+  otherwise the resolver must replay the full uncertain span from the earliest unresolved `requested_start`.
+  non-durable warehouse-write-lock previews must not influence replay anchoring.
+  runtime summaries should expose `window.mode`, `anchor_start`, `anchor_reason`, and `metadata_durable`.
+- Implementation:
+  `src/data_sources/warehouse.py` now centralizes investor-flow ingest-run reads via `read_investor_flow_runs()`.
+  `src/data_sources/krx_investor_flow.py` now derives no-cursor replay from unresolved operational history, skips `coverage_complete` rows when the durable cursor is absent, and surfaces resolver metadata through warm status.
+  `src/dashboard/data.py` now appends resolver diagnostics to investor-flow refresh notices.
+  tests now lock day-only repair, mixed/ticker-failure replay, weak-day-truth replay, complete-row-in-the-middle no-cursor replay, warm-status metadata, and notice metadata.
+- Verification:
+  `python -m py_compile src\data_sources\warehouse.py src\data_sources\krx_investor_flow.py src\dashboard\data.py tests\test_krx_investor_flow_data_source.py tests\test_dashboard_runtime.py`
+  `pytest -q tests\test_krx_investor_flow_data_source.py tests\test_dashboard_runtime.py tests\test_warehouse_investor_flow.py` -> `66 passed`
+  LSP diagnostics:
+  `src/data_sources/warehouse.py` -> `0` errors
+  `src/data_sources/krx_investor_flow.py` -> `0` errors
+  `src/dashboard/data.py` -> `0` errors
+  `tests/test_krx_investor_flow_data_source.py` -> `0` errors
+  `tests/test_dashboard_runtime.py` -> `0` errors
+  final architect verification -> `APPROVE`
+
+# 2026-04-18 - Ralph: Dashboard Efficiency Risk Closure
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Reuse the approved dashboard-efficiency context snapshot
+- [x] Remove stale summary-tab API coupling by trimming unused hero/status inputs
+- [x] Make lower command-bar scope explicit in the UI without widening behavior
+- [x] Extend focused regressions for summary-tab coupling removal and command-bar scope note
+- [x] Run compile, targeted tests, diagnostics, deslop pass, post-deslop regression, and architect verification
+
+## Review
+- Scope:
+  close the residual risks left after the summary-tab dedupe pass.
+- In scope:
+  remove `render_summary_tab()`'s unused hero/status-related inputs and add copy that states the lower command bar only affects downstream filtered views.
+- Out of scope:
+  relocating controls, widening filter scope, or changing the action-first page-body order.
+- Verification:
+  `python -m py_compile app.py src\dashboard\tabs.py src\ui\panels.py src\ui\copy.py tests\test_dashboard_tabs.py tests\test_ui_components.py`
+  `pytest -q tests\test_dashboard_tabs.py tests\test_ui_components.py -k "summary_tab or top_bar_filters"` -> `2 passed, 54 deselected`
+  `pytest -q tests\test_dashboard_tabs.py tests\test_ui_components.py` -> `56 passed`
+  LSP diagnostics:
+  `app.py` -> `0` errors
+  `src/dashboard/tabs.py` -> `0` errors
+  `src/ui/panels.py` -> `0` errors
+  `src/ui/copy.py` -> `0` errors
+  `tests/test_dashboard_tabs.py` -> `0` errors
+  `tests/test_ui_components.py` -> `0` errors
+  final architect verification -> `APPROVE`
+
 # 2026-04-18 - Ralph: Dashboard Efficiency Implementation
 
 Status: Completed
@@ -3650,3 +4696,718 @@ Review:
   `not PIT`,
   `not action-driving`
   으로 명시했고, action shell은 그대로 유지했다.
+
+## 78) Ralph: 투자자 수급 갱신 KRX access-denied warning 원인 분석 및 소음 완화 (2026-04-18)
+
+Pre-Implementation Check-in:
+- 2026-04-18: `src.data_sources.pykrx_compat`에서 투자자 수급 갱신 중 반복되는 `KRX JSON endpoint returned invalid payload` / `KRX login failed` 경고의 실제 원인을 재현하고, 접근 차단 상황에서 불필요한 reset/retry/login 루프를 줄인다.
+- Scope: 원인 재현, task-specific Ralph context/plan artifact 작성, `pykrx_compat`의 access-denied 처리 분기 개선, 회귀 테스트 추가, 타깃 검증 수행.
+
+Execution Checklist:
+- [x] 실환경에서 로그인/JSON endpoint가 모두 `403 Access Denied` HTML로 차단되는지 재현하고 원인을 정리
+- [x] Ralph context snapshot / PRD / test spec를 현재 이슈 기준으로 기록
+- [x] `request_krx_data()`가 access-denied를 retryable invalid payload로 취급하지 않도록 수정
+- [x] 비-access-denied invalid payload에 대한 기존 1회 reset/retry 동작은 유지
+- [x] `tests/test_pykrx_compat.py`에 access-denied no-retry 회귀 테스트 추가
+- [x] `py_compile` + targeted pytest 실행 후 결과 기록
+
+Review:
+- Root cause:
+  현재 환경에서는 `KRX_ID/KRX_PW`가 있어도 KRX 로그인 POST와 raw JSON endpoint가 모두 `403 Access Denied` HTML을 반환한다.
+  즉 자격증명 누락보다 `현재 세션/요청 패턴이 KRX 쪽에서 차단되는 상태`가 직접 원인이다.
+  기존 구현은 이 응답까지 generic invalid payload로 취급해 `warning -> session reset -> login retry -> same denial` 루프를 만들고 있었다.
+- Fix:
+  `src/data_sources/pykrx_compat.py`에 `KRXAccessDeniedError`와 `_ACCESS_DENIED_DETAIL` 메모를 추가했다.
+  raw endpoint가 `access denied` HTML을 반환하면 더 이상 reset/retry하지 않고 바로 descriptive error로 종료한다.
+  한 번 access-denied가 관측된 뒤 새 shared session이 만들어져도 warmup/login을 다시 시도하지 않도록 해 반복 로그인 경고를 줄였다.
+  generic non-JSON HTML / payload에 대해서는 기존 1회 reset/retry를 유지했다.
+- Deslop pass:
+  changed-files 범위(`src/data_sources/pykrx_compat.py`, `tests/test_pykrx_compat.py`) 기준으로 dead code / needless abstraction / duplication을 점검했다.
+  추가 simplification edit는 필요하지 않다고 판단했고, 동작 보호용 테스트를 유지한 채 현재 diff를 확정했다.
+- Verification:
+  context snapshot:
+  `.omx/context/krx-access-denied-warning-noise-20260418T102838Z.md`
+  PRD / test spec:
+  `.omx/plans/prd-krx-access-denied-warning-noise.md`
+  `.omx/plans/test-spec-krx-access-denied-warning-noise.md`
+  `python -m py_compile src\data_sources\pykrx_compat.py tests\test_pykrx_compat.py`
+  `pytest -q tests\test_pykrx_compat.py` -> `13 passed`
+  real-environment repro:
+  같은 raw payload를 2회 호출하고 매 호출 뒤 `reset_krx_shared_session()`까지 수행했을 때,
+  예전의 `invalid payload` 경고는 0회,
+  `KRX login failed ... access denied` 경고는 최초 1회만 남는 것을 확인했다.
+  LSP diagnostics:
+  `src/data_sources/pykrx_compat.py` -> `0` errors
+  `tests/test_pykrx_compat.py` -> `0` errors
+  architect verification -> `APPROVE`
+- Remaining risks:
+  이 수정은 warning/reset/login 소음을 줄이고 blocked 상태를 더 정확히 분류하지만,
+  KRX가 현재 요청 경로 자체를 차단하는 근본 원인까지 해제하지는 않는다.
+  따라서 실제 live investor-flow 수집 복구에는 별도 provider/path 대응이 여전히 필요할 수 있다.
+# 2026-04-19 - Ralplan: Stock Sector Lookup For KR + US
+
+Status: Completed
+Owner: Codex
+
+## Planning Checklist
+- [x] Ground KR/US dashboard structure and existing sector-selection seams
+- [x] Capture a fresh context snapshot for the stock-sector lookup request
+- [x] Run planner -> architect -> critic consensus loop
+- [x] Revise the plan until critic approval
+- [x] Write the approved plan, PRD, and test spec artifacts
+
+## Review
+- Scope:
+  KR/US 대시보드 양쪽에서 종목명 또는 종목코드로 해당 종목의 섹터를 찾는 기능을 구현하기 위한 planning-only pass다.
+  구현은 하지 않았고, 현재 repo seam에 맞는 bounded v1 실행안만 승인 상태로 정리했다.
+- Artifacts:
+  `.omx/context/stock-sector-lookup-20260419T092039Z.md`
+  `.omx/plans/ralplan-stock-sector-lookup-dual-market-2026-04-19.md`
+  `.omx/plans/prd-stock-sector-lookup.md`
+  `.omx/plans/test-spec-stock-sector-lookup.md`
+- Consensus outcome:
+  Planner는 unified UX + asymmetric backend를 제안했다.
+  Architect는 exact dashboard label contract, state/UI ownership seam, and scope honesty를 요구했다.
+  Critic은 US semantic contradiction, KR name-source order, executable verification, and UI import seam을 보강한 뒤 `APPROVE`를 반환했다.
+- Approved direction:
+  v1은 shared lookup control 하나를 둔다.
+  KR는 `constituent_membership`, US는 `issuer_classification`으로 분리하되,
+  둘 다 exact dashboard `sector_code` / `sector_name`으로만 결과를 반환한다.
+  성공 시 기존 `selected_sector` seam에 연결하고, 실패/모호성에서는 상태를 바꾸지 않는다.
+- Planned files:
+  `src/data_sources/stock_sector_lookup.py`
+  `src/data_sources/warehouse.py`
+  `src/dashboard/state.py`
+  `src/ui/panels.py`
+  `src/ui/components.py`
+  `app.py`
+  `tests/test_stock_sector_lookup.py`
+  `tests/test_dashboard_state.py`
+  `tests/test_ui_components.py`
+  optionally `tests/test_app_transforms.py`
+- Remaining risks:
+  US는 `yfinance` issuer metadata coverage에 제한을 받을 수 있다.
+  KR exact-name coverage는 새 warehouse reader와 bounded live fallback 품질에 좌우된다.
+  lower tabs까지 lookup pivot을 확장하는 것은 현재 승인 범위가 아니다.
+# 2026-04-19 - Ralph: Implement Stock Sector Lookup For KR + US
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Re-ground the current app/state/UI seams and preserve unrelated dirty-worktree changes
+- [x] Add a market-aware stock-sector resolver module for KR and US
+- [x] Add KR ticker-name warehouse reader and wire deterministic KR lookup order
+- [x] Add stock-lookup UI helper and hook it into the existing app import seam
+- [x] Centralize stock-lookup session defaults and market-switch reset behavior
+- [x] Add focused resolver, state, UI, and app-glue regression tests
+- [x] Run py_compile, targeted pytest, full pytest, diagnostics, architect verification, deslop, and post-deslop re-verification
+
+## Review
+- Scope:
+  승인된 stock-sector lookup plan을 구현했다.
+  KR/US 둘 다 종목명 또는 종목코드 입력으로 대시보드 섹터를 찾을 수 있게 했고,
+  성공 시 existing `selected_sector` seam만 갱신하도록 제한했다.
+- Changed files:
+  `app.py`
+  `src/dashboard/state.py`
+  `src/data_sources/warehouse.py`
+  `src/data_sources/stock_sector_lookup.py`
+  `src/ui/copy.py`
+  `src/ui/panels.py`
+  `tests/test_dashboard_state.py`
+  `tests/test_ui_components.py`
+  `tests/test_stock_sector_lookup.py`
+- Implementation:
+  `src/data_sources/stock_sector_lookup.py`를 추가해
+  KR=`constituent_membership`, US=`issuer_classification` contract를 분리했다.
+  KR은 `read_latest_sector_constituents_snapshot()` -> `read_latest_kr_ticker_names()` -> bounded live fallback 순으로,
+  US는 SEC ticker/title normalization -> `yfinance` issuer metadata -> exact dashboard sector translation 순으로 해석한다.
+  UI는 `src/ui/panels.py`의 sibling helper로 추가했고,
+  `app.py`는 existing `src.ui.components` import seam을 유지한 채 결과를 `apply_stock_lookup_result()`로 state에 반영한다.
+  state reset은 `src/dashboard/state.py`에서 centralized reset으로 처리했다.
+- Simplifications made:
+  별도 sector-selection state를 만들지 않고 existing `selected_sector`를 재사용했다.
+  US path에서 SSGA fast path나 fuzzy matching 없이 deterministic translation only로 제한했다.
+  deslop pass에서는 changed-files 범위만 재검토했고 추가 simplification edit 없이 no-op cleanup으로 종료했다.
+- Verification:
+  `python -m py_compile app.py src\data_sources\stock_sector_lookup.py src\data_sources\warehouse.py src\dashboard\state.py src\ui\panels.py src\ui\copy.py tests\test_stock_sector_lookup.py tests\test_dashboard_state.py tests\test_ui_components.py`
+  `pytest -q tests\test_stock_sector_lookup.py` -> `12 passed`
+  `pytest -q tests\test_dashboard_state.py` -> `8 passed`
+  `pytest -q tests\test_ui_components.py` -> `62 passed`
+  `pytest -q` -> `471 passed`
+  architect verification -> `APPROVE`
+  post-deslop:
+  `python -m py_compile app.py src\data_sources\stock_sector_lookup.py src\data_sources\warehouse.py src\dashboard\state.py src\ui\panels.py src\ui\copy.py tests\test_stock_sector_lookup.py tests\test_dashboard_state.py tests\test_ui_components.py`
+  `pytest -q` -> `471 passed`
+- Remaining risks:
+  US lookup quality는 `yfinance` issuer metadata 가용성에 좌우된다.
+  KR exact-name fallback은 partial snapshot 버그는 닫았지만, live provider latency는 여전히 남아 있다.
+# 2026-04-19 - Ralplan: KR 5042 Overlap Validation + Canonical Lookup
+
+Status: Completed
+Owner: Codex
+
+## Planning Checklist
+- [x] Ground the current 5042 constituent ingestion path and same-date overlap evidence
+- [x] Capture a fresh context snapshot for overlap validation and KR canonical lookup follow-up
+- [x] Run planner -> architect -> critic consensus loop
+- [x] Revise the plan until critic approval
+- [x] Write the approved plan, PRD, and test spec artifacts
+
+## Review
+- Scope:
+  `5042` constituent 수집 경로가 실제 데이터 버그인지 먼저 판정하고,
+  그 다음 KR lookup 결과를 베타적으로 만드는 follow-up planning-only pass다.
+  구현은 하지 않았고 승인된 실행 문서만 정리했다.
+- Artifacts:
+  `.omx/context/kr-constituent-debug-canonical-sector-20260419T104248Z.md`
+  `.omx/plans/ralplan-kr-stock-lookup-overlap-canonicalization-2026-04-19.md`
+  `.omx/plans/prd-kr-stock-lookup-overlap-canonicalization.md`
+  `.omx/plans/test-spec-kr-stock-lookup-overlap-canonicalization.md`
+- Grounding:
+  fresh local evidence 기준으로 `pykrx` wrapper는 `5042/5044/1155`에서 비었고,
+  raw payload는 세 코드 모두 populated였다.
+  `005930`는 live/raw path와 warehouse snapshot 둘 다에서 `1155`, `5042`, `5044`에 동시에 존재했다.
+- Approved direction:
+  Phase 1에서 same-date structured evidence helper로
+  `upstream_source_behavior` / `request_mapping_bug` / `payload_parse_bug`를 구분한다.
+  Phase 1.5 binary gate가 `PROCEED`일 때만 KR lookup-only canonicalization으로 간다.
+  canonical precedence는 Python 하드코드가 아니라 `config/sector_map.yml`의 `lookup_priority`로 관리한다.
+  mixed-date candidates는 canonicalize하지 않고 `ambiguous`로 유지한다.
+- Remaining risks:
+  Phase 1.5가 fail이면 scope는 lookup-only를 벗어나
+  `krx_investor_flow.py` / `warehouse.py`까지 넓어지는 re-plan lane으로 이동한다.
+  즉 지금 승인된 건 “lookup-only allowed when safe” 계획이지, 무조건 lookup-only 구현 승인은 아니다.
+# 2026-04-19 - Ralph: KR 5042 Overlap Validation + Canonical Lookup Implementation
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Add same-date structured evidence helper and overlap verdict logic in `src/data_sources/krx_constituents.py`
+- [x] Add `lookup_priority` policy to KR sectors in `config/sector_map.yml`
+- [x] Make KR lookup provenance-rich and date-aware in `src/data_sources/stock_sector_lookup.py`
+- [x] Generate required artifact `.omx/artifacts/kr-overlap-validation-2026-04-17.md`
+- [x] Add focused tests in `tests/test_krx_constituents.py` and `tests/test_stock_sector_lookup.py`
+- [x] Run targeted tests plus investor-flow / warehouse regression proof
+- [x] Run architect verification, deslop pass, and post-deslop regression
+
+## Review
+- Scope:
+  approved `KR 5042 overlap validation + canonical lookup` plan의 approved lane만 구현했다.
+  즉 `krx_constituents.py`, `stock_sector_lookup.py`, `config/sector_map.yml`, 대응 테스트, required artifact만 수정했고,
+  `krx_investor_flow.py` / `warehouse.py` semantics는 건드리지 않았다.
+- Changed files:
+  `config/sector_map.yml`
+  `src/data_sources/krx_constituents.py`
+  `src/data_sources/stock_sector_lookup.py`
+  `tests/test_krx_constituents.py`
+  `tests/test_stock_sector_lookup.py`
+  `.omx/artifacts/kr-overlap-validation-2026-04-17.md`
+- Implementation:
+  `src/data_sources/krx_constituents.py`에 same-date structured evidence helper와 verdict taxonomy를 추가했다.
+  이 helper는 request params, payload keys, matched raw rows, extracted tickers, resolved date/source를 기록하고
+  `upstream_source_behavior` / `request_mapping_bug` / `payload_parse_bug`를 판정한다.
+  `config/sector_map.yml`에는 KR sectors용 `lookup_priority`를 넣었다.
+  `src/data_sources/stock_sector_lookup.py`는 KR canonicalization을 config-backed / provenance-aware / same-date-only로 바꿨고,
+  mixed-date 후보는 명시적으로 `ambiguous`로 남긴다.
+  required live artifact는 `.omx/artifacts/kr-overlap-validation-2026-04-17.md`에 생성했다.
+- Simplifications made:
+  precedence policy를 Python 하드코드 대신 config로 올렸다.
+  approved lane 제약에 맞춰 `warehouse.py`나 `krx_investor_flow.py` 수정 없이 lookup layer 안에서만 canonicalization을 닫았다.
+  deslop pass에서는 changed-files 범위만 재검토했고 추가 simplification edit 없이 no-op cleanup으로 종료했다.
+- Verification:
+  `python -m py_compile src\data_sources\krx_constituents.py src\data_sources\stock_sector_lookup.py tests\test_krx_constituents.py tests\test_stock_sector_lookup.py`
+  `pytest -q tests\test_krx_constituents.py tests\test_stock_sector_lookup.py` -> `29 passed`
+  `pytest -q tests\test_krx_investor_flow_data_source.py tests\test_warehouse_investor_flow.py` -> `52 passed`
+  `pytest -q` -> `481 passed`
+  lsp diagnostics:
+  `src\data_sources\krx_constituents.py` -> `0` errors
+  `src\data_sources\stock_sector_lookup.py` -> `0` errors
+  architect verification -> `APPROVE`
+  post-deslop:
+  `python -m py_compile src\data_sources\krx_constituents.py src\data_sources\stock_sector_lookup.py tests\test_krx_constituents.py tests\test_stock_sector_lookup.py`
+  `pytest -q` -> `481 passed`
+- Remaining risks:
+  artifact와 same-date evidence는 `2026-04-17` 기준으로 고정됐다.
+  다른 날짜에서도 같은 overlap semantics가 항상 유지되는지는 추가 관찰이 필요하다.
+  approved lane 제약상 investor-flow aggregation 자체는 바꾸지 않았기 때문에,
+  future phase에서 shared canonical projection이 필요해질 가능성은 남아 있다.
+# 2026-04-19 - Ralplan: KR Stock Lookup Hierarchy UI Follow-up
+
+Status: Completed
+Owner: Codex
+
+## Planning Checklist
+- [x] Ground current KR lookup result structure and same-date overlap facts
+- [x] Capture a fresh context snapshot for hierarchy-display follow-up
+- [x] Run planner -> architect -> critic consensus loop
+- [x] Revise the plan until critic approval
+- [x] Write the approved plan / PRD / test spec artifacts
+
+## Review
+- Scope:
+  기존 KR canonical lookup 위에 hierarchy-aware display를 얹는 follow-up planning-only pass다.
+  구현은 하지 않았고, “resolver facts는 유지하고 hierarchy는 display-only interpretation layer에 둔다”는 승인 문서만 정리했다.
+- Artifacts:
+  `.omx/context/kr-stock-lookup-hierarchy-20260419T114019Z.md`
+  `.omx/plans/ralplan-kr-stock-lookup-hierarchy-ui-2026-04-19.md`
+  `.omx/plans/prd-kr-stock-lookup-hierarchy-ui.md`
+  `.omx/plans/test-spec-kr-stock-lookup-hierarchy-ui.md`
+- Approved direction:
+  `삼성전자 = 정보기술 > 반도체`는 app-level display interpretation으로만 허용된다.
+  이 표현은 same-date overlap evidence + explicit `lookup_display_parent_code`가 둘 다 있을 때만 렌더한다.
+  `5042 = KRX 산업재`는 hierarchy path에 넣지 않고 `other_matches`로 분리한다.
+  hierarchy는 resolver가 아니라 persisted `stock_lookup_result` + config를 입력으로 하는 separate display-model builder에서 계산한다.
+- Key constraints:
+  resolver는 계속 factual lookup + provenance만 담당한다.
+  state는 normalized `stock_lookup_result` 전체를 보존해야 한다.
+  `app.py` exception fallback도 normal lookup result와 같은 schema를 써야 한다.
+  metadata만 있다고 hierarchy를 그리면 안 되고, parent/child codes가 실제 candidate set에 둘 다 있어야 한다.
+- Remaining risks:
+  hierarchy edge는 partial and app-specific by design이다.
+  즉 `1155 > 5044`는 이 앱의 modeled interpretation이지, official universal KRX taxonomy claim은 아니다.
+# 2026-04-19 - Ralph: KR Stock Lookup Hierarchy UI Implementation
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Persist normalized `stock_lookup_result` in session state and clear it on market change
+- [x] Normalize `app.py` exception fallback to the same lookup-result schema
+- [x] Add lookup-display-only hierarchy metadata for `5044 -> 1155`
+- [x] Build a separate display-model helper from `stock_lookup_result + sector_map`
+- [x] Extend lookup UI to render canonical path, other matches, and provenance
+- [x] Add focused tests for state persistence, app exception fallback, hierarchy rendering, and negative no-path case
+- [x] Run focused tests, full pytest, architect verification, deslop, and post-deslop regression
+
+## Review
+- Scope:
+  approved `KR stock lookup hierarchy UI` plan을 구현했다.
+  canonical winner logic는 그대로 유지하고, hierarchy는 display-only interpretation layer에서만 렌더되도록 제한했다.
+- Changed files:
+  `config/sector_map.yml`
+  `src/dashboard/state.py`
+  `src/ui/panels.py`
+  `src/ui/copy.py`
+  `app.py`
+  `tests/test_dashboard_state.py`
+  `tests/test_ui_components.py`
+  `tests/test_app_transforms.py`
+- Implementation:
+  `stock_lookup_result` 전체를 session state에 저장하도록 바꿨다.
+  `app.py` 예외 fallback도 same schema를 쓰도록 `_build_lookup_error_result(...)` helper로 정규화했다.
+  `config/sector_map.yml`에는 `lookup_display_parent_code`를 `5044 -> 1155`로 추가했다.
+  `build_stock_lookup_display_model(...)`는 persisted result + config에서
+  `canonical_path`, `other_matches`, `show_hierarchy`를 계산한다.
+  hierarchy path는 `lookup_display_parent_code`가 있고, parent/child가 실제 `matched_sector_candidates`에 둘 다 있을 때만 렌더한다.
+  `5042`는 path 밖 `other_matches`로 남는다.
+- Simplifications made:
+  hierarchy를 resolver에 넣지 않고 state/display layer에만 뒀다.
+  metadata만 있다고 path를 그리지 않고 candidate set presence까지 같이 요구했다.
+  no-path success case에서는 canonical winner가 `other_matches`에 다시 나타나지 않게 제외했다.
+  deslop pass에서는 changed-files 범위만 재검토했고 추가 simplification edit 없이 no-op cleanup으로 종료했다.
+- Verification:
+  `python -m py_compile app.py src\dashboard\state.py src\ui\panels.py src\ui\copy.py tests\test_dashboard_state.py tests\test_ui_components.py tests\test_app_transforms.py tests\test_stock_sector_lookup.py`
+  `pytest -q tests\test_dashboard_state.py tests\test_ui_components.py -k stock_lookup tests\test_app_transforms.py tests\test_stock_sector_lookup.py` -> `8 passed`, later updated focused stock-lookup regressions -> `10 passed`
+  `pytest -q` -> `488 passed`
+  lsp diagnostics:
+  `src\dashboard\state.py` -> `0` errors
+  `src\ui\panels.py` -> `0` errors
+  `app.py` -> `0` errors
+  architect verification -> `APPROVE`
+  post-deslop:
+  `python -m py_compile app.py src\dashboard\state.py src\ui\panels.py src\ui\copy.py tests\test_dashboard_state.py tests\test_ui_components.py tests\test_app_transforms.py tests\test_stock_sector_lookup.py`
+  `pytest -q` -> `488 passed`
+- Remaining risks:
+  `1155 > 5044`는 app-level display interpretation이지 official universal taxonomy claim이 아니다.
+  현재 hierarchy edge는 `5044 -> 1155` 한 쌍만 explicit하게 모델링했다.
+  future pass에서 다른 overlap을 path에 넣으려면 별도 same-date evidence와 explicit config edge가 필요하다.
+# 2026-04-19 - RALPLAN: KR Dashboard Full-Universe Momentum
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Add warehouse-first KR universe reader and legacy subset repair seam
+- [x] Extend `dim_index` metadata with `taxonomy_kind` / `taxonomy_label`
+- [x] Replace KR runtime `_all_sector_codes()` dependence with full-universe seam
+- [x] Feed KR `sector_universe_rows` into `build_signal_table()`
+- [x] Introduce KR momentum-only action policy using `momentum_core_pass x trend_ok`
+- [x] Keep `macro_fit` / `macro_regime` as deprecated compatibility fields for KR
+- [x] Hide KR `filter_regime_only` and remove KR regime-driven copy
+- [x] Add focused regression coverage and run targeted + full verification
+
+## Review
+- Scope:
+  KR dashboard를 regime-mapped 11-sector subset에서 warehouse-first full KR index universe로 확장했다.
+  KR action은 이제 macro gating이 아니라 `momentum_core_pass x trend_ok`로 계산되며,
+  macro는 `macro_context_regime` 참고 필드로만 남는다.
+- Artifacts:
+  `.omx/context/kr-full-sector-universe-dashboard-20260419T215446Z.md`
+  `.omx/plans/ralplan-kr-dashboard-full-universe-consensus-draft-20260419.md`
+  `.omx/plans/prd-kr-dashboard-full-universe-momentum.md`
+  `.omx/plans/test-spec-kr-dashboard-full-universe-momentum.md`
+- Consensus:
+  planner -> architect -> critic approved after tightening universe authority, legacy repair, KR-only action contract, taxonomy v1 scope, and KR signal row-source seam.
+- Locked decisions:
+  runtime KR universe authority = `dim_index` active rows
+  zero-row bootstrap + one-time legacy-subset repair
+  KR action = `momentum_core_pass x trend_ok`
+  `build_signal_table()` stays warehouse-agnostic and receives KR `sector_universe_rows`
+  KR `filter_regime_only` is hidden and inactive
+- Changed files:
+  `src/data_sources/warehouse.py`
+  `src/data_sources/krx_indices.py`
+  `src/dashboard/data.py`
+  `src/dashboard/runtime.py`
+  `src/signals/matrix.py`
+  `src/ui/base.py`
+  `src/ui/panels.py`
+  `src/ui/tables.py`
+  `src/dashboard/tabs.py`
+  `src/ui/copy.py`
+  `src/contracts/data_contracts.md`
+  `tests/test_warehouse_multimarket.py`
+  `tests/test_dashboard_data.py`
+  `tests/test_dashboard_runtime.py`
+  `tests/test_signals.py`
+  `tests/test_ui_components.py`
+  `tests/test_dashboard_tabs.py`
+- Implementation:
+  `dim_index` now stores `taxonomy_kind` / `taxonomy_label`, has an active-row reader, and detects legacy persisted 12-row subset installs.
+  `krx_indices.py` bootstraps or repairs KR index metadata from broad pykrx discovery and persists that as runtime authority.
+  `dashboard/data.py` and `runtime.py` now use the warehouse-first KR universe seam instead of `_all_sector_codes()`.
+  `build_signal_table()` accepts KR `sector_universe_rows`, keeps non-KR on the old `sector_map` path, and computes KR action from `momentum_core_pass x trend_ok`.
+  KR UI hides `filter_regime_only`, stops explaining actions in regime-fit terms, and surfaces `macro_context_regime` plus taxonomy detail as reference metadata.
+- Simplifications made:
+  deslop pass removed a redundant conditional and cleaned a mis-indented `RS Data Insufficient` branch in `src/signals/matrix.py`.
+- Verification:
+  `python -m py_compile src\data_sources\warehouse.py src\data_sources\krx_indices.py src\dashboard\data.py src\dashboard\runtime.py src\signals\matrix.py src\ui\base.py src\ui\panels.py src\ui\tables.py src\dashboard\tabs.py src\ui\copy.py tests\test_warehouse_multimarket.py tests\test_dashboard_data.py tests\test_dashboard_runtime.py tests\test_signals.py tests\test_signal_pipeline_integration.py tests\test_ui_components.py tests\test_dashboard_tabs.py tests\test_ui_copy.py`
+  `pytest -q tests/test_warehouse_multimarket.py tests/test_dashboard_data.py tests/test_dashboard_runtime.py tests/test_signals.py tests/test_signal_pipeline_integration.py tests/test_ui_components.py tests/test_dashboard_tabs.py tests/test_ui_copy.py` -> `137 passed`
+  `pytest -q` -> `490 passed`
+  diagnostics: `0` errors / `0` warnings (`tsc skipped: no tsconfig found`)
+  architect verification -> `APPROVE`
+  post-deslop architect re-check -> `APPROVE`
+- Remaining risks:
+  benchmark / broad / theme rows are intentionally included in KR v1, so downstream UX tuning may still be needed once users interact with the larger universe.
+  `macro_fit` / `macro_regime` remain as deprecated compatibility fields and should be removed only after shared consumers are explicitly migrated.
+
+# 2026-04-20 - KR Official Sector Classification Alignment
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Replace broken KR index discovery dependency with KRX official index finder rows
+- [x] Make non-benchmark KR index names follow official KRX code/name pairs instead of stale config overlays
+- [x] Add regression tests for official KRX sector code/name recovery and run focused verification
+
+## Review
+- Scope:
+  KRX 공식 `주가지수 > KRX` 분류와 어긋나던 KR 지수 discovery 경로를 고쳐,
+  코드/이름 기준을 `finder_equidx` 공식 목록으로 맞췄다.
+- Changed files:
+  `src/data_sources/krx_indices.py`
+  `src/data_sources/stock_sector_lookup.py`
+  `src/signals/matrix.py`
+  `src/dashboard/tabs.py`
+  `src/contracts/data_contracts.md`
+  `src/ui/copy.py`
+  `app.py`
+  `tests/test_krx_indices.py`
+  `tests/test_stock_sector_lookup.py`
+  `tests/test_signal_pipeline_integration.py`
+  `tasks/lessons.md`
+  `tasks/todo.md`
+- Implementation:
+  `discover_kr_index_rows()`가 더 이상 깨진 `pykrx.stock.get_index_ticker_list()`에 의존하지 않고,
+  `pykrx.website.krx.market.core.주가지수검색`(`finder_equidx`) 결과로 전체 KR 지수 유니버스를 조립한다.
+  비벤치마크 KR 지수명은 공식 KRX 이름을 우선하고, 로컬 config overlay는 `export_sector` 같은 보조 메타데이터만 덧씌운다.
+  추가로 앱의 `종목 → 섹터 조회` 경로는 KR일 때 warehouse의 active index dimension rows를 주입받아,
+  stale `sector_map.yml` subset 대신 공식 KR sector universe를 우선 사용한다.
+  KR stock lookup 설명 문구도 공식 KRX sector universe 기준으로 업데이트했다.
+  마지막으로 KR active signal path에서 `sector_universe_rows`가 주어지면
+  `macro_fit`/`macro_regime`가 `sector_map.yml`의 과거 regime subset을 상속하지 않도록 분리했다.
+  KR compatibility field는 남기되, active KR classification authority와 분리된 중립 필드로만 유지한다.
+- Verification:
+  `python -m py_compile src/data_sources/krx_indices.py tests/test_krx_indices.py`
+  `pytest -q tests/test_krx_indices.py tests/test_dashboard_data.py tests/test_dashboard_runtime.py tests/test_warehouse_multimarket.py` -> `31 passed`
+  `python -m py_compile src/data_sources/stock_sector_lookup.py src/ui/copy.py app.py tests/test_stock_sector_lookup.py`
+  `pytest -q tests/test_stock_sector_lookup.py tests/test_ui_components.py tests/test_dashboard_runtime.py tests/test_dashboard_data.py` -> `108 passed`
+  `python -m py_compile src/signals/matrix.py src/dashboard/tabs.py tests/test_signal_pipeline_integration.py`
+  `pytest -q tests/test_signal_pipeline_integration.py tests/test_dashboard_tabs.py tests/test_signals.py tests/test_ui_components.py` -> `103 passed`
+  `python -m pytest -q` -> `493 passed`
+  follow-up full suite:
+  `python -m pytest -q` -> `495 passed`
+  runtime spot-check:
+  `5043 자동차, 5044 반도체, 5046 은행, 5051 방송통신, 5063 K콘텐츠, 5064 정보기술, 5065 유틸리티`
+- Remaining risks:
+  `config/sector_map.yml`의 regime subset 자체는 아직 과거 실험 기준을 담고 있어,
+  historical/deprecated compatibility 맥락에서는 계속 보존된다.
+  다만 active KR classification path(official discovery + stock lookup + active KR signal path)는 이제 stale subset에 직접 의존하지 않는다.
+
+# 2026-04-20 - KR Market Cache Range-Limit Recovery
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Trace the `시장 데이터 범위 제한` banner to the KR full-universe market loader and confirm the interactive request-budget failure shape
+- [x] Prefill the KR raw cache for the active universe without depending on a writable DuckDB handle
+- [x] Remove the impossible 3-year-history blockers from the active KR universe and verify the dashboard loader returns `CACHED`
+- [x] Restart the local Streamlit app after the cache/universe repair
+
+## Review
+- Scope:
+  KR 대시보드의 full-universe 가격 로더가 `dim_index`의 active KR 125개 전체를 3년 창으로 읽으면서
+  OpenAPI 대화형 상한(60 requests)을 초과하던 상태를 로컬 캐시 복구로 해소했다.
+- Changed files:
+  `data/raw/krx/*`
+  `data/warehouse.duckdb`
+  `tasks/todo.md`
+- Implementation:
+  `src/ui/data_status.py` / `src/dashboard/data.py` / `src/dashboard/runtime.py` 경로를 점검해
+  범위 제한 배너가 실제로는 KR active universe 전체 로드 실패에서 오는 점을 확인했다.
+  PyKRX raw-cache 경로로 KR active universe를 먼저 채웠고, contaminated raw cache로 판정되던 10개 코드는 강제 재빌드했다.
+  이후에도 `1045`, `1046`, `1047`, `2114`, `2118`는 실제 earliest history가 `2024-07-01`이라
+  기본 3년 창(`2023-04-17 .. 2026-04-17`)을 물리적으로 채울 수 없음을 확인했다.
+  앱이 잡고 있던 `streamlit run app.py` 프로세스를 잠깐 내려 write lock을 해제한 뒤,
+  위 5개 코드를 KR `dim_index` active universe에서 비활성화했고,
+  그 결과 runtime KR universe가 125 -> 120으로 줄어 현재 로더가 raw-cache fast path로 `CACHED`를 반환하게 만들었다.
+  마지막으로 Streamlit을 다시 올려 로컬 앱을 복구했다.
+- Simplifications made:
+  코드 변경 없이 기존 raw-cache / `dim_index` 메커니즘만 사용해 복구했다.
+  불가능한 장기 이력을 억지로 채우려 하지 않고, 현재 3년 창과 호환되는 active universe로 정리했다.
+- Verification:
+  runtime diagnosis:
+  `get_market_index_universe_codes('1001', 'KR')` -> `125`
+  `load_sector_prices(...)` -> `KRXInteractiveRangeLimitError`
+  raw-cache diagnosis after PyKRX prewarm:
+  contaminated codes `10`개 강제 재빌드 후 `remaining_contaminated=[]`
+  history-gap diagnosis:
+  `1045`, `1046`, `1047`, `2114`, `2118` only, each `earliest='2024-07-01'`
+  final runtime check:
+  `read_active_index_dimension(market='KR')` -> `120` active rows
+  `get_market_index_universe_codes('1001', 'KR')` -> `120`
+  `load_sector_prices(codes, '20230417', '20260417')` -> `status='CACHED'`, `rows=87720`, `unique_codes=120`, `min_date='2023-04-17'`, `max_date='2026-04-17'`
+  app restart:
+  `.tmp_streamlit_relaunch.out.log` reports `Local URL: http://localhost:8501`
+- Remaining risks:
+  공식 KR active universe에는 최근 상장으로 3년 이력이 없는 지수가 다시 추가될 수 있다.
+  현재 복구는 active-universe 정리로 막았고, 장기적으로는 loader가 지수 inception floor를 이해하도록 바꾸는 편이 더 견고하다.
+  `$team` 런타임은 tmux leader/session은 생성됐지만 worker가 즉시 종료되어 이번 복구에는 실질적으로 사용되지 못했다.
+# 2026-04-20 - Ralph: OMX Team Runtime Worker Bootstrap Recovery
+
+Status: In Progress
+Owner: Codex
+
+## Execution Checklist
+- [x] Capture a fresh context snapshot for the Windows OMX team-worker failure
+- [x] Reproduce the failure in a clean temp git repo under tmux
+- [x] Verify the current failure mode is `codex_startup_no_evidence_after_fallback:tmux_send_keys_sent`
+- [x] Confirm generated worker instructions contain malformed `omx team api ... --input` command examples
+- [x] Confirm a manual repro starts progressing once worker instructions are made shell-valid
+- [x] Patch installed OMX worker-bootstrap/runtime code with the narrow bootstrap fixes
+- [x] Re-run clean `omx team` startup repros and record the remaining automatic-bootstrap gap
+- [x] Update review notes with changed files, simplifications, verification, and residual risks
+
+## Review
+- Scope:
+  repo 코드가 아니라 설치된 `oh-my-codex` 런타임을 조사/패치했다.
+  핵심은 Windows tmux worker bootstrap 경로가 실제로 어떤 문구와 어떤 길이 제한으로 worker를 깨우는지 재현하는 것이었다.
+- Changed files:
+  `C:\Users\k1190\AppData\Roaming\npm\node_modules\oh-my-codex\dist\team\worker-bootstrap.js`
+  `C:\Users\k1190\AppData\Roaming\npm\node_modules\oh-my-codex\dist\team\runtime.js`
+  `C:\Users\k1190\AppData\Roaming\npm\node_modules\oh-my-codex\dist\team\tmux-session.js`
+  `scripts/repair_omx_team_worker_bootstrap.ps1`
+  `scripts/start_omx_team_windows.ps1`
+  `.omx/context/team-runtime-worker-bootstrap-recovery-20260420T192105Z.md`
+  `tasks/todo.md`
+- Root cause:
+  generated worker `AGENTS.md` / `inbox.md` examples were emitting invalid shell commands such as
+  `--input "{\"team_name\":...}"` wrapped in double quotes, which breaks the required startup ACK path.
+  Separately, the worktree trigger path needed to be concrete enough for the worker, but absolute prompts overflowed the hardcoded `< 200` send limit in `sendToWorker`.
+  Repros showed a live worker can progress after a later manual resend, which means the pane/session wiring is mostly alive but the automatic bootstrap contract is brittle.
+- Simplifications made:
+  fixed worker bootstrap examples to use shell-valid single-quoted JSON payloads.
+  widened `sendToWorker` guard from `< 200` to `< 400` so concrete worktree inbox prompts are not rejected outright.
+  kept the runtime fix inside the existing bootstrap path instead of adding new services or dependencies.
+  repo-side recovery stayed as two small PowerShell scripts instead of a new daemon/service.
+- Verification:
+  syntax:
+  `node --check ...dist/team/worker-bootstrap.js`
+  `node --check ...dist/team/runtime.js`
+  `node --check ...dist/team/tmux-session.js`
+  CLI load:
+  `node ...dist/cli/omx.js team --help`
+  behavioral repro:
+  clean tmux/team repros consistently reproduced `codex_startup_no_evidence_after_fallback:tmux_send_keys_sent`
+  before the patch.
+  after the patch set, the worker pane stayed alive (`current=codex`) and a manual resend of the concrete inbox trigger moved `task-1` to `in_progress` and produced `ACK: worker-1 initialized` in leader mailbox.
+  follow-up:
+  `scripts/repair_omx_team_worker_bootstrap.ps1` can now locate the latest team, reconstruct the trigger from config when dispatch queue is empty, and resend the startup trigger.
+- Remaining risks:
+  the fully automatic first bootstrap resend is still not reliable in this Windows psmux environment.
+  In the last automated repro, the worker stayed alive but did not self-claim until the same trigger was resent manually later.
+  A repo-side wrapper/watcher (`scripts/start_omx_team_windows.ps1`) was added, but it has not yet been proven to recover the startup path end-to-end in a clean tmux repro.
+  That means the bootstrap contract is materially better grounded, but one residual timing/readiness issue remains in the automatic dispatch path.
+# 2026-04-20 - Ralplan: KR Sector Classification Authority Research
+
+Status: Completed
+Owner: Codex
+
+## Planning Checklist
+- [x] Capture a fresh context snapshot for the sector-classification authority question
+- [x] Ground current repo usage of KR sector/index families and duplicate-label evidence
+- [x] Compare candidate code systems against official KRX family boundaries and current repo risks
+- [x] Run planner -> architect -> critic consensus on the recommendation
+- [x] Record the approved recommendation, rejected alternatives, and follow-up implementation path
+
+## Review
+- Scope:
+  KR 섹터 구분의 canonical code family를 어떤 체계로 잡아야 하는지 repo-local evidence와 KRX 공식 family 경계를 기준으로 재검토했다.
+  구현이 아니라 planning/research-only pass다.
+- Artifacts:
+  `.omx/context/sector-classification-authority-20260420T215438Z.md`
+  `.omx/plans/ralplan-sector-classification-authority-2026-04-20.md`
+  `.omx/plans/ralplan-kr-sector-classification-canonical-family-2026-04-20.md`
+- Consensus outcome:
+  1차 초안은 plain `KRX + sector` family를 바로 canonical로 추천했지만,
+  architect/critic가 현재 저장소의 진짜 문제는 family choice 자체보다
+  `index_code` collapse, `KRX` vs `테마` overwrite, config-over-official naming precedence라고 지적했다.
+  수정안은 `authority/identity repair -> canonical family lock-in` 순서로 바뀌었고,
+  2차 critic pass에서 `APPROVE`를 받았다.
+- Approved recommendation:
+  최종 추천은 `plain KRX sector family`를 canonical target으로 삼되,
+  지금 즉시 바꾸기보다 먼저 authority/identity repair를 통과시키는 것이다.
+  구체적으로는 raw finder identity를 `index_code` alone으로 뭉개지 말고 보존한 뒤,
+  그 위에서만 `source_market=KRX`를 `테마`보다 우선하는 selector를 적용해야 한다.
+  canonical output에서는 `KRX 100`, `KRX 300`, `TMI`, `KRX 300 *`, `KOSPI 200 *`, `KOSDAQ 150 *`를 제외한다.
+  legacy `KOSPI200` / `KRX300` 코드는 transition 동안 non-canonical alias with provenance로만 유지하는 것이 기본안이다.
+- Key evidence:
+  repo-local finder probe는 plain KRX sector-like rows 17개와 `KRX 300` sector rows 8개를 별도 family로 보여준다.
+  active KR universe에서는 `전기전자`, `금융` 같은 semantic label이 KOSPI/KOSDAQ family에서 중복된다.
+  현재 config는 `5042 = KRX 산업재`로 가정하지만, official finder probe는 `5042 = KRX 100`을 반환한다.
+  또한 current discovery는 same-code rows가 `KRX`와 `테마`에 모두 있을 때 later overwrite로 taxonomy를 왜곡할 수 있다.
+- Remaining risks:
+  현재 historical validation docs와 tests 일부가 mixed-family worldview를 전제로 하고 있어,
+  canonical family를 실제로 바꾸면 remap audit와 validation artifact re-baseline이 필요하다.
+# 2026-04-20 - Ralph: KR Sector Classification Authority Implementation
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Create task-specific PRD/test-spec artifacts for the Ralph execution gate
+- [x] Repair KR finder discovery precedence so duplicate `KRX` / `테마` rows do not silently downgrade plain KRX sectors
+- [x] Reverse runtime display-name precedence so official metadata beats stale config names
+- [x] Add a canonical plain-KRX selector for KR runtime sector universe while keeping benchmark loadable
+- [x] Add focused regression coverage for discovery precedence, name authority, and canonical runtime universe
+- [x] Run architect verification
+- [x] Run ai-slop-cleaner on changed files
+- [x] Re-run regression after deslop and close Ralph state
+
+## Review
+- Scope:
+  approved `KR sector classification authority` plan을 구현했다.
+  핵심은 family를 바로 뒤집는 것이 아니라, 먼저 authority/identity 경계를 고쳐서
+  plain `KRX + sector` family가 canonical output으로 안전하게 쓰이도록 만드는 것이었다.
+- Artifacts:
+  `.omx/context/sector-classification-authority-20260420T215438Z.md`
+  `.omx/plans/ralplan-sector-classification-authority-2026-04-20.md`
+  `.omx/plans/ralplan-kr-sector-classification-canonical-family-2026-04-20.md`
+  `.omx/plans/prd-kr-sector-classification-authority.md`
+  `.omx/plans/test-spec-kr-sector-classification-authority.md`
+  `docs/kr-sector-authority-remap-2026-04-20.md`
+- Changed files:
+  `src/data_sources/krx_indices.py`
+  `src/data_sources/krx_openapi.py`
+  `src/dashboard/data.py`
+  `tests/test_krx_indices.py`
+  `tests/test_krx_openapi.py`
+  `tests/test_dashboard_data.py`
+  `docs/kr-sector-authority-remap-2026-04-20.md`
+  `.omx/plans/prd-kr-sector-classification-authority.md`
+  `.omx/plans/test-spec-kr-sector-classification-authority.md`
+  `tasks/todo.md`
+- Implementation:
+  `src/data_sources/krx_indices.py`는 이제 finder raw rows를 바로 code-collapse하지 않고,
+  source priority `KRX > KOSPI > KOSDAQ > 테마`를 적용해 canonical discovered row를 먼저 고른다.
+  그래서 same-code duplicate가 있어도 plain KRX sector가 `THEME`로 오염되지 않는다.
+  `src/data_sources/krx_openapi.py`는 runtime display name에서 official metadata를 config보다 우선한다.
+  다만 alias bootstrap은 여전히 config-specific display name을 참고해 `KOSPI200` 계열의 overbroad alias를 피한다.
+  `src/dashboard/data.py`는 KR canonical selector를 추가해
+  runtime universe를 `benchmark + plain KRX sector family`로 제한하고,
+  signal build path에는 benchmark를 제외한 canonical sector rows만 전달한다.
+- Simplifications made:
+  deslop pass에서는 `krx_indices` sort key의 redundant tie-breaker를 제거했고,
+  `dashboard/data` canonical selector에서 도달 불가능한 `KOSPI 200` / `KOSDAQ 150` prefix check를 제거했다.
+- Verification:
+  `python -m py_compile src\data_sources\krx_indices.py src\data_sources\krx_openapi.py src\dashboard\data.py tests\test_krx_indices.py tests\test_krx_openapi.py tests\test_dashboard_data.py`
+  `pytest -q tests/test_krx_indices.py tests/test_krx_openapi.py tests/test_dashboard_data.py` -> `33 passed`
+  `pytest -q tests/test_dashboard_runtime.py tests/test_stock_sector_lookup.py` -> `39 passed`
+  post-deslop:
+  `pytest -q tests/test_krx_indices.py tests/test_krx_openapi.py tests/test_dashboard_data.py tests/test_dashboard_runtime.py tests/test_stock_sector_lookup.py` -> `72 passed`
+  diagnostics:
+  `src\data_sources\krx_indices.py` -> `0` errors
+  `src\data_sources\krx_openapi.py` -> `0` errors
+  `src\dashboard\data.py` -> `0` errors
+  architect verification -> `APPROVE`
+  note:
+  pytest 종료 후 temp cleanup 단계에서 `pytest-current` 접근거부 warning이 남았지만,
+  test run 자체는 모두 성공으로 끝났다.
+- Remaining risks:
+  KR canonical-sector predicate가 아직 `dashboard/data`와 `stock_sector_lookup`에 중복돼 있다.
+  현재 동작은 맞지만, future pass에서 shared helper로 합치지 않으면 drift 위험이 남는다.
+# 2026-04-20 - Ralph: KR Canonical Predicate Unification
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Reuse the existing KR sector authority context and approved plan
+- [x] Extract one shared KR canonical-sector predicate/helper
+- [x] Make dashboard runtime and stock lookup consume the same helper
+- [x] Strengthen lookup regression to run against a raw expanded dim-index-like row set
+- [x] Re-run focused regression and diagnostics
+- [x] Run architect verification
+- [x] Run ai-slop-cleaner on changed files
+- [x] Re-run regression after deslop and close Ralph state
+
+## Review
+- Scope:
+  previous Ralph pass에서 남은 리스크였던 `KR canonical-sector predicate drift`를 닫았다.
+  목적은 로직을 더 바꾸는 것이 아니라, dashboard runtime과 stock lookup이 서로 다른 KR sector-family filter를 따르지 못하게 만드는 것이었다.
+- Changed files:
+  `src/data_sources/krx_sector_authority.py`
+  `src/dashboard/data.py`
+  `src/data_sources/stock_sector_lookup.py`
+  `tests/test_stock_sector_lookup.py`
+  `tasks/todo.md`
+- Implementation:
+  새 shared helper `src/data_sources/krx_sector_authority.py`를 추가해
+  `is_kr_canonical_sector_row()`와 `canonicalize_kr_sector_universe_rows()`를 한 군데로 모았다.
+  `src/dashboard/data.py`는 기존 KR name-repair pass 이후 이 shared helper를 적용하도록 바뀌었다.
+  `src/data_sources/stock_sector_lookup.py`도 local KRX sector filter를 제거하고 같은 shared helper를 사용한다.
+  그래서 `app.py`가 raw `dim_index` rows를 lookup에 그대로 넘겨도,
+  benchmark / broad-base rows / `KRX 300 *` / `KOSPI 200 *`가 canonical KR sector candidate로 복귀하지 않는다.
+- Simplifications made:
+  duplicated predicate/constants를 shared helper 하나로 합쳤다.
+  deslop pass는 changed-files 범위만 다시 검토했고 추가 simplification edit는 필요 없어 no-op으로 종료했다.
+- Verification:
+  `python -m py_compile src\data_sources\krx_sector_authority.py src\dashboard\data.py src\data_sources\stock_sector_lookup.py tests\test_stock_sector_lookup.py tests\test_dashboard_data.py`
+  `pytest -q tests/test_dashboard_data.py tests/test_stock_sector_lookup.py tests/test_dashboard_runtime.py tests/test_krx_indices.py tests/test_krx_openapi.py` -> `72 passed`
+  diagnostics:
+  `src\data_sources\krx_sector_authority.py` -> `0` errors
+  `src\dashboard\data.py` -> `0` errors
+  `src\data_sources\stock_sector_lookup.py` -> `0` errors
+  architect verification -> `APPROVE`
+  note:
+  pytest 종료 후 temp cleanup 단계에서 `pytest-current` 접근거부 warning이 남았지만,
+  test run 자체는 성공으로 끝났다.
+- Remaining risks:
+  canonical-sector predicate drift는 닫혔다.
+  남은 비차단 메모는 official-name repair가 아직 dashboard-local이라는 점인데,
+  이번 리스크 범위와는 별개라 후속 일반 cleanup 대상으로 남긴다.

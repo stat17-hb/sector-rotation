@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 import duckdb
 import pandas as pd
+import yaml
 
 
 WarehouseDataset = Literal[
@@ -29,6 +30,7 @@ DEFAULT_PRICE_EXPORT_PATH = Path("data/curated/sector_prices.parquet")
 DEFAULT_MACRO_EXPORT_PATH = Path("data/curated/macro_monthly.parquet")
 DEFAULT_PRICE_EXPORT_PATH_US = Path("data/curated/sector_prices_us.parquet")
 DEFAULT_MACRO_EXPORT_PATH_US = Path("data/curated/macro_monthly_us.parquet")
+KR_SECTOR_MAP_PATH = Path("config/sector_map.yml")
 INVESTOR_FLOW_DATASET = "investor_flow"
 INVESTOR_FLOW_OPERATIONAL_COMPLETE_DATASET = "investor_flow_operational_complete"
 INVESTOR_FLOW_BACKFILL_PROGRESS_DATASET = "investor_flow_backfill_progress"
@@ -175,7 +177,7 @@ def _default_macro_export_path(market: str) -> Path:
 
 
 _READ_SCHEMA_REQUIREMENTS: dict[str, frozenset[str]] = {
-    "dim_index": frozenset({"market", "index_code", "index_name"}),
+    "dim_index": frozenset({"market", "index_code", "index_name", "taxonomy_kind", "taxonomy_label"}),
     "fact_krx_index_daily": frozenset({"market", "trade_date", "index_code", "close"}),
     "fact_investor_flow_daily": frozenset({"market", "trade_date", "ticker", "investor_type"}),
     "fact_investor_flow_sector_daily": frozenset({"market", "trade_date", "sector_code", "investor_type"}),
@@ -209,6 +211,60 @@ def _table_columns(con: duckdb.DuckDBPyConnection, table_name: str) -> set[str]:
 
 def _drop_table_if_exists(con: duckdb.DuckDBPyConnection, table_name: str) -> None:
     con.execute(f"DROP TABLE IF EXISTS {table_name}")
+
+
+def _add_column_if_missing(
+    con: duckdb.DuckDBPyConnection,
+    table_name: str,
+    column_name: str,
+    column_sql: str,
+) -> None:
+    if column_name in _table_columns(con, table_name):
+        return
+    con.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}")
+
+
+def _coerce_nullable_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _read_legacy_kr_universe_codes() -> set[str]:
+    if not KR_SECTOR_MAP_PATH.exists():
+        return {"1001"}
+    try:
+        payload = yaml.safe_load(KR_SECTOR_MAP_PATH.read_text(encoding="utf-8")) or {}
+    except Exception:
+        return {"1001"}
+
+    codes: set[str] = set()
+    benchmark_code = str(payload.get("benchmark", {}).get("code", "")).strip()
+    if benchmark_code:
+        codes.add(benchmark_code)
+    for regime_data in dict(payload.get("regimes") or {}).values():
+        for sector in list(dict(regime_data or {}).get("sectors") or []):
+            code = str(dict(sector or {}).get("code", "")).strip()
+            if code:
+                codes.add(code)
+    return codes or {"1001"}
+
+
+def _empty_active_index_dimension_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=[
+            "index_code",
+            "index_name",
+            "family",
+            "is_benchmark",
+            "is_active",
+            "export_sector",
+            "taxonomy_kind",
+            "taxonomy_label",
+            "updated_at",
+        ]
+    )
 
 
 def _warehouse_schema_ready_for_reads() -> bool:
@@ -268,6 +324,8 @@ def ensure_warehouse_schema(connection: duckdb.DuckDBPyConnection | None = None)
                     is_benchmark BOOLEAN NOT NULL DEFAULT FALSE,
                     is_active BOOLEAN NOT NULL DEFAULT TRUE,
                     export_sector BOOLEAN,
+                    taxonomy_kind VARCHAR,
+                    taxonomy_label VARCHAR,
                     updated_at TIMESTAMPTZ NOT NULL,
                     PRIMARY KEY (market, index_code)
                 )
@@ -282,10 +340,14 @@ def ensure_warehouse_schema(connection: duckdb.DuckDBPyConnection | None = None)
                     is_benchmark,
                     is_active,
                     export_sector,
+                    NULL AS taxonomy_kind,
+                    NULL AS taxonomy_label,
                     updated_at
                 FROM {legacy_table}
             """,
         )
+        _add_column_if_missing(con, "dim_index", "taxonomy_kind", "VARCHAR")
+        _add_column_if_missing(con, "dim_index", "taxonomy_label", "VARCHAR")
         _migrate_table_with_market(
             con,
             table_name="fact_krx_index_daily",
@@ -585,12 +647,18 @@ def upsert_index_dimension(rows: list[dict[str, Any]], *, market: str = "KR") ->
         frame["is_benchmark"] = pd.Series([False] * len(frame), dtype="bool")
     if "is_active" not in frame.columns:
         frame["is_active"] = pd.Series([True] * len(frame), dtype="bool")
+    if "taxonomy_kind" not in frame.columns:
+        frame["taxonomy_kind"] = pd.Series([None] * len(frame), dtype="object")
+    if "taxonomy_label" not in frame.columns:
+        frame["taxonomy_label"] = pd.Series([None] * len(frame), dtype="object")
     frame["index_name"] = frame["index_name"].astype(str)
     frame["family"] = frame["family"].astype(str)
     frame["is_benchmark"] = frame["is_benchmark"].astype(bool)
     frame["is_active"] = frame["is_active"].astype(bool)
     if "export_sector" not in frame.columns:
         frame["export_sector"] = pd.Series([None] * len(frame), dtype="object")
+    frame["taxonomy_kind"] = frame["taxonomy_kind"].map(_coerce_nullable_string)
+    frame["taxonomy_label"] = frame["taxonomy_label"].map(_coerce_nullable_string)
 
     con = _connect()
     try:
@@ -598,7 +666,18 @@ def upsert_index_dimension(rows: list[dict[str, Any]], *, market: str = "KR") ->
         _register_frame(con, "dim_index_upsert", frame)
         con.execute(
             """
-            INSERT INTO dim_index AS dim
+            INSERT INTO dim_index AS dim (
+                market,
+                index_code,
+                index_name,
+                family,
+                is_benchmark,
+                is_active,
+                export_sector,
+                taxonomy_kind,
+                taxonomy_label,
+                updated_at
+            )
             SELECT
                 market,
                 index_code,
@@ -607,6 +686,8 @@ def upsert_index_dimension(rows: list[dict[str, Any]], *, market: str = "KR") ->
                 is_benchmark,
                 is_active,
                 export_sector,
+                taxonomy_kind,
+                taxonomy_label,
                 updated_at
             FROM dim_index_upsert
             ON CONFLICT (market, index_code) DO UPDATE SET
@@ -615,11 +696,75 @@ def upsert_index_dimension(rows: list[dict[str, Any]], *, market: str = "KR") ->
                 is_benchmark = excluded.is_benchmark,
                 is_active = excluded.is_active,
                 export_sector = excluded.export_sector,
+                taxonomy_kind = excluded.taxonomy_kind,
+                taxonomy_label = excluded.taxonomy_label,
                 updated_at = excluded.updated_at
             """
         )
     finally:
         con.close()
+
+
+def read_active_index_dimension(*, market: str = "KR") -> pd.DataFrame:
+    if not warehouse_exists():
+        return _empty_active_index_dimension_frame()
+
+    _ensure_schema_for_readers()
+    normalized_market = _normalize_market_id(market)
+    con = _connect_ro()
+    try:
+        if not _table_exists(con, "dim_index"):
+            return _empty_active_index_dimension_frame()
+        available_columns = _table_columns(con, "dim_index")
+        taxonomy_kind_select = "taxonomy_kind" if "taxonomy_kind" in available_columns else "NULL AS taxonomy_kind"
+        taxonomy_label_select = "taxonomy_label" if "taxonomy_label" in available_columns else "NULL AS taxonomy_label"
+        result = con.execute(
+            f"""
+            SELECT
+                index_code,
+                index_name,
+                family,
+                is_benchmark,
+                is_active,
+                export_sector,
+                {taxonomy_kind_select},
+                {taxonomy_label_select},
+                updated_at
+            FROM dim_index
+            WHERE market = ?
+              AND is_active = TRUE
+            ORDER BY is_benchmark DESC, index_code
+            """,
+            [normalized_market],
+        ).fetchdf()
+    finally:
+        con.close()
+
+    if result.empty:
+        return _empty_active_index_dimension_frame()
+
+    result["index_code"] = result["index_code"].astype(str)
+    result["index_name"] = result["index_name"].fillna("").astype(str)
+    result["family"] = result["family"].fillna("").astype(str)
+    result["is_benchmark"] = result["is_benchmark"].astype(bool)
+    result["is_active"] = result["is_active"].astype(bool)
+    result["taxonomy_kind"] = result["taxonomy_kind"].fillna("").astype(str)
+    result["taxonomy_label"] = result["taxonomy_label"].fillna("").astype(str)
+    return result
+
+
+def is_legacy_kr_index_subset(*, market: str = "KR") -> bool:
+    normalized_market = _normalize_market_id(market)
+    if normalized_market != "KR":
+        return False
+
+    active_rows = read_active_index_dimension(market=normalized_market)
+    if active_rows.empty or len(active_rows) > 12:
+        return False
+
+    legacy_codes = _read_legacy_kr_universe_codes()
+    active_codes = {str(code).strip() for code in active_rows["index_code"].astype(str) if str(code).strip()}
+    return bool(active_codes) and active_codes.issubset(legacy_codes)
 
 
 def upsert_market_prices(frame: pd.DataFrame, *, provider: str, market: str = "KR") -> None:
@@ -1224,6 +1369,46 @@ def read_sector_investor_flow(
             "net_flow_ratio": "float64",
         }
     )
+
+
+def read_latest_kr_ticker_names() -> pd.DataFrame:
+    """Return the latest known KR ticker names keyed by ticker."""
+    if not warehouse_exists():
+        return pd.DataFrame(columns=["ticker", "ticker_name", "trade_date"])
+
+    _ensure_schema_for_readers()
+    con = _connect_ro()
+    try:
+        if not _table_exists(con, "fact_investor_flow_daily"):
+            return pd.DataFrame(columns=["ticker", "ticker_name", "trade_date"])
+        return con.execute(
+            """
+            WITH latest_names AS (
+                SELECT
+                    CAST(ticker AS VARCHAR) AS ticker,
+                    CAST(ticker_name AS VARCHAR) AS ticker_name,
+                    trade_date,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY CAST(ticker AS VARCHAR)
+                        ORDER BY trade_date DESC, loaded_at DESC
+                    ) AS rn
+                FROM fact_investor_flow_daily
+                WHERE market = 'KR'
+                  AND ticker IS NOT NULL
+                  AND ticker_name IS NOT NULL
+                  AND TRIM(CAST(ticker AS VARCHAR)) <> ''
+                  AND TRIM(CAST(ticker_name AS VARCHAR)) <> ''
+            )
+            SELECT ticker, ticker_name, trade_date
+            FROM latest_names
+            WHERE rn = 1
+            ORDER BY ticker
+            """
+        ).df()
+    except duckdb.Error:
+        return pd.DataFrame(columns=["ticker", "ticker_name", "trade_date"])
+    finally:
+        con.close()
 
 
 def write_investor_flow_operational_result(
@@ -1896,16 +2081,24 @@ def read_latest_investor_flow_run(
     market: str = "KR",
     reasons: tuple[str, ...] | list[str] | None = None,
 ) -> dict[str, Any]:
+    runs = read_investor_flow_runs(market=market, reasons=reasons, limit=1)
+    return runs[0] if runs else {}
+
+
+def read_investor_flow_runs(
+    *,
+    market: str = "KR",
+    reasons: tuple[str, ...] | list[str] | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Return investor-flow ingest runs ordered newest-first."""
     if not warehouse_exists():
-        return {}
+        return []
 
     _ensure_schema_for_readers()
     normalized_market = _normalize_market_id(market)
     allowed_reasons = {str(reason).strip() for reason in (reasons or []) if str(reason).strip()}
-    con = _connect_ro()
-    try:
-        result = con.execute(
-            """
+    query = """
             SELECT
                 dataset,
                 provider,
@@ -1926,52 +2119,62 @@ def read_latest_investor_flow_run(
             FROM ingest_runs
             WHERE dataset = ? AND market = ?
             ORDER BY created_at DESC
-            """,
-            [INVESTOR_FLOW_DATASET, normalized_market],
-        ).fetchdf()
+            """
+    params: list[Any] = [INVESTOR_FLOW_DATASET, normalized_market]
+    if limit is not None and not allowed_reasons:
+        query += " LIMIT ?"
+        params.append(int(limit))
+    con = _connect_ro()
+    try:
+        result = con.execute(query, params).fetchdf()
     finally:
         con.close()
 
     if result.empty:
-        return {}
+        return []
 
+    runs: list[dict[str, Any]] = []
     for _, row in result.iterrows():
         reason = str(row["reason"] or "").strip()
         if allowed_reasons and reason not in allowed_reasons:
             continue
         requested_start = "".join(ch for ch in str(row["requested_start"] or "") if ch.isdigit())[:8]
         requested_end = "".join(ch for ch in str(row["requested_end"] or "") if ch.isdigit())[:8]
-        return {
-            "dataset": str(row["dataset"] or "").strip(),
-            "provider": str(row["provider"] or "").strip().upper(),
-            "requested_start": requested_start,
-            "requested_end": requested_end,
-            "status": str(row["status"] or "").strip().upper(),
-            "coverage_complete": bool(row["coverage_complete"]),
-            "failed_days": [
-                str(item).strip()
-                for item in _deserialize_json(row["failed_days_json"], [])
-                if str(item).strip()
-            ],
-            "failed_codes": {
-                str(key).strip(): str(value).strip()
-                for key, value in _deserialize_json(row["failed_codes_json"], {}).items()
-                if str(key).strip() and str(value).strip()
-            },
-            "reason": reason,
-            "delta_codes": [
-                str(item).strip()
-                for item in _deserialize_json(row["delta_keys_json"], [])
-                if str(item).strip()
-            ],
-            "aborted": bool(row["aborted"]),
-            "abort_reason": str(row["abort_reason"] or "").strip(),
-            "predicted_requests": int(row["predicted_requests"] or 0),
-            "processed_requests": int(row["processed_requests"] or 0),
-            "summary": dict(_deserialize_json(row["summary_json"], {})),
-            "created_at": row["created_at"],
-        }
-    return {}
+        runs.append(
+            {
+                "dataset": str(row["dataset"] or "").strip(),
+                "provider": str(row["provider"] or "").strip().upper(),
+                "requested_start": requested_start,
+                "requested_end": requested_end,
+                "status": str(row["status"] or "").strip().upper(),
+                "coverage_complete": bool(row["coverage_complete"]),
+                "failed_days": [
+                    str(item).strip()
+                    for item in _deserialize_json(row["failed_days_json"], [])
+                    if str(item).strip()
+                ],
+                "failed_codes": {
+                    str(key).strip(): str(value).strip()
+                    for key, value in _deserialize_json(row["failed_codes_json"], {}).items()
+                    if str(key).strip() and str(value).strip()
+                },
+                "reason": reason,
+                "delta_codes": [
+                    str(item).strip()
+                    for item in _deserialize_json(row["delta_keys_json"], [])
+                    if str(item).strip()
+                ],
+                "aborted": bool(row["aborted"]),
+                "abort_reason": str(row["abort_reason"] or "").strip(),
+                "predicted_requests": int(row["predicted_requests"] or 0),
+                "processed_requests": int(row["processed_requests"] or 0),
+                "summary": dict(_deserialize_json(row["summary_json"], {})),
+                "created_at": row["created_at"],
+            }
+        )
+        if limit is not None and len(runs) >= int(limit):
+            break
+    return runs
 
 
 def read_latest_investor_flow_failed_days(

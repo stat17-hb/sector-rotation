@@ -254,3 +254,48 @@ def test_legacy_schema_migrates_to_market_aware_tables(tmp_path):
     assert len(migrated) == 1
     assert warehouse.read_dataset_status("market_prices", market="KR")["provider"] == "PYKRX"
     assert warehouse.probe_dataset_mode("market_prices", market="US") == "SAMPLE"
+
+
+def test_upsert_index_dimension_works_after_legacy_schema_adds_taxonomy_columns(tmp_path):
+    con = duckdb.connect(str(warehouse.WAREHOUSE_PATH))
+    try:
+        con.execute(
+            """
+            CREATE TABLE dim_index (
+                market VARCHAR NOT NULL,
+                index_code VARCHAR NOT NULL,
+                index_name VARCHAR,
+                family VARCHAR,
+                is_benchmark BOOLEAN NOT NULL DEFAULT FALSE,
+                is_active BOOLEAN NOT NULL DEFAULT TRUE,
+                export_sector BOOLEAN,
+                updated_at TIMESTAMPTZ NOT NULL,
+                PRIMARY KEY (market, index_code)
+            )
+            """
+        )
+    finally:
+        con.close()
+
+    warehouse.ensure_warehouse_schema()
+    warehouse.upsert_index_dimension(
+        [
+            {
+                "index_code": "9999",
+                "index_name": "테스트 지수",
+                "family": "KRX",
+                "is_benchmark": False,
+                "is_active": True,
+                "export_sector": False,
+                "taxonomy_kind": "INDEX",
+                "taxonomy_label": "테스트",
+            }
+        ],
+        market="KR",
+    )
+
+    result = warehouse.read_active_index_dimension(market="KR")
+    matched = result[result["index_code"] == "9999"].iloc[0]
+    assert matched["index_name"] == "테스트 지수"
+    assert matched["taxonomy_kind"] == "INDEX"
+    assert matched["taxonomy_label"] == "테스트"

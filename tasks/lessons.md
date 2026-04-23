@@ -78,4 +78,15 @@
 - Rule: After adding any new `import`, `engine=`, or plugin reference, run `pip install --no-deps -r requirements.txt` in a clean venv to verify all dependencies are declared.
 - Pattern: CI warning about Node.js 20 deprecation for `actions/checkout@v4` and `actions/setup-python@v5`.
 - Rule: Keep GitHub Actions pinned to the latest major version (`@v6` as of 2026-04); review action versions when CI deprecation warnings appear.
+- Pattern: A progress feature was implemented, but the user still could not see it when pressing the sidebar refresh button because the rendering surface was too easy to miss.
+- Rule: For Streamlit progress/status UX tied to sidebar actions, render the live progress state in at least one main-page-visible surface in addition to any sidebar placeholder; do not assume sidebar-only placement is sufficiently visible.
 
+## 2026-04-19
+- Pattern: Logic/semantic migration was implemented, but the user-facing explainer copy still described the pre-migration behavior.
+- Rule: When a scoring or classification semantic changes, update every matching explainer/help/disclaimer string in the same change; do not treat copy as a follow-up.
+- Rule: Add at least one regression test that exercises the updated explainer/body copy with the runtime parameters it interpolates.
+
+## 2026-04-20
+- Pattern: KR 섹터 코드를 해석할 때 로컬 `sector_map.yml`의 오래된 이름/코드 조합을 그대로 신뢰해, 사용자가 준 KRX 공식 화면 기준 분류와 어긋난 응답이 나왔다.
+- Rule: KR 지수/섹터 코드 의미를 다룰 때는 먼저 KRX 공식 목록(`주가지수 > KRX`, `finder_equidx` 또는 동등 공식 소스)으로 코드↔이름을 검증하고, 로컬 설정값은 보조 메타데이터(예: export flag, ETF 매핑)로만 취급한다.
+- Rule: 공식 소스와 로컬 설정이 충돌하면 비벤치마크 KR 지수명은 공식 소스를 우선하고, 로컬 설정으로 공식 이름을 덮어쓰지 않는다.

@@ -157,6 +157,7 @@ def test_invalidate_dashboard_caches_scopes(monkeypatch):
 def test_run_market_refresh_returns_notice_and_invalidates(monkeypatch):
     close_calls: list[str] = []
     invalidate_calls: list[str] = []
+    events: list[dict[str, object]] = []
 
     monkeypatch.setattr(runtime, "close_cached_read_only_connection", lambda: close_calls.append("close"))
     monkeypatch.setattr(runtime, "get_all_sector_codes", lambda benchmark_code: [benchmark_code, "5044"])
@@ -169,27 +170,33 @@ def test_run_market_refresh_returns_notice_and_invalidates(monkeypatch):
         lambda market_id: lambda codes, start, end: ((start, end), {"status": f"{market_id}:{','.join(codes)}"}),
     )
 
-    notice = runtime.run_market_refresh(_context("US"), price_years=3)
+    notice = runtime.run_market_refresh(_context("US"), price_years=3, progress_callback=events.append)
 
     assert notice == ("success", "US:SPY,5044")
     assert close_calls == ["close"]
     assert invalidate_calls == ["market"]
+    assert [event["phase"] for event in events] == ["준비 중", "데이터 요청 중", "캐시 정리 중", "완료"]
+    assert events[-1]["pct"] == 100
+    assert events[-1]["status"] == "complete"
 
 
 def test_run_macro_refresh_returns_notice_and_invalidates(monkeypatch):
     close_calls: list[str] = []
     invalidate_calls: list[str] = []
+    events: list[dict[str, object]] = []
 
     monkeypatch.setattr(runtime, "close_cached_read_only_connection", lambda: close_calls.append("close"))
     monkeypatch.setattr(runtime, "invalidate_dashboard_caches", lambda scope: invalidate_calls.append(scope))
     monkeypatch.setattr(runtime, "build_macro_refresh_notice", lambda summary: ("info", summary["status"]))
     monkeypatch.setattr(runtime, "_sync_macro_warehouse", lambda **kwargs: (None, None, {"status": kwargs["market"]}))
 
-    notice = runtime.run_macro_refresh(_context("KR"), {"series": []})
+    notice = runtime.run_macro_refresh(_context("KR"), {"series": []}, progress_callback=events.append)
 
     assert notice == ("info", "KR")
     assert close_calls == ["close"]
     assert invalidate_calls == ["macro"]
+    assert [event["phase"] for event in events] == ["준비 중", "공급자 동기화 중", "캐시 정리 중", "완료"]
+    assert events[-1]["status"] == "complete"
 
 
 def test_run_feature_recompute_clears_features_and_invalidates(tmp_path, monkeypatch):
@@ -216,6 +223,7 @@ def test_run_investor_flow_refresh_returns_notice_and_invalidates(monkeypatch):
     invalidate_calls: list[str] = []
     transient_sets: list[dict[str, object]] = []
     transient_clears: list[str] = []
+    events: list[dict[str, object]] = []
 
     monkeypatch.setattr(runtime, "close_cached_read_only_connection", lambda: close_calls.append("close"))
     monkeypatch.setattr(runtime, "invalidate_dashboard_caches", lambda scope: invalidate_calls.append(scope))
@@ -233,13 +241,60 @@ def test_run_investor_flow_refresh_returns_notice_and_invalidates(monkeypatch):
         _runner,
     )
 
-    notice = runtime.run_investor_flow_refresh(_context("KR"))
+    notice = runtime.run_investor_flow_refresh(_context("KR"), progress_callback=events.append)
 
     assert notice == ("warning", "LIVE")
     assert close_calls == ["close"]
     assert invalidate_calls == ["flow"]
     assert transient_sets == []
     assert transient_clears == ["clear"]
+    assert [event["phase"] for event in events] == ["준비 중", "완료"]
+    assert events[-1]["status"] == "complete"
+
+
+def test_run_investor_flow_refresh_does_not_append_outer_terminal_progress_after_inner_updates(monkeypatch):
+    events: list[dict[str, object]] = []
+
+    monkeypatch.setattr(runtime, "close_cached_read_only_connection", lambda: None)
+    monkeypatch.setattr(runtime, "invalidate_dashboard_caches", lambda scope: None)
+    monkeypatch.setattr(runtime, "build_investor_flow_refresh_notice", lambda summary: ("warning", summary["status"]))
+    monkeypatch.setattr(runtime, "set_investor_flow_transient_override", lambda **kwargs: None)
+    monkeypatch.setattr(runtime, "clear_investor_flow_transient_override", lambda: None)
+
+    def _runner(**kwargs):
+        kwargs["progress_callback"](
+            {
+                "task": "투자자수급 갱신",
+                "phase": "1차 수집 중",
+                "pct": 60,
+                "detail": "180/300 logical steps",
+                "status": "running",
+            }
+        )
+        kwargs["progress_callback"](
+            {
+                "task": "투자자수급 갱신",
+                "phase": "캐시 재로드 완료",
+                "pct": 100,
+                "detail": "120 rows",
+                "status": "complete",
+            }
+        )
+        return (("LIVE", pd.DataFrame()), {"status": "LIVE", "coverage_complete": True})
+
+    monkeypatch.setattr(
+        "src.data_sources.krx_investor_flow.run_manual_investor_flow_refresh",
+        _runner,
+    )
+
+    notice = runtime.run_investor_flow_refresh(_context("KR"), progress_callback=events.append)
+
+    assert notice == ("warning", "LIVE")
+    assert [(event["phase"], event["pct"]) for event in events] == [
+        ("준비 중", 5),
+        ("1차 수집 중", 60),
+        ("캐시 재로드 완료", 100),
+    ]
 
 
 def test_run_investor_flow_refresh_sets_transient_override_for_warehouse_lock_preview(monkeypatch):
@@ -328,6 +383,26 @@ def test_build_investor_flow_refresh_notice_mentions_bootstrap_partial_preview()
 
     assert notice[0] == "warning"
     assert "partial preview" in notice[1]
+
+
+def test_build_investor_flow_refresh_notice_exposes_resolver_window_details():
+    notice = dashboard_data.build_investor_flow_refresh_notice(
+        {
+            "status": "CACHED",
+            "coverage_complete": False,
+            "rows": 0,
+            "failed_codes": {"005930": "buy frame empty"},
+            "window": {
+                "mode": "replay_uncertain_span",
+                "anchor_start": "20251211",
+                "anchor_reason": "earliest_unresolved_requested_start",
+            },
+        }
+    )
+
+    assert notice[0] == "warning"
+    assert "resolver=replay_uncertain_span" in notice[1]
+    assert "anchor=2025-12-11" in notice[1]
 
 
 def test_build_investor_flow_refresh_notice_surfaces_warehouse_write_lock():

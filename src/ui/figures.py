@@ -8,6 +8,7 @@ def render_rs_scatter(
     height: int = 680,
     margin: dict[str, int] | None = None,
     theme_mode: str = "dark",
+    diagnostic_only: bool = False,
 ) -> go.Figure:
     """Render a relative-strength scatter plot."""
     template = get_plotly_template(theme_mode)
@@ -32,6 +33,7 @@ def render_rs_scatter(
         y_vals.append(rs_ma)
         texts.append(signal.sector_name.split(" ")[-1])
         colors.append(action_colors.get(signal.action, tokens["text_muted"]))
+        trend_ok = bool(getattr(signal, "legacy_trend_ok", getattr(signal, "trend_ok", False))) if diagnostic_only else bool(getattr(signal, "trend_ok", False))
         hovers.append(
             "<b>{}</b><br>액션: {}<br>RS: {:.4f}<br>RS MA: {:.4f}<br>RSI(D): {:.1f}<br>"
             "추세: {}<br>알림: {}".format(
@@ -40,7 +42,7 @@ def render_rs_scatter(
                 rs,
                 rs_ma,
                 float(signal.rsi_d),
-                "양호" if signal.trend_ok else "약화",
+                "양호" if trend_ok else "약화",
                 html.escape(", ".join(signal.alerts) or "없음"),
             )
         )
@@ -94,7 +96,7 @@ def render_rs_scatter(
 
     fig.update_layout(
         **template,
-        title="상대강도 (RS) vs RS 이동평균",
+        title="Legacy RS Diagnostic: RS vs RS 이동평균" if diagnostic_only else "상대강도 (RS) vs RS 이동평균",
         xaxis_title="RS",
         yaxis_title="RS MA",
         height=height,
@@ -113,7 +115,12 @@ def render_rs_scatter(
     return fig
 
 
-def render_rs_momentum_bar(signals: Sequence, theme_mode: str = "dark") -> go.Figure:
+def render_rs_momentum_bar(
+    signals: Sequence,
+    theme_mode: str = "dark",
+    *,
+    diagnostic_only: bool = False,
+) -> go.Figure:
     """Render a horizontal bar chart of RS divergence."""
     template = get_plotly_template(theme_mode)
     tokens = get_theme_tokens(theme_mode)
@@ -169,7 +176,7 @@ def render_rs_momentum_bar(signals: Sequence, theme_mode: str = "dark") -> go.Fi
     fig.add_vline(x=0, line=dict(color=tokens["border"], width=1.5))
     fig.update_layout(
         **template,
-        title="섹터별 RS 이격도",
+        title="Legacy RS Diagnostic: 섹터별 RS 이격도" if diagnostic_only else "섹터별 RS 이격도",
         xaxis_title="RS 이격도 (%)",
         yaxis_title="",
         height=max(300, len(filtered_sorted) * 36 + 80),

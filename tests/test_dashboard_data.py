@@ -179,3 +179,259 @@ def test_cached_signals_uses_shared_regime_builder_with_dashboard_window(monkeyp
         "window_months": 60,
         "confirmation_periods": 2,
     }
+
+
+def test_load_dashboard_runtime_data_emits_progress_and_returns_flow_payload(monkeypatch):
+    events: list[dict[str, object]] = []
+    idx = pd.to_datetime(["2024-01-31", "2024-02-29"])
+    sector_prices = pd.DataFrame(
+        {
+            "index_code": ["1001", "5044"],
+            "index_name": ["KOSPI", "KRX 반도체"],
+            "close": [100.0, 110.0],
+        },
+        index=idx,
+    )
+    flow_frame = pd.DataFrame(
+        {
+            "sector_code": ["5044"],
+            "sector_name": ["KRX 반도체"],
+            "investor_type": ["외국인"],
+            "buy_amount": [100],
+            "sell_amount": [50],
+            "net_buy_amount": [50],
+            "net_flow_ratio": [0.2],
+        },
+        index=pd.to_datetime(["2024-02-29"]),
+    )
+    macro_df = pd.DataFrame({"value": [1.0]}, index=pd.PeriodIndex(["2024-02"], freq="M"))
+
+    monkeypatch.setattr(
+        dashboard_data,
+        "_cached_sector_prices",
+        lambda *args, **kwargs: ("LIVE", sector_prices),
+    )
+    monkeypatch.setattr(
+        dashboard_data,
+        "_cached_investor_flow",
+        lambda *args, **kwargs: ("CACHED", True, {"coverage_complete": True}, flow_frame),
+    )
+    monkeypatch.setattr(
+        dashboard_data,
+        "_cached_macro",
+        lambda *args, **kwargs: ("LIVE", macro_df),
+    )
+    monkeypatch.setattr(
+        dashboard_data,
+        "build_regime_history_from_macro",
+        lambda **kwargs: pd.DataFrame(
+            {
+                "growth_dir": ["Up"],
+                "inflation_dir": ["Down"],
+                "regime": ["Recovery"],
+                "confirmed_regime": ["Recovery"],
+            },
+            index=pd.to_datetime(["2024-02-29"]),
+        ),
+    )
+
+    import src.signals.matrix as matrix_mod
+
+    monkeypatch.setattr(matrix_mod, "build_signal_table", lambda **kwargs: ["signal-a"])
+
+    dashboard_data.configure_dashboard_env(
+        settings_obj={
+            "benchmark_code": "1001",
+            "epsilon": 0.0,
+            "confirmation_periods": 2,
+            "use_adaptive_epsilon": False,
+            "epsilon_factor": 0.5,
+            "yield_curve_spread_threshold": 0.0,
+            "price_years": 3,
+        },
+        sector_map_obj={"regimes": {}},
+        macro_series_cfg_obj={},
+        market_id_obj="KR",
+        market_profile_obj=None,
+        cache_ttl=1,
+        curated_sector_prices_path=Path("data/curated/sector_prices.parquet"),
+    )
+    dashboard_data._cached_signals.clear()
+
+    payload = dashboard_data.load_dashboard_runtime_data(
+        "KR",
+        "20240229",
+        (0, 0),
+        (0, 0),
+        "params",
+        "macro-token",
+        "price-token",
+        (0, 0),
+        (),
+        epsilon=0.0,
+        rs_ma_period=20,
+        ma_fast=20,
+        ma_slow=60,
+        price_years=3,
+        flow_profile="foreign_lead",
+        progress_callback=events.append,
+    )
+
+    assert [event["phase"] for event in events] == [
+        "준비 중",
+        "시장 데이터 로드 완료",
+        "수급 데이터 로드 완료",
+        "매크로 데이터 로드 완료",
+        "신호 계산 완료",
+        "표시 데이터 준비 완료",
+    ]
+    assert events[-1]["pct"] == 100
+    assert events[-1]["status"] == "complete"
+    assert payload["signals"] == ["signal-a"]
+    assert payload["investor_flow_status"] == "CACHED"
+    assert payload["investor_flow_frame"].equals(flow_frame)
+    assert "5044" in payload["shared_flow_summary_map"]
+    assert payload["shared_flow_summary_map"]["5044"].flow_profile == "foreign_lead"
+
+
+def test_normalize_kr_named_frame_replaces_code_like_names_from_active_dimension(monkeypatch):
+    monkeypatch.setattr(
+        dashboard_data,
+        "read_active_index_dimension",
+        lambda market="KR": pd.DataFrame(
+            [
+                {"index_code": "1002", "index_name": "코스피 대형주"},
+                {"index_code": "1013", "index_name": "전기전자"},
+            ]
+        ),
+    )
+
+    frame = pd.DataFrame(
+        {
+            "sector_code": ["1002", "1013", "5044"],
+            "sector_name": ["1002", "1013", "KRX 반도체"],
+        }
+    )
+
+    normalized = dashboard_data._normalize_kr_named_frame(
+        frame,
+        code_col="sector_code",
+        name_col="sector_name",
+    )
+
+    assert list(normalized["sector_name"]) == ["코스피 대형주", "전기전자", "KRX 반도체"]
+
+
+def test_kr_active_index_name_lookup_falls_back_to_official_discovery_for_placeholder_rows(monkeypatch):
+    monkeypatch.setattr(
+        dashboard_data,
+        "read_active_index_dimension",
+        lambda market="KR": pd.DataFrame(
+            [
+                {"index_code": "1002", "index_name": "1002", "taxonomy_label": "1002"},
+                {"index_code": "1013", "index_name": "1013", "taxonomy_label": "1013"},
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        dashboard_data,
+        "settings",
+        {"benchmark_code": "1001"},
+    )
+
+    import src.data_sources.krx_indices as krx_indices
+
+    monkeypatch.setattr(
+        krx_indices,
+        "discover_kr_index_rows",
+        lambda benchmark_code=None: [
+            {"index_code": "1002", "index_name": "코스피 대형주", "taxonomy_label": "대형주"},
+            {"index_code": "1013", "index_name": "전기전자", "taxonomy_label": "전기전자"},
+        ],
+    )
+
+    lookup = dashboard_data._kr_active_index_name_lookup()
+
+    assert lookup["1002"] == "코스피 대형주"
+    assert lookup["1013"] == "전기전자"
+
+
+def test_normalize_kr_sector_universe_rows_replaces_placeholder_taxonomy_via_official_fallback(monkeypatch):
+    monkeypatch.setattr(
+        dashboard_data,
+        "read_active_index_dimension",
+        lambda market="KR": pd.DataFrame(
+            [
+                {"index_code": "1002", "index_name": "1002", "taxonomy_label": "1002"},
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        dashboard_data,
+        "settings",
+        {"benchmark_code": "1001"},
+    )
+
+    import src.data_sources.krx_indices as krx_indices
+
+    monkeypatch.setattr(
+        krx_indices,
+        "discover_kr_index_rows",
+        lambda benchmark_code=None: [
+            {"index_code": "1002", "index_name": "코스피 대형주", "taxonomy_label": "대형주"},
+        ],
+    )
+
+    normalized = dashboard_data._normalize_kr_sector_universe_rows(
+        [{"index_code": "1002", "index_name": "1002", "taxonomy_label": "1002"}]
+    )
+
+    assert normalized == [
+        {"index_code": "1002", "index_name": "코스피 대형주", "taxonomy_label": "대형주"}
+    ]
+
+
+def test_canonicalize_kr_sector_universe_rows_keeps_only_plain_krx_sector_family():
+    rows = [
+        {"index_code": "1001", "index_name": "코스피", "family": "kospi_dd_trd", "taxonomy_label": "코스피"},
+        {"index_code": "5042", "index_name": "KRX 100", "family": "krx_dd_trd", "taxonomy_label": "KRX 100"},
+        {"index_code": "5044", "index_name": "KRX 반도체", "family": "krx_dd_trd", "taxonomy_label": "반도체"},
+        {"index_code": "5064", "index_name": "KRX 정보기술", "family": "krx_dd_trd", "taxonomy_label": "정보기술"},
+        {"index_code": "5351", "index_name": "KRX 300 정보기술", "family": "krx_dd_trd", "taxonomy_label": "KRX 300 정보기술"},
+        {"index_code": "1155", "index_name": "코스피 200 정보기술", "family": "kospi_dd_trd", "taxonomy_label": "정보기술"},
+        {"index_code": "2216", "index_name": "코스닥 150 정보기술", "family": "kosdaq_dd_trd", "taxonomy_label": "150 정보기술"},
+    ]
+
+    canonical = dashboard_data._canonicalize_kr_sector_universe_rows(
+        rows,
+        benchmark_code="1001",
+        include_benchmark=True,
+    )
+
+    assert [row["index_code"] for row in canonical] == ["1001", "5044", "5064"]
+
+
+def test_get_market_index_universe_codes_returns_canonical_kr_family_plus_benchmark(monkeypatch):
+    monkeypatch.setattr(
+        dashboard_data,
+        "read_active_index_dimension",
+        lambda market="KR": pd.DataFrame(
+            [
+                {"index_code": "1001", "index_name": "코스피", "family": "kospi_dd_trd", "taxonomy_label": "코스피"},
+                {"index_code": "5042", "index_name": "KRX 100", "family": "krx_dd_trd", "taxonomy_label": "KRX 100"},
+                {"index_code": "5044", "index_name": "KRX 반도체", "family": "krx_dd_trd", "taxonomy_label": "반도체"},
+                {"index_code": "5064", "index_name": "KRX 정보기술", "family": "krx_dd_trd", "taxonomy_label": "정보기술"},
+                {"index_code": "5351", "index_name": "KRX 300 정보기술", "family": "krx_dd_trd", "taxonomy_label": "KRX 300 정보기술"},
+                {"index_code": "1155", "index_name": "코스피 200 정보기술", "family": "kospi_dd_trd", "taxonomy_label": "정보기술"},
+            ]
+        ),
+    )
+    monkeypatch.setattr(dashboard_data, "is_legacy_kr_index_subset", lambda market="KR": False)
+
+    import src.data_sources.krx_indices as krx_indices
+
+    monkeypatch.setattr(krx_indices, "repair_stale_kr_index_dimension_names", lambda benchmark_code: pd.DataFrame())
+
+    codes = dashboard_data.get_market_index_universe_codes("1001", "KR")
+
+    assert codes == ["1001", "5044", "5064"]

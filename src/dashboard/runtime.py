@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import shutil
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Any, Callable, Literal
 
 import pandas as pd
 
@@ -20,6 +20,7 @@ from src.dashboard.data import (
     cached_signals,
     clear_investor_flow_transient_override,
     get_all_sector_codes,
+    get_market_index_universe_codes,
     get_market_range_strings,
     set_investor_flow_transient_override,
 )
@@ -30,6 +31,33 @@ from src.data_sources.warehouse import close_cached_read_only_connection
 logger = logging.getLogger(__name__)
 
 CacheScope = Literal["all", "market", "macro", "flow", "signals"]
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+def _emit_progress(
+    progress_callback: ProgressCallback | None,
+    *,
+    task: str,
+    phase: str,
+    pct: float | int,
+    detail: str = "",
+    status: str = "running",
+) -> None:
+    if progress_callback is None:
+        return
+    try:
+        pct_value = int(round(float(pct)))
+    except Exception:
+        pct_value = 0
+    progress_callback(
+        {
+            "task": str(task).strip(),
+            "phase": str(phase).strip(),
+            "pct": max(0, min(100, pct_value)),
+            "detail": str(detail).strip(),
+            "status": str(status).strip().lower() or "running",
+        }
+    )
 
 
 def invalidate_dashboard_caches(scope: CacheScope) -> None:
@@ -71,21 +99,70 @@ def _resolve_market_refresh_runner(market_id: str) -> Callable[[list[str], str, 
     return run_manual_price_refresh
 
 
-def run_market_refresh(context: DashboardContext, price_years: int) -> tuple[str, str] | None:
+def run_market_refresh(
+    context: DashboardContext,
+    price_years: int,
+    *,
+    progress_callback: ProgressCallback | None = None,
+) -> tuple[str, str] | None:
     """Execute a manual market refresh and convert the result into a UI notice."""
     refresh_start_str, refresh_end_str = get_market_range_strings(context.market_end_date_str, price_years)
     runner = _resolve_market_refresh_runner(context.market_id)
     try:
+        normalized_market = str(context.market_id or "").strip().upper()
+        sector_codes = (
+            get_market_index_universe_codes(context.benchmark_code, context.market_id)
+            if normalized_market == "KR"
+            else get_all_sector_codes(context.benchmark_code)
+        )
+        _emit_progress(
+            progress_callback,
+            task="시장데이터 갱신",
+            phase="준비 중",
+            pct=5,
+            detail=f"{refresh_start_str} ~ {refresh_end_str}",
+        )
         close_cached_read_only_connection()
         cached_api_preflight.clear()
+        _emit_progress(
+            progress_callback,
+            task="시장데이터 갱신",
+            phase="데이터 요청 중",
+            pct=35,
+            detail=f"{len(sector_codes)} indices",
+        )
         (_, _), refresh_summary = runner(
-            get_all_sector_codes(context.benchmark_code),
+            sector_codes,
             refresh_start_str,
             refresh_end_str,
         )
+        _emit_progress(
+            progress_callback,
+            task="시장데이터 갱신",
+            phase="캐시 정리 중",
+            pct=85,
+            detail=f"상태 {refresh_summary.get('status', '')}",
+        )
         invalidate_dashboard_caches("market")
-        return build_market_refresh_notice(refresh_summary)
+        notice = build_market_refresh_notice(refresh_summary)
+        _emit_progress(
+            progress_callback,
+            task="시장데이터 갱신",
+            phase="완료",
+            pct=100,
+            detail=notice[1] if notice else "",
+            status="complete",
+        )
+        return notice
     except Exception as exc:
+        _emit_progress(
+            progress_callback,
+            task="시장데이터 갱신",
+            phase="실패",
+            pct=100,
+            detail=str(exc),
+            status="error",
+        )
         logger.exception("Manual market refresh failed")
         return ("error", f"Market data refresh failed: {exc}")
 
@@ -103,39 +180,103 @@ def _sync_macro_warehouse(*, start_ym: str, end_ym: str, macro_series_cfg: dict,
     )
 
 
-def run_macro_refresh(context: DashboardContext, macro_series_cfg: dict) -> tuple[str, str] | None:
+def run_macro_refresh(
+    context: DashboardContext,
+    macro_series_cfg: dict,
+    *,
+    progress_callback: ProgressCallback | None = None,
+) -> tuple[str, str] | None:
     """Execute a manual macro refresh and convert the result into a UI notice."""
     macro_end_period = pd.Period(context.market_end_date_str[:6], freq="M")
     macro_end_ym = macro_end_period.strftime("%Y%m")
     macro_start_ym = (macro_end_period - 119).strftime("%Y%m")
+    provider_count = sum(bool((macro_series_cfg or {}).get(name)) for name in ("ecos", "kosis", "fred"))
     try:
+        _emit_progress(
+            progress_callback,
+            task="매크로데이터 갱신",
+            phase="준비 중",
+            pct=5,
+            detail=f"{macro_start_ym} ~ {macro_end_ym}",
+        )
         close_cached_read_only_connection()
+        _emit_progress(
+            progress_callback,
+            task="매크로데이터 갱신",
+            phase="공급자 동기화 중",
+            pct=40,
+            detail=f"{provider_count or 1} providers",
+        )
         _, _, macro_summary = _sync_macro_warehouse(
             start_ym=macro_start_ym,
             end_ym=macro_end_ym,
             macro_series_cfg=macro_series_cfg,
             market=context.market_id,
         )
+        _emit_progress(
+            progress_callback,
+            task="매크로데이터 갱신",
+            phase="캐시 정리 중",
+            pct=85,
+            detail=f"상태 {macro_summary.get('status', '')}",
+        )
         invalidate_dashboard_caches("macro")
-        return build_macro_refresh_notice(macro_summary)
+        notice = build_macro_refresh_notice(macro_summary)
+        _emit_progress(
+            progress_callback,
+            task="매크로데이터 갱신",
+            phase="완료",
+            pct=100,
+            detail=notice[1] if notice else "",
+            status="complete",
+        )
+        return notice
     except Exception as exc:
+        _emit_progress(
+            progress_callback,
+            task="매크로데이터 갱신",
+            phase="실패",
+            pct=100,
+            detail=str(exc),
+            status="error",
+        )
         logger.exception("Manual macro refresh failed")
         return ("error", f"Macro data refresh failed: {exc}")
 
 
-def run_investor_flow_refresh(context: DashboardContext) -> tuple[str, str] | None:
+def run_investor_flow_refresh(
+    context: DashboardContext,
+    *,
+    progress_callback: ProgressCallback | None = None,
+) -> tuple[str, str] | None:
     """Execute a manual KR investor-flow refresh and convert the result into a UI notice."""
     if str(context.market_id).strip().upper() != "KR":
         return None
 
     from src.data_sources.krx_investor_flow import run_manual_investor_flow_refresh
 
+    inner_progress_emitted = False
+
+    def _inner_progress_callback(event: dict[str, Any]) -> None:
+        nonlocal inner_progress_emitted
+        inner_progress_emitted = True
+        if progress_callback is not None:
+            progress_callback(event)
+
     try:
+        _emit_progress(
+            progress_callback,
+            task="투자자수급 갱신",
+            phase="준비 중",
+            pct=5,
+            detail=context.market_end_date_str,
+        )
         close_cached_read_only_connection()
         (status, frame), refresh_summary = run_manual_investor_flow_refresh(
             sector_map=context.sector_map,
             end_date_str=context.market_end_date_str,
             market=context.market_id,
+            progress_callback=_inner_progress_callback,
         )
         if bool(refresh_summary.get("warehouse_write_skipped")) and isinstance(frame, pd.DataFrame) and not frame.empty:
             set_investor_flow_transient_override(
@@ -148,9 +289,27 @@ def run_investor_flow_refresh(context: DashboardContext) -> tuple[str, str] | No
         else:
             clear_investor_flow_transient_override()
         invalidate_dashboard_caches("flow")
-        return build_investor_flow_refresh_notice(refresh_summary)
+        notice = build_investor_flow_refresh_notice(refresh_summary)
+        if not inner_progress_emitted:
+            _emit_progress(
+                progress_callback,
+                task="투자자수급 갱신",
+                phase="완료",
+                pct=100,
+                detail=notice[1] if notice else "",
+                status="complete",
+            )
+        return notice
     except Exception as exc:
         clear_investor_flow_transient_override()
+        _emit_progress(
+            progress_callback,
+            task="투자자수급 갱신",
+            phase="실패",
+            pct=100,
+            detail=str(exc),
+            status="error",
+        )
         logger.exception("Manual investor-flow refresh failed")
         return ("error", f"Investor-flow refresh failed: {exc}")
 

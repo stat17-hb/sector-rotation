@@ -299,6 +299,78 @@ def test_run_manual_investor_flow_refresh_preserves_live_rows_on_warehouse_write
     assert summary["failed_codes"]["warehouse"].startswith("Cannot acquire write lock")
 
 
+def test_run_manual_investor_flow_refresh_emits_progress_callback(monkeypatch):
+    events: list[dict[str, object]] = []
+    raw_frame = pd.DataFrame(
+        {
+            "trade_date": pd.to_datetime(["2026-04-08"]),
+            "ticker": ["005930"],
+            "ticker_name": ["삼성전자"],
+            "investor_type": ["외국인"],
+            "buy_amount": [1200],
+            "sell_amount": [800],
+            "net_buy_amount": [400],
+        }
+    )
+    sector_frame = pd.DataFrame(
+        {
+            "trade_date": pd.to_datetime(["2026-04-08"]),
+            "sector_code": ["5044"],
+            "sector_name": ["KRX 반도체"],
+            "investor_type": ["외국인"],
+            "buy_amount": [1200],
+            "sell_amount": [800],
+            "net_buy_amount": [400],
+            "net_flow_ratio": [0.2],
+        }
+    )
+
+    def _collect(**kwargs):
+        kwargs["progress_callback"](
+            {
+                "task": "투자자수급 갱신",
+                "phase": "1차 수집 중",
+                "pct": 60,
+                "detail": "3/3 requests",
+                "status": "running",
+            }
+        )
+        return (
+            raw_frame,
+            sector_frame,
+            {
+                "status": "LIVE",
+                "provider": flow_source.FLOW_PROVIDER,
+                "requested_start": "20260101",
+                "requested_end": "20260408",
+                "coverage_complete": True,
+                "failed_days": [],
+                "failed_codes": {},
+                "predicted_requests": 3,
+                "processed_requests": 3,
+                "rows": 1,
+            },
+        )
+
+    monkeypatch.setattr(flow_source, "collect_sector_investor_flow", _collect)
+
+    flow_source.run_manual_investor_flow_refresh(
+        sector_map=_SECTOR_MAP,
+        end_date_str="20260408",
+        progress_callback=events.append,
+    )
+
+    assert [event["phase"] for event in events] == [
+        "갱신 구간 확정",
+        "1차 수집 중",
+        "웨어하우스 저장 중",
+        "캐시 재로드 완료",
+    ]
+    assert events[1]["pct"] == 60
+    assert events[-1]["pct"] == 100
+    assert events[-1]["status"] == "complete"
+
+
 def test_load_sector_investor_flow_returns_bootstrap_partial_preview_without_complete_cursor():
     partial_summary = {
         "status": "LIVE",
@@ -883,6 +955,208 @@ def test_resolve_investor_flow_refresh_window_uses_cursor_and_failed_days():
     assert meta["failed_days_repaired"] == ["20260410"]
 
 
+def test_resolve_investor_flow_refresh_window_uses_day_only_repair_without_cursor():
+    warehouse.record_ingest_run(
+        dataset="investor_flow",
+        reason="manual_refresh",
+        provider="PYKRX_UNOFFICIAL",
+        requested_start="20260401",
+        requested_end="20260410",
+        status="LIVE",
+        coverage_complete=False,
+        failed_days=["20260403", "20260410"],
+        failed_codes={"20260403": "partial", "20260410": "partial"},
+        delta_keys=[],
+        row_count=1,
+        summary={
+            "status": "LIVE",
+            "failed_day_truth_confident": True,
+            "failed_ticker_count": 0,
+            "failed_sector_count": 0,
+        },
+        market="KR",
+    )
+
+    start, end, meta = flow_source.resolve_investor_flow_refresh_window(
+        end_date_str="20260410",
+        market="KR",
+    )
+
+    assert start == "20260403"
+    assert end == "20260410"
+    assert meta["mode"] == "repair_from_failed_day"
+    assert meta["anchor_start"] == "20260401"
+    assert meta["metadata_durable"] is True
+    assert meta["failed_days_repaired"] == ["20260403", "20260410"]
+
+
+def test_resolve_investor_flow_refresh_window_replays_uncertain_span_for_ticker_failures_without_cursor():
+    warehouse.record_ingest_run(
+        dataset="investor_flow",
+        reason="manual_refresh",
+        provider="PYKRX_UNOFFICIAL",
+        requested_start="20251211",
+        requested_end="20260410",
+        status="LIVE",
+        coverage_complete=False,
+        failed_days=["20260410"],
+        failed_codes={"005930": "buy frame empty"},
+        delta_keys=[],
+        row_count=1,
+        summary={
+            "status": "LIVE",
+            "failed_day_truth_confident": True,
+            "failed_ticker_count": 1,
+            "failed_sector_count": 0,
+        },
+        market="KR",
+        created_at=pd.Timestamp("2026-04-12T00:00:00Z").to_pydatetime(),
+    )
+    warehouse.record_ingest_run(
+        dataset="investor_flow",
+        reason="manual_refresh",
+        provider="PYKRX_UNOFFICIAL",
+        requested_start="20260408",
+        requested_end="20260410",
+        status="LIVE",
+        coverage_complete=False,
+        failed_days=["20260410"],
+        failed_codes={"20260410": "partial"},
+        delta_keys=[],
+        row_count=1,
+        summary={
+            "status": "LIVE",
+            "failed_day_truth_confident": True,
+            "failed_ticker_count": 0,
+            "failed_sector_count": 0,
+        },
+        market="KR",
+        created_at=pd.Timestamp("2026-04-13T00:00:00Z").to_pydatetime(),
+    )
+
+    start, end, meta = flow_source.resolve_investor_flow_refresh_window(
+        end_date_str="20260410",
+        market="KR",
+    )
+
+    assert start == "20251211"
+    assert end == "20260410"
+    assert meta["mode"] == "replay_uncertain_span"
+    assert meta["anchor_start"] == "20251211"
+    assert meta["anchor_reason"] == "earliest_unresolved_requested_start"
+    assert meta["metadata_durable"] is True
+
+
+def test_resolve_investor_flow_refresh_window_ignores_complete_runs_as_anchor_when_cursor_is_missing():
+    warehouse.record_ingest_run(
+        dataset="investor_flow",
+        reason="manual_refresh",
+        provider="PYKRX_UNOFFICIAL",
+        requested_start="20251211",
+        requested_end="20260331",
+        status="LIVE",
+        coverage_complete=False,
+        failed_days=["20260331"],
+        failed_codes={"005930": "buy frame empty"},
+        delta_keys=[],
+        row_count=1,
+        summary={
+            "status": "LIVE",
+            "failed_day_truth_confident": True,
+            "failed_ticker_count": 1,
+            "failed_sector_count": 0,
+        },
+        market="KR",
+        created_at=pd.Timestamp("2026-04-11T00:00:00Z").to_pydatetime(),
+    )
+    warehouse.record_ingest_run(
+        dataset="investor_flow",
+        reason="manual_refresh",
+        provider="PYKRX_UNOFFICIAL",
+        requested_start="20260401",
+        requested_end="20260405",
+        status="LIVE",
+        coverage_complete=True,
+        failed_days=[],
+        failed_codes={},
+        delta_keys=[],
+        row_count=1,
+        summary={
+            "status": "LIVE",
+            "failed_day_truth_confident": True,
+            "failed_ticker_count": 0,
+            "failed_sector_count": 0,
+        },
+        market="KR",
+        created_at=pd.Timestamp("2026-04-12T00:00:00Z").to_pydatetime(),
+    )
+    warehouse.record_ingest_run(
+        dataset="investor_flow",
+        reason="manual_refresh",
+        provider="PYKRX_UNOFFICIAL",
+        requested_start="20260408",
+        requested_end="20260410",
+        status="LIVE",
+        coverage_complete=False,
+        failed_days=["20260410"],
+        failed_codes={"20260410": "partial"},
+        delta_keys=[],
+        row_count=1,
+        summary={
+            "status": "LIVE",
+            "failed_day_truth_confident": True,
+            "failed_ticker_count": 0,
+            "failed_sector_count": 0,
+        },
+        market="KR",
+        created_at=pd.Timestamp("2026-04-13T00:00:00Z").to_pydatetime(),
+    )
+
+    start, end, meta = flow_source.resolve_investor_flow_refresh_window(
+        end_date_str="20260410",
+        market="KR",
+    )
+
+    assert start == "20251211"
+    assert end == "20260410"
+    assert meta["mode"] == "replay_uncertain_span"
+    assert meta["anchor_start"] == "20251211"
+
+
+def test_resolve_investor_flow_refresh_window_replays_uncertain_span_when_day_truth_is_weak_without_cursor():
+    warehouse.record_ingest_run(
+        dataset="investor_flow",
+        reason="manual_refresh",
+        provider="PYKRX_UNOFFICIAL",
+        requested_start="20260401",
+        requested_end="20260410",
+        status="LIVE",
+        coverage_complete=False,
+        failed_days=[],
+        failed_codes={},
+        delta_keys=[],
+        row_count=1,
+        summary={
+            "status": "LIVE",
+            "failed_day_truth_confident": False,
+            "failed_ticker_count": 0,
+            "failed_sector_count": 0,
+        },
+        market="KR",
+    )
+
+    start, end, meta = flow_source.resolve_investor_flow_refresh_window(
+        end_date_str="20260410",
+        market="KR",
+    )
+
+    assert start == "20260401"
+    assert end == "20260410"
+    assert meta["mode"] == "replay_uncertain_span"
+    assert meta["anchor_start"] == "20260401"
+    assert meta["metadata_durable"] is True
+
+
 def test_resolve_investor_flow_refresh_window_skips_non_trading_days_after_cursor(monkeypatch):
     warehouse.update_ingest_watermark(
         dataset="investor_flow_operational_complete",
@@ -1378,6 +1652,65 @@ def test_collect_sector_investor_flow_suppresses_failed_days_when_truth_is_ambig
     assert summary["coverage_complete"] is False
 
 
+def test_collect_sector_investor_flow_preserves_exception_backed_failure_provenance(monkeypatch):
+    monkeypatch.setattr(flow_source, "ensure_pykrx_transport_compat", lambda: None)
+    monkeypatch.setattr(flow_source, "_check_socket_stack", lambda: None)
+    monkeypatch.setattr(
+        flow_source,
+        "_resolve_frozen_trading_day_truth",
+        lambda *args, **kwargs: (["20260407"], "warehouse_market_prices", True),
+    )
+    monkeypatch.setattr(
+        flow_source,
+        "_build_sector_universe",
+        lambda *args, **kwargs: flow_source.SectorUniverse(
+            sector_codes=["5044"],
+            sector_names={"5044": "KRX 반도체"},
+            ticker_to_sector_codes={"005930": ["5044"]},
+        ),
+    )
+
+    import pykrx.stock as stock
+
+    monkeypatch.setattr(stock, "get_market_ticker_name", lambda ticker: "삼성전자")
+    monkeypatch.setattr(stock, "get_market_trading_value_by_date", lambda *args, **kwargs: pd.DataFrame())
+
+    def _raw_frame(*, ticker: str, start: str, end: str, on: str, detail: bool) -> pd.DataFrame:
+        if on == "매수" and not detail:
+            raise RuntimeError("raw general timeout")
+        if on == "순매수" and not detail:
+            frame = pd.DataFrame(
+                {
+                    "기관합계": [50],
+                    "기타법인": [10],
+                    "개인": [100],
+                    "외국인합계": [200],
+                    "전체": [0],
+                },
+                index=pd.to_datetime(["2026-04-07"]),
+            )
+            frame.index.name = "날짜"
+            return frame
+        return pd.DataFrame()
+
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_raw", _raw_frame)
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_detailed", lambda *args, **kwargs: pd.DataFrame())
+
+    _, sector_frame, summary = flow_source.collect_sector_investor_flow(
+        sector_map=_SECTOR_MAP,
+        start="20260407",
+        end="20260407",
+    )
+
+    assert sector_frame.empty
+    assert summary["failed_ticker_codes"]["005930"] == "buy/sell frames empty [exception_backed_empty]"
+    assert summary["failed_ticker_family_counts"] == {"exception_backed_empty": 1}
+    detail = summary["failed_ticker_detail"]["005930"]
+    assert detail["family"] == "exception_backed_empty"
+    assert detail["error_legs"] == ["buy"]
+    assert any(attempt["status"] == "error" for attempt in detail["legs"]["buy"]["attempts"])
+
+
 def test_read_warm_status_exposes_sector_and_ticker_failure_buckets():
     warehouse.record_ingest_run(
         dataset="investor_flow",
@@ -1419,6 +1752,100 @@ def test_read_warm_status_exposes_sector_and_ticker_failure_buckets():
     assert summary["failed_day_source"] == "warehouse_market_prices"
     assert summary["failed_day_truth_confident"] is True
     assert summary["request_metric_semantics"] == "logical_ticker_steps"
+    assert summary["failed_ticker_detail"] == {}
+    assert summary["failed_ticker_family_counts"] == {}
+
+
+def test_read_warm_status_exposes_resolver_window_metadata_without_cursor():
+    warehouse.record_ingest_run(
+        dataset="investor_flow",
+        reason="manual_refresh",
+        provider="PYKRX_UNOFFICIAL",
+        requested_start="20251211",
+        requested_end="20260410",
+        status="LIVE",
+        coverage_complete=False,
+        failed_days=["20260410"],
+        failed_codes={"005930": "buy frame empty"},
+        delta_keys=[],
+        row_count=0,
+        summary={
+            "status": "LIVE",
+            "failed_day_truth_confident": True,
+            "failed_ticker_count": 1,
+            "failed_sector_count": 0,
+        },
+        market="KR",
+    )
+
+    summary = flow_source.read_warm_status()
+
+    assert summary["window_mode"] == "replay_uncertain_span"
+    assert summary["anchor_start"] == "20251211"
+    assert summary["anchor_reason"] == "earliest_unresolved_requested_start"
+    assert summary["metadata_durable"] is True
+
+
+def test_read_warm_status_exposes_failed_ticker_sidecar_and_family_counts():
+    warehouse.record_ingest_run(
+        dataset="investor_flow",
+        reason="manual_refresh",
+        provider="PYKRX_UNOFFICIAL",
+        requested_start="20260401",
+        requested_end="20260408",
+        status="LIVE",
+        coverage_complete=False,
+        failed_days=[],
+        failed_codes={"005930": "buy/sell frames empty [exception_backed_empty]"},
+        delta_keys=[],
+        row_count=0,
+        summary={
+            "status": "LIVE",
+            "failed_ticker_detail": {
+                "005930": {
+                    "family": "exception_backed_empty",
+                    "final_reason": "buy/sell frames empty [exception_backed_empty]",
+                    "legs": {"buy": {"attempts": [{"builder": "raw_general", "status": "error"}]}},
+                }
+            },
+            "failed_ticker_family_counts": {"exception_backed_empty": 1},
+        },
+        market="KR",
+    )
+
+    summary = flow_source.read_warm_status()
+
+    assert summary["failed_ticker_family_counts"] == {"exception_backed_empty": 1}
+    assert summary["failed_ticker_detail"]["005930"]["family"] == "exception_backed_empty"
+
+
+def test_read_warm_status_sanitizes_legacy_failed_days_against_trading_day_truth(monkeypatch):
+    warehouse.record_ingest_run(
+        dataset="investor_flow",
+        reason="manual_refresh",
+        provider="PYKRX_UNOFFICIAL",
+        requested_start="20251211",
+        requested_end="20260410",
+        status="LIVE",
+        coverage_complete=False,
+        failed_days=["20251225", "20251226"],
+        failed_codes={},
+        delta_keys=[],
+        row_count=0,
+        summary={"status": "LIVE"},
+        market="KR",
+    )
+    monkeypatch.setattr(
+        flow_source,
+        "_resolve_frozen_trading_day_truth",
+        lambda *args, **kwargs: (["20251226"], "warehouse_market_prices", True),
+    )
+
+    summary = flow_source.read_warm_status()
+
+    assert summary["failed_days"] == ["20251226"]
+    assert summary["failed_day_source"] == "warehouse_market_prices"
+    assert summary["failed_day_truth_confident"] is True
 
 
 def test_collect_sector_investor_flow_retries_failed_tickers_after_session_reset(monkeypatch):
@@ -1481,3 +1908,65 @@ def test_collect_sector_investor_flow_retries_failed_tickers_after_session_reset
     assert summary["retry_processed_requests"] == 3
     assert summary["predicted_requests"] == 6
     assert summary["processed_requests"] == 6
+
+
+def test_collect_sector_investor_flow_retry_reuses_wrapper_fallback_after_session_reset(monkeypatch):
+    monkeypatch.setattr(flow_source, "ensure_pykrx_transport_compat", lambda: None)
+    monkeypatch.setattr(flow_source, "_check_socket_stack", lambda: None)
+    monkeypatch.setattr(
+        flow_source,
+        "_resolve_frozen_trading_day_truth",
+        lambda *args, **kwargs: (["20260407"], "pykrx_calendar", True),
+    )
+    monkeypatch.setattr(
+        flow_source,
+        "_build_sector_universe",
+        lambda *args, **kwargs: flow_source.SectorUniverse(
+            sector_codes=["5044"],
+            sector_names={"5044": "KRX 반도체"},
+            ticker_to_sector_codes={"005930": ["5044"]},
+        ),
+    )
+
+    import pykrx.stock as stock
+
+    state = {"reset": False, "wrapper_calls": []}
+
+    monkeypatch.setattr(stock, "get_market_ticker_name", lambda ticker: "삼성전자")
+    monkeypatch.setattr(flow_source, "reset_krx_shared_session", lambda: state.__setitem__("reset", True))
+
+    def _wrapper(*args, **kwargs):
+        on = str(kwargs.get("on", args[3] if len(args) > 3 else ""))
+        detail = bool(kwargs.get("detail", False))
+        state["wrapper_calls"].append((on, detail, state["reset"]))
+        if detail or not state["reset"]:
+            return pd.DataFrame()
+        frame = pd.DataFrame(
+            {
+                "기관합계": [50],
+                "기타법인": [10],
+                "개인": [100],
+                "외국인합계": [200],
+                "전체": [0],
+            },
+            index=pd.to_datetime(["2026-04-07"]),
+        )
+        frame.index.name = "날짜"
+        return frame
+
+    monkeypatch.setattr(stock, "get_market_trading_value_by_date", _wrapper)
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_raw", lambda **kwargs: pd.DataFrame())
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_detailed", lambda *args, **kwargs: pd.DataFrame())
+
+    raw_frame, sector_frame, summary = flow_source.collect_sector_investor_flow(
+        sector_map=_SECTOR_MAP,
+        start="20260407",
+        end="20260407",
+    )
+
+    assert not raw_frame.empty
+    assert not sector_frame.empty
+    assert summary["failed_codes"] == {}
+    assert summary["retried_ticker_count"] == 1
+    assert summary["retried_recovered_ticker_count"] == 1
+    assert any(call == ("매수", False, True) for call in state["wrapper_calls"])

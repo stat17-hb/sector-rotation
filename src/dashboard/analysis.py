@@ -290,6 +290,12 @@ def _rs_divergence_pct(signal: Any) -> float:
 
 
 def _top_pick_sort_key(signal: Any) -> tuple[int, float]:
+    if str(getattr(signal, "momentum_method", "")) == "hybrid_return_rank_v1":
+        mom_rank = getattr(signal, "mom_rank", None)
+        mom_raw = getattr(signal, "mom_raw", float("nan"))
+        rank_key = int(mom_rank) if mom_rank is not None else 9999
+        raw_key = -float(mom_raw) if not pd.isna(mom_raw) else float("inf")
+        return ACTION_PRIORITY.get(signal.action, 99), rank_key, raw_key
     rs_div = _rs_divergence_pct(signal)
     rs_div_rank = -rs_div if not pd.isna(rs_div) else float("inf")
     return ACTION_PRIORITY.get(signal.action, 99), rs_div_rank

@@ -1,9 +1,6 @@
-"""
-Momentum indicators: Relative Strength, SMA trend, period returns, volatility, MDD.
-"""
+"""Momentum indicators: relative strength, return windows, gates, and diagnostics."""
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
 
 
@@ -66,6 +63,20 @@ def compute_sma(series: pd.Series, window: int) -> pd.Series:
     return series.rolling(window=window).mean()
 
 
+def compute_price_above_sma(close: pd.Series, window: int = 200) -> bool:
+    """Return True when the latest close is above the latest SMA(window)."""
+    if close.empty:
+        return False
+    sma_series = compute_sma(close, window)
+    if sma_series.empty:
+        return False
+    latest_close = close.iloc[-1]
+    latest_sma = sma_series.iloc[-1]
+    if pd.isna(latest_close) or pd.isna(latest_sma):
+        return False
+    return bool(float(latest_close) > float(latest_sma))
+
+
 def is_trend_positive(
     close: pd.Series, fast: int = 20, slow: int = 60
 ) -> bool:
@@ -90,6 +101,90 @@ def is_trend_positive(
     return bool(last_fast > last_slow)
 
 
+def compute_return_excluding_recent(
+    close: pd.Series,
+    *,
+    lookback_days: int,
+    skip_recent_days: int = 21,
+) -> float:
+    """Return trailing simple return ending before the most recent skip window.
+
+    The calculation uses:
+    - end price at ``t - skip_recent_days``
+    - start price at ``t - (lookback_days + skip_recent_days)``
+    """
+    if close.empty:
+        return float("nan")
+    if lookback_days <= 0:
+        raise ValueError("lookback_days must be positive")
+    if skip_recent_days < 0:
+        raise ValueError("skip_recent_days must be non-negative")
+
+    required = lookback_days + skip_recent_days
+    if len(close) < required:
+        return float("nan")
+
+    end_idx = -skip_recent_days if skip_recent_days > 0 else -1
+    start_idx = -(lookback_days + skip_recent_days)
+    start_price = float(close.iloc[start_idx])
+    end_price = float(close.iloc[end_idx])
+    if pd.isna(start_price) or pd.isna(end_price) or start_price == 0:
+        return float("nan")
+    return float(end_price / start_price - 1.0)
+
+
+def compute_relative_return_excluding_recent(
+    sector_close: pd.Series,
+    benchmark_close: pd.Series,
+    *,
+    lookback_days: int,
+    skip_recent_days: int = 21,
+) -> float:
+    """Return benchmark-relative trailing simple return excluding recent days."""
+    aligned_sector, aligned_bench = sector_close.align(benchmark_close, join="inner")
+    if aligned_sector.empty or aligned_bench.empty:
+        return float("nan")
+    sector_return = compute_return_excluding_recent(
+        aligned_sector,
+        lookback_days=lookback_days,
+        skip_recent_days=skip_recent_days,
+    )
+    bench_return = compute_return_excluding_recent(
+        aligned_bench,
+        lookback_days=lookback_days,
+        skip_recent_days=skip_recent_days,
+    )
+    if pd.isna(sector_return) or pd.isna(bench_return):
+        return float("nan")
+    return float(sector_return - bench_return)
+
+
+def compute_percentile_rank(
+    values: pd.Series | dict[str, float],
+    *,
+    ascending: bool = True,
+) -> pd.Series:
+    """Return percentile ranks for valid numeric values."""
+    series = values if isinstance(values, pd.Series) else pd.Series(values, dtype="float64")
+    numeric = pd.to_numeric(series, errors="coerce")
+    valid = numeric.dropna()
+    if valid.empty:
+        return pd.Series(index=numeric.index, dtype="float64")
+    ranked = valid.rank(pct=True, ascending=ascending, method="average")
+    return ranked.reindex(numeric.index)
+
+
+def compute_descending_rank(values: pd.Series | dict[str, float]) -> pd.Series:
+    """Return integer descending ranks where 1 is strongest."""
+    series = values if isinstance(values, pd.Series) else pd.Series(values, dtype="float64")
+    numeric = pd.to_numeric(series, errors="coerce")
+    valid = numeric.dropna()
+    if valid.empty:
+        return pd.Series(index=numeric.index, dtype="float64")
+    ranked = valid.rank(ascending=False, method="min").astype("int64")
+    return ranked.reindex(numeric.index)
+
+
 def compute_period_returns(close: pd.Series) -> dict[str, float]:
     """Compute standard period returns from the last available price.
 
@@ -105,7 +200,6 @@ def compute_period_returns(close: pd.Series) -> dict[str, float]:
                 "6M": float("nan"), "12M": float("nan")}
 
     last_price = close.iloc[-1]
-    last_date = close.index[-1]
 
     periods = {
         "1W": 5,     # ~5 trading days

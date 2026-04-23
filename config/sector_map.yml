@@ -15,6 +15,7 @@ regimes:
     sectors:
       - code: "1155"
         name: "KOSPI200 정보기술"
+        lookup_priority: 20
         export_sector: true
         etfs:
           - code: "139260"
@@ -23,6 +24,7 @@ regimes:
             name: "KODEX 200IT TR"
       - code: "1168"
         name: "KOSPI200 금융"
+        lookup_priority: 20
         export_sector: false
         etfs:
           - code: "139270"
@@ -32,12 +34,14 @@ regimes:
     sectors:
       - code: "5042"
         name: "KRX 산업재"
+        lookup_priority: 30
         export_sector: false
         etfs:
           - code: "227550"
             name: "TIGER 200 산업재"
       - code: "5044"
         name: "KRX 반도체"
+        lookup_priority: 10
         export_sector: true
         etfs:
           - code: "396500"
@@ -46,6 +50,7 @@ regimes:
             name: "KODEX 반도체"
       - code: "5045"
         name: "KRX 헬스케어"
+        lookup_priority: 10
         export_sector: false
         etfs:
           - code: "143860"
@@ -60,6 +65,7 @@ regimes:
     sectors:
       - code: "1157"
         name: "KOSPI200 생활소비재"
+        lookup_priority: 20
         export_sector: false
         etfs:
           - code: "266410"
@@ -68,6 +74,7 @@ regimes:
             name: "TIGER 200 생활소비재"
       - code: "1165"
         name: "KOSPI200 경기소비재"
+        lookup_priority: 20
         export_sector: false
         etfs:
           - code: "266390"
@@ -76,6 +83,7 @@ regimes:
             name: "TIGER 200 경기소비재"
       - code: "1170"
         name: "KOSPI200 유틸리티"
+        lookup_priority: 20
         export_sector: false
         etfs: []  # 국내 순수 유틸리티 ETF 없음
   Contraction:
@@ -86,12 +94,14 @@ regimes:
     sectors:
       - code: "5046"
         name: "KRX 미디어통신"
+        lookup_priority: 10
         export_sector: false
         etfs:
           - code: "228810"
             name: "TIGER 미디어통신"
       - code: "5048"
         name: "KRX 에너지화학"
+        lookup_priority: 15
         export_sector: false
         etfs:
           - code: "139250"
@@ -100,6 +110,7 @@ regimes:
             name: "KODEX 에너지화학"
       - code: "5049"
         name: "KRX 철강"
+        lookup_priority: 10
         export_sector: true
         etfs:
           - code: "117680"

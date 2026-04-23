@@ -6,6 +6,7 @@ import pytest
 import app as app_module
 import src.ui.panels as panels_module
 
+from src.signals.flow import summarize_sector_investor_flow
 from src.signals.matrix import SectorSignal
 from src.ui.copy import ALL_ACTION_KEY
 from src.ui.components import (
@@ -24,17 +25,21 @@ from src.ui.components import (
     render_analysis_toolbar,
     render_cycle_timeline_panel,
     render_decision_hero,
+    render_investor_decision_boards,
     render_page_header,
     render_panel_header,
     render_rs_momentum_bar,
     render_rs_scatter,
     render_signal_table,
     render_sector_detail_panel,
+    render_stock_lookup_control,
     render_status_card_row,
     render_status_strip,
+    render_progress_panel,
     render_top_bar_filters,
     render_top_picks_table,
     resolve_range_from_preset,
+    signal_display_sort_key,
 )
 from src.ui.styles import ACTION_COLORS, BLUE, DARK_GREY, GREY, get_action_colors
 
@@ -47,6 +52,10 @@ def _signal(
     *,
     macro_regime: str = "Recovery",
     macro_fit: bool = True,
+    macro_context_regime: str = "Recovery",
+    action_policy: str = "",
+    taxonomy_kind: str = "",
+    taxonomy_label: str = "",
     alerts: list[str] | None = None,
     returns: dict[str, float] | None = None,
     is_provisional: bool = False,
@@ -61,6 +70,7 @@ def _signal(
         rs_strong=False,
         trend_ok=rs >= rs_ma,
         momentum_strong=rs >= rs_ma,
+        momentum_core_pass=rs >= rs_ma,
         rsi_d=50.0,
         rsi_w=50.0,
         action=action,
@@ -70,6 +80,10 @@ def _signal(
         mdd_3m=-0.08,
         asof_date="2024-01-31",
         is_provisional=is_provisional,
+        macro_context_regime=macro_context_regime,
+        action_policy=action_policy,
+        taxonomy_kind=taxonomy_kind,
+        taxonomy_label=taxonomy_label,
     )
 
 
@@ -122,6 +136,38 @@ def test_render_status_strip_renders_markup_and_details(monkeypatch):
     assert "status-strip" in markdown_calls[0]
     assert "Cache fallback" in markdown_calls[0]
     assert any("KRX: HTTP_ERROR" in call for call in write_calls)
+
+
+def test_render_progress_panel_renders_progress_and_terminal_detail(monkeypatch):
+    calls: list[tuple[str, object]] = []
+
+    class _DummyHost:
+        def empty(self):
+            calls.append(("empty", None))
+
+        def container(self):
+            return _DummyBlock()
+
+    monkeypatch.setattr("src.ui.components.st.caption", lambda text: calls.append(("caption", text)))
+    monkeypatch.setattr("src.ui.components.st.progress", lambda value: calls.append(("progress", value)))
+    monkeypatch.setattr("src.ui.components.st.markdown", lambda text, **_: calls.append(("markdown", text)))
+    monkeypatch.setattr("src.ui.components.st.success", lambda text: calls.append(("success", text)))
+
+    render_progress_panel(
+        _DummyHost(),
+        {
+            "task": "투자자수급 갱신",
+            "phase": "재시도 수집 중",
+            "pct": 78,
+            "detail": "234/300 requests",
+            "status": "complete",
+        },
+    )
+
+    assert ("caption", "투자자수급 갱신 · 완료 · 78%") in calls
+    assert ("progress", 78) in calls
+    assert ("markdown", "**재시도 수집 중**") in calls
+    assert ("success", "234/300 requests") in calls
 
 
 def test_render_panel_header_renders_panel_markup(monkeypatch):
@@ -187,6 +233,18 @@ def test_render_rs_scatter_allows_custom_height_and_margin():
     assert fig.layout.margin.b == 24
 
 
+def test_render_rs_scatter_diagnostic_only_title_and_legacy_trend_hover():
+    signal = _signal("A", "Watch", 1.08, 1.02)
+    signal.momentum_method = "hybrid_return_rank_v1"
+    signal.trend_ok = False
+    signal.legacy_trend_ok = True
+
+    fig = render_rs_scatter([signal], diagnostic_only=True)
+
+    assert fig.layout.title.text.startswith("Legacy RS Diagnostic")
+    assert "추세: 양호" in str(fig.data[0].hovertext[0])
+
+
 def test_render_rs_momentum_bar_returns_empty_when_no_valid_data():
     signals = [
         _signal("A", "N/A", 1.10, 1.00),
@@ -208,6 +266,17 @@ def test_render_rs_momentum_bar_valid_data_has_percent_suffix():
     fig = render_rs_momentum_bar(signals, theme_mode="dark")
     assert len(fig.data) == 1
     assert fig.layout.xaxis.ticksuffix == "%"
+
+
+def test_render_rs_momentum_bar_diagnostic_title():
+    signals = [
+        _signal("A", "Watch", 1.10, 1.00),
+        _signal("B", "Hold", 0.95, 1.00),
+    ]
+
+    fig = render_rs_momentum_bar(signals, theme_mode="dark", diagnostic_only=True)
+
+    assert fig.layout.title.text.startswith("Legacy RS Diagnostic")
 
 
 def test_action_colors_watch_hold_mapping():
@@ -272,6 +341,7 @@ def test_render_rs_scatter_uses_light_theme_action_palette():
 def test_render_top_bar_filters_returns_selected_state(monkeypatch):
     session_state: dict[str, object] = {}
     markdown_calls: list[str] = []
+    caption_calls: list[str] = []
 
     monkeypatch.setattr("src.ui.components.st.session_state", session_state)
     monkeypatch.setattr("src.ui.components.st.container", lambda **_: _DummyBlock())
@@ -295,6 +365,10 @@ def test_render_top_bar_filters_returns_selected_state(monkeypatch):
         "src.ui.components.st.markdown",
         lambda text, **_: markdown_calls.append(text),
     )
+    monkeypatch.setattr(
+        "src.ui.components.st.caption",
+        lambda text: caption_calls.append(text),
+    )
 
     action, regime_only, position_mode, alerted_only = render_top_bar_filters(
         current_regime="Recovery",
@@ -309,6 +383,19 @@ def test_render_top_bar_filters_returns_selected_state(monkeypatch):
     assert any("command-bar" in call for call in markdown_calls)
     assert any("top-bar-summary" in call for call in markdown_calls)
     assert any("Recovery" in call for call in markdown_calls)
+    assert any("하단 상세 뷰 필터" in call or "Downstream detail filters" in call for call in markdown_calls)
+    assert any("아래 요약·차트·테이블·탭의 연구 뷰만 정제합니다." in call for call in markdown_calls)
+    assert any(
+        "필터링된 보기(요약, 차트, 테이블)" in call
+        or "downstream research view" in call
+        or "요약·차트·테이블" in call
+        for call in caption_calls
+    )
+    assert any(
+        "상단 실전 대응 보드와 분석 캔버스는 바꾸지 않습니다" in call
+        or "do not change the upper decision boards or analysis canvas" in call
+        for call in caption_calls
+    )
 
 
 def test_render_decision_hero_renders_regime_and_provisional_badge(monkeypatch):
@@ -416,17 +503,53 @@ def test_describe_signal_decision_marks_experimental_flow_overlay():
     assert view["judgment_confidence"] == "실험 보정 포함"
 
 
+def test_describe_signal_decision_hybrid_uses_raw_percentile_value():
+    signal = _signal("A", "Strong Buy", 1.10, 1.00)
+    signal.momentum_method = "hybrid_return_rank_v1"
+    signal.mom_percentile = 82.0
+    signal.mom_raw = 0.12
+    signal.mom_rank = 1
+    signal.trend_ok = True
+    signal.momentum_strong = True
+
+    view = describe_signal_decision(signal, ["Sector A"])
+
+    assert "모멘텀 백분위 82p" in str(view["reason"])
+    assert "8200" not in str(view["reason"])
+
+
+def test_signal_display_sort_key_uses_hybrid_rank_then_raw():
+    held_sectors: list[str] = []
+    signal_a = _signal("A", "Strong Buy", 1.10, 1.00)
+    signal_b = _signal("B", "Strong Buy", 1.10, 1.00)
+    signal_c = _signal("C", "Strong Buy", 1.10, 1.00)
+    for signal in (signal_a, signal_b, signal_c):
+        signal.momentum_method = "hybrid_return_rank_v1"
+    signal_a.mom_rank = 2
+    signal_a.mom_raw = 0.12
+    signal_b.mom_rank = 1
+    signal_b.mom_raw = 0.08
+    signal_c.mom_rank = 2
+    signal_c.mom_raw = 0.25
+
+    ordered = sorted([signal_a, signal_b, signal_c], key=lambda item: signal_display_sort_key(item, held_sectors))
+
+    assert [signal.sector_name for signal in ordered] == ["Sector B", "Sector C", "Sector A"]
+
+
 def test_render_investor_flow_summary_marks_reference_only_preview(monkeypatch):
     warning_calls: list[str] = []
     caption_calls: list[str] = []
     info_calls: list[str] = []
+    markdown_calls: list[str] = []
 
     monkeypatch.setattr(panels_module.st, "container", lambda **_: _DummyBlock())
+    monkeypatch.setattr(panels_module.st, "expander", lambda *_args, **_kwargs: _DummyBlock())
     monkeypatch.setattr(panels_module, "render_panel_header", lambda **kwargs: None)
     monkeypatch.setattr(panels_module.st, "warning", lambda text: warning_calls.append(text))
     monkeypatch.setattr(panels_module.st, "caption", lambda text: caption_calls.append(text))
     monkeypatch.setattr(panels_module.st, "info", lambda text: info_calls.append(text))
-    monkeypatch.setattr(panels_module.st, "markdown", lambda *args, **kwargs: None)
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **kwargs: markdown_calls.append(text))
 
     frame = pd.DataFrame(
         {
@@ -453,6 +576,7 @@ def test_render_investor_flow_summary_marks_reference_only_preview(monkeypatch):
     assert any("최종 투자판단에는 반영되지 않았습니다" in text for text in warning_calls)
     assert not any("표시할 투자자 수급 데이터가 없습니다" in text for text in info_calls)
     assert not any("투자자 수급 탭" in text for text in caption_calls)
+    assert any("단기 평균" in text for text in markdown_calls)
 
 
 def test_build_investor_flow_glance_rows_sorts_by_abs_score_and_sector_tie_break():
@@ -501,6 +625,7 @@ def test_render_investor_flow_summary_limits_to_top_four_and_shows_participants(
     markdown_calls: list[str] = []
 
     monkeypatch.setattr(panels_module.st, "container", lambda **_: _DummyBlock())
+    monkeypatch.setattr(panels_module.st, "expander", lambda *_args, **_kwargs: _DummyBlock())
     monkeypatch.setattr(panels_module, "render_panel_header", lambda **kwargs: None)
     monkeypatch.setattr(panels_module.st, "warning", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(panels_module.st, "caption", lambda *_args, **_kwargs: None)
@@ -540,6 +665,41 @@ def test_render_investor_flow_summary_limits_to_top_four_and_shows_participants(
     assert "개인" in flow_markup
 
 
+def test_render_investor_flow_summary_signal_rows_tone_from_sigma_state_not_ratio(monkeypatch):
+    markdown_calls: list[str] = []
+
+    monkeypatch.setattr(panels_module.st, "container", lambda **_: _DummyBlock())
+    monkeypatch.setattr(panels_module.st, "expander", lambda *_args, **_kwargs: _DummyBlock())
+    monkeypatch.setattr(panels_module, "render_panel_header", lambda **kwargs: None)
+    monkeypatch.setattr(panels_module.st, "warning", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module.st, "info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **kwargs: markdown_calls.append(text))
+
+    signal = _signal("A", "Watch", 1.10, 1.00)
+    signal.flow_state = "neutral"
+    signal.flow_score = 0.2
+    signal.foreign_flow_state = "adverse"
+    signal.foreign_flow_ratio = 0.15
+    signal.institutional_flow_state = "neutral"
+    signal.institutional_flow_ratio = 0.02
+    signal.retail_flow_state = "supportive"
+    signal.retail_flow_ratio = -0.03
+
+    panels_module.render_investor_flow_summary(
+        signals=[signal],
+        investor_flow_status="LIVE",
+        investor_flow_fresh=True,
+        investor_flow_profile="foreign_lead",
+        investor_flow_frame=pd.DataFrame(),
+        investor_flow_detail={},
+    )
+
+    flow_markup = next(text for text in markdown_calls if "flow-container" in text)
+    assert "수급 역풍" in flow_markup
+    assert "var(--danger)" in flow_markup
+
+
 def test_build_investor_flow_snapshot_rows_pivots_latest_snapshot(monkeypatch):
     frame = pd.DataFrame(
         {
@@ -560,10 +720,48 @@ def test_build_investor_flow_snapshot_rows_pivots_latest_snapshot(monkeypatch):
     assert rows[0]["retail"] == "-5.00%"
 
 
+def test_build_investor_flow_snapshot_rows_keeps_raw_fields_and_adds_cues():
+    frame = pd.DataFrame(
+        {
+            "sector_code": ["5044"] * 9 + ["1234"] * 9,
+            "sector_name": ["KRX 반도체"] * 9 + ["KRX 은행"] * 9,
+            "investor_type": (["외국인"] * 3 + ["기관합계"] * 3 + ["개인"] * 3) * 2,
+            "net_buy_amount": [10, 20, 30, 5, 10, 15, -8, -10, -12, 1, 2, 3, 1, 1, 2, -1, -2, -2],
+            "net_flow_ratio": [0.01, 0.02, 0.03, 0.00, 0.01, 0.02, -0.01, -0.02, -0.03, 0.01, 0.01, 0.01, 0.0, 0.01, 0.01, -0.01, -0.01, -0.01],
+        },
+        index=pd.to_datetime(
+            ["2026-04-01", "2026-04-02", "2026-04-03"] * 6
+        ),
+    )
+    summary_map = summarize_sector_investor_flow(
+        frame,
+        flow_profile="foreign_lead",
+        short_window=2,
+        long_window=3,
+    )
+
+    rows = build_investor_flow_snapshot_rows(
+        frame,
+        shared_flow_summary_map=summary_map,
+        locale="ko",
+    )
+
+    assert rows[0]["sector"] == "KRX 반도체"
+    assert rows[0]["sector_code"] == "5044"
+    assert rows[0]["flow_score"] == pytest.approx(0.6123724356957945)
+    assert rows[0]["foreign"] == "+3.00%"
+    assert rows[0]["institutional"] == "+2.00%"
+    assert rows[0]["retail"] == "-3.00%"
+    assert "σ" in rows[0]["foreign_cue"]
+    assert rows[0]["foreign_cue_raw"] == "supportive"
+    assert rows[1]["sector"] == "KRX 은행"
+
+
 def test_render_investor_flow_summary_uses_raw_snapshot_fallback_when_signal_flow_is_missing(monkeypatch):
     markdown_calls: list[str] = []
 
     monkeypatch.setattr(panels_module.st, "container", lambda **_: _DummyBlock())
+    monkeypatch.setattr(panels_module.st, "expander", lambda *_args, **_kwargs: _DummyBlock())
     monkeypatch.setattr(panels_module, "render_panel_header", lambda **kwargs: None)
     monkeypatch.setattr(panels_module.st, "warning", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(panels_module.st, "caption", lambda *_args, **_kwargs: None)
@@ -596,6 +794,52 @@ def test_render_investor_flow_summary_uses_raw_snapshot_fallback_when_signal_flo
     assert "+20.00%" in flow_markup
     assert "+10.00%" in flow_markup
     assert "-5.00%" in flow_markup
+    assert "σ" not in flow_markup
+
+
+def test_render_investor_flow_summary_uses_raw_snapshot_fallback_when_signals_are_empty(monkeypatch):
+    markdown_calls: list[str] = []
+
+    monkeypatch.setattr(panels_module.st, "container", lambda **_: _DummyBlock())
+    monkeypatch.setattr(panels_module.st, "expander", lambda *_args, **_kwargs: _DummyBlock())
+    monkeypatch.setattr(panels_module, "render_panel_header", lambda **kwargs: None)
+    monkeypatch.setattr(panels_module.st, "warning", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module.st, "info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **kwargs: markdown_calls.append(text))
+
+    frame = pd.DataFrame(
+        {
+            "sector_code": ["5044"] * 9,
+            "sector_name": ["KRX 반도체"] * 9,
+            "investor_type": ["외국인"] * 3 + ["기관합계"] * 3 + ["개인"] * 3,
+            "net_buy_amount": [10, 20, 30, 5, 10, 15, -8, -10, -12],
+            "net_flow_ratio": [0.01, 0.02, 0.03, 0.00, 0.01, 0.02, -0.01, -0.02, -0.03],
+        },
+        index=pd.to_datetime(["2026-04-01", "2026-04-02", "2026-04-03"] * 3),
+    )
+    summary_map = summarize_sector_investor_flow(
+        frame,
+        flow_profile="foreign_lead",
+        short_window=2,
+        long_window=3,
+    )
+
+    panels_module.render_investor_flow_summary(
+        signals=[],
+        investor_flow_status="CACHED",
+        investor_flow_fresh=False,
+        investor_flow_profile="foreign_lead",
+        investor_flow_frame=frame,
+        investor_flow_detail={"bootstrap_partial_preview": True},
+        shared_flow_summary_map=summary_map,
+    )
+
+    flow_markup = next(text for text in markdown_calls if "flow-container" in text)
+    assert "KRX 반도체" in flow_markup
+    assert "참고용 raw snapshot" in flow_markup
+    assert "+3.00%" in flow_markup
+    assert "σ" in flow_markup
 
 
 def test_render_top_picks_table_uses_native_dataframe_and_limit(monkeypatch):
@@ -641,6 +885,188 @@ def test_render_top_picks_table_uses_native_dataframe_and_limit(monkeypatch):
     assert any("Showing top 5 of 6" in text for text in caption_calls)
 
 
+def test_render_top_picks_table_orders_rows_with_signal_display_sort_key(monkeypatch):
+    dataframe_calls: list[tuple[pd.DataFrame, dict]] = []
+
+    monkeypatch.setattr(
+        "src.ui.components.st.dataframe",
+        lambda df, **kwargs: dataframe_calls.append((df.copy(), kwargs)),
+    )
+    monkeypatch.setattr("src.ui.components.st.caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.ui.components.st.info", lambda *_args, **_kwargs: None)
+
+    held_watch = _signal("A", "Watch", 1.08, 1.00)
+    held_watch.sector_name = "Alpha"
+    held_buy = _signal("B", "Strong Buy", 1.02, 1.00)
+    held_buy.sector_name = "Beta"
+    new_buy = _signal("C", "Strong Buy", 1.06, 1.00)
+    new_buy.sector_name = "Gamma"
+    new_hold = _signal("D", "Hold", 1.11, 1.00)
+    new_hold.sector_name = "Delta"
+
+    signals = [new_hold, held_watch, new_buy, held_buy]
+    held_sectors = ["Alpha", "Beta"]
+
+    render_top_picks_table(signals, held_sectors=held_sectors, limit=5)
+
+    assert len(dataframe_calls) == 1
+    df, _ = dataframe_calls[0]
+    expected_order = [
+        signal.sector_name
+        for signal in sorted(
+            signals,
+            key=lambda signal: signal_display_sort_key(signal, held_sectors),
+        )
+    ]
+    assert list(df["Sector"]) == expected_order
+
+
+def test_render_top_picks_table_preserves_held_and_new_empty_states(monkeypatch):
+    info_calls: list[str] = []
+
+    monkeypatch.setattr("src.ui.components.st.info", lambda text: info_calls.append(text))
+    monkeypatch.setattr("src.ui.components.st.dataframe", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.ui.components.st.caption", lambda *_args, **_kwargs: None)
+
+    new_only_signal = _signal("A", "Strong Buy", 1.10, 1.00)
+    new_only_signal.sector_name = "Alpha"
+
+    render_top_picks_table([new_only_signal], held_sectors=[], position_mode="held")
+    render_top_picks_table([new_only_signal], held_sectors=["Alpha"], position_mode="new")
+
+    assert info_calls == [
+        "포트폴리오 대응 추천을 위해 보유 섹터를 먼저 추가하세요.",
+        "현재 결정 규칙에 부합하는 신규 매수 아이디어가 없습니다.",
+    ]
+
+
+def test_render_investor_decision_boards_routes_through_dedicated_board_card_path(monkeypatch):
+    session_state: dict[str, object] = {"held_sectors": ["Sector A"]}
+    board_calls: list[dict[str, object]] = []
+    signal = _signal("A", "Strong Buy", 1.10, 1.00)
+
+    monkeypatch.setattr(panels_module.st, "session_state", session_state)
+    monkeypatch.setattr(panels_module.st, "container", lambda **_: _DummyBlock())
+    monkeypatch.setattr(panels_module.st, "columns", lambda count, **_: [_DummyBlock() for _ in range(count)])
+    monkeypatch.setattr(
+        panels_module.st,
+        "multiselect",
+        lambda _label, options, default, **kwargs: list(default),
+    )
+    monkeypatch.setattr(panels_module.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module, "render_panel_header", lambda **kwargs: None)
+    monkeypatch.setattr(
+        panels_module,
+        "_render_decision_board_cards",
+        lambda **kwargs: board_calls.append(kwargs),
+    )
+
+    selected = render_investor_decision_boards(
+        signals=[signal],
+        held_sector_options=["Sector A", "Sector B"],
+        limit=5,
+    )
+
+    assert selected == ["Sector A"]
+    assert board_calls == [
+        {
+            "signals": [signal],
+            "held_sectors": ["Sector A"],
+            "position_mode": "held",
+            "limit": 5,
+            "locale": "ko",
+        },
+        {
+            "signals": [signal],
+            "held_sectors": ["Sector A"],
+            "position_mode": "new",
+            "limit": 5,
+            "locale": "ko",
+        },
+    ]
+
+
+def test_render_investor_decision_boards_defaults_to_five_items_per_board(monkeypatch):
+    session_state: dict[str, object] = {"held_sectors": ["Sector A"]}
+    limits: list[int] = []
+
+    monkeypatch.setattr(panels_module.st, "session_state", session_state)
+    monkeypatch.setattr(panels_module.st, "container", lambda **_: _DummyBlock())
+    monkeypatch.setattr(panels_module.st, "columns", lambda count, **_: [_DummyBlock() for _ in range(count)])
+    monkeypatch.setattr(
+        panels_module.st,
+        "multiselect",
+        lambda _label, options, default, **kwargs: list(default),
+    )
+    monkeypatch.setattr(panels_module.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module, "render_panel_header", lambda **kwargs: None)
+    monkeypatch.setattr(
+        panels_module,
+        "_render_decision_board_cards",
+        lambda **kwargs: limits.append(int(kwargs["limit"])),
+    )
+
+    render_investor_decision_boards(
+        signals=[_signal("A", "Strong Buy", 1.10, 1.00)],
+        held_sector_options=["Sector A", "Sector B"],
+    )
+
+    assert limits == [5, 5]
+
+
+def test_render_decision_board_cards_renders_action_why_and_invalidation(monkeypatch):
+    markdown_calls: list[str] = []
+    info_calls: list[str] = []
+    signal = _signal("A", "Strong Buy", 1.12, 1.00, returns={"1M": 0.04, "3M": 0.13})
+    signal.sector_name = "Alpha"
+
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **_: markdown_calls.append(text))
+    monkeypatch.setattr(panels_module.st, "info", lambda text: info_calls.append(text))
+    monkeypatch.setattr(panels_module.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.ui.components.st.dataframe", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("dataframe should not be used")))
+
+    panels_module._render_decision_board_cards(
+        signals=[signal],
+        held_sectors=["Alpha"],
+        position_mode="held",
+        limit=5,
+        locale="ko",
+    )
+
+    assert not info_calls
+    assert len(markdown_calls) == 1
+    markup = markdown_calls[0]
+    assert "Alpha" in markup
+    assert "보유 대응" in markup
+    assert "추가 매수 후보" in markup
+    assert "핵심 판단" in markup
+    assert "왜" in markup
+    assert "무효화 조건" in markup
+
+
+def test_render_decision_board_cards_maps_watch_to_supported_badge_tone(monkeypatch):
+    markdown_calls: list[str] = []
+    signal = _signal("A", "Watch", 1.01, 1.00)
+    signal.sector_name = "Alpha"
+
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **_: markdown_calls.append(text))
+    monkeypatch.setattr(panels_module.st, "info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module.st, "caption", lambda *_args, **_kwargs: None)
+
+    panels_module._render_decision_board_cards(
+        signals=[signal],
+        held_sectors=[],
+        position_mode="new",
+        limit=5,
+        locale="ko",
+    )
+
+    assert len(markdown_calls) == 1
+    markup = markdown_calls[0]
+    assert "flow-card__badge--neutral" in markup
+    assert "flow-card__badge--info" not in markup
+
+
 def test_render_signal_table_uses_native_dataframe_and_applies_filters(monkeypatch):
     dataframe_calls: list[tuple[pd.DataFrame, dict]] = []
     info_calls: list[str] = []
@@ -684,6 +1110,7 @@ def test_render_signal_table_uses_native_dataframe_and_applies_filters(monkeypat
         "Decision",
         "In Regime",
         "Action",
+        "Taxonomy",
         "ETF",
         "Reason",
         "Invalidation",
@@ -710,6 +1137,72 @@ def test_render_signal_table_uses_native_dataframe_and_applies_filters(monkeypat
     df, _ = dataframe_calls[0]
     assert df.iloc[0]["Action"] == "[~] Watch"
     assert df.iloc[0]["Decision"] == "Hold / monitor"
+
+
+def test_render_signal_table_uses_macro_context_for_kr_rows(monkeypatch):
+    dataframe_calls: list[tuple[pd.DataFrame, dict]] = []
+
+    monkeypatch.setattr(
+        "src.ui.components.st.dataframe",
+        lambda df, **kwargs: dataframe_calls.append((df.copy(), kwargs)),
+    )
+    monkeypatch.setattr("src.ui.components.st.info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.ui.components.st.caption", lambda *_args, **_kwargs: None)
+
+    render_signal_table(
+        [
+            _signal(
+                "A",
+                "Strong Buy",
+                1.10,
+                1.00,
+                action_policy="KR_MOMENTUM_ONLY",
+                macro_fit=False,
+                macro_regime="Unassigned",
+                macro_context_regime="Recovery",
+                taxonomy_kind="THEME",
+                taxonomy_label="반도체",
+            )
+        ],
+        filter_action="Strong Buy",
+        filter_regime_only=True,
+        current_regime="Recovery",
+    )
+
+    df, kwargs = dataframe_calls[0]
+    assert "Macro Context" in df.columns
+    assert "In Regime" not in df.columns
+    assert df.iloc[0]["Macro Context"] == "참고: Recovery"
+    assert df.iloc[0]["Taxonomy"] == "THEME · 반도체"
+    assert "Macro Context" in kwargs["column_config"]
+
+
+def test_render_top_bar_filters_hides_regime_toggle_when_disabled(monkeypatch):
+    session_state = {
+        "filter_action_global": ALL_ACTION_KEY,
+        "filter_regime_only_global": True,
+        "position_mode": "all",
+        "show_alerted_only": False,
+    }
+    toggle_calls: list[str] = []
+
+    monkeypatch.setattr("src.ui.components.st.session_state", session_state)
+    monkeypatch.setattr("src.ui.components.st.container", lambda **kwargs: _DummyBlock())
+    monkeypatch.setattr("src.ui.components.st.markdown", lambda *args, **kwargs: None)
+    monkeypatch.setattr("src.ui.components.st.caption", lambda *args, **kwargs: None)
+    monkeypatch.setattr("src.ui.components.st.columns", lambda spec, **kwargs: [_DummyBlock() for _ in range(len(spec))])
+    monkeypatch.setattr("src.ui.components.st.selectbox", lambda *args, **kwargs: None)
+    monkeypatch.setattr("src.ui.components.st.segmented_control", lambda *args, **kwargs: None)
+    monkeypatch.setattr("src.ui.components.st.toggle", lambda label, **kwargs: toggle_calls.append(label))
+
+    _, regime_only, _, _ = render_top_bar_filters(
+        current_regime="Recovery",
+        action_options=[ALL_ACTION_KEY, "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
+        enable_regime_filter=False,
+    )
+
+    assert regime_only is False
+    assert toggle_calls == ["알림 있는 항목만"]
 
 
 def test_render_signal_table_handles_empty_after_filters(monkeypatch):
@@ -813,6 +1306,172 @@ def test_render_analysis_toolbar_returns_form_selection(monkeypatch):
     assert start == expected_start
     assert end == expected_end
     assert any("analysis-toolbar" in call for call in markdown_calls)
+
+
+def test_render_analysis_toolbar_surfaces_page_level_context_summary(monkeypatch):
+    markdown_calls: list[str] = []
+
+    monkeypatch.setattr("src.ui.components.st.markdown", lambda text, **_: markdown_calls.append(text))
+    monkeypatch.setattr("src.ui.components.st.form", lambda *_args, **_kwargs: _DummyBlock())
+    monkeypatch.setattr("src.ui.components.st.columns", lambda spec, **_: [_DummyBlock() for _ in range(len(spec))])
+    monkeypatch.setattr(
+        "src.ui.components.st.date_input",
+        lambda label, value, **_: value,
+    )
+    monkeypatch.setattr(
+        "src.ui.components.st.segmented_control",
+        lambda *_args, **_kwargs: "1Y",
+    )
+    monkeypatch.setattr(
+        "src.ui.components.st.form_submit_button",
+        lambda *_args, **_kwargs: False,
+    )
+
+    start, end, preset, submitted = render_analysis_toolbar(
+        min_date=pd.Timestamp("2024-01-31").date(),
+        max_date=pd.Timestamp("2025-01-31").date(),
+        start_date=pd.Timestamp("2024-07-31").date(),
+        end_date=pd.Timestamp("2025-01-31").date(),
+        selected_range_preset="1Y",
+        selected_cycle_phase="ALL",
+        selected_sector="Sector A",
+    )
+
+    assert submitted is False
+    assert preset == "1Y"
+    assert start == pd.Timestamp("2024-07-31").date()
+    assert end == pd.Timestamp("2025-01-31").date()
+    assert any('analysis-toolbar__summary-item"><span>기간</span>' in call for call in markdown_calls)
+    assert any('analysis-toolbar__summary-item"><span>사이클</span>' in call for call in markdown_calls)
+    assert any('analysis-toolbar__summary-item"><span>섹터</span>' in call for call in markdown_calls)
+    assert any("리서치 범위" in call or "Research scope" in call for call in markdown_calls)
+    assert any("기본 판단 규칙은 바꾸지 않습니다" in call or "does not change the base judgment rules" in call for call in markdown_calls)
+
+
+def test_render_stock_lookup_control_returns_query_and_submit(monkeypatch):
+    markdown_calls: list[str] = []
+    caption_calls: list[str] = []
+
+    monkeypatch.setattr("src.ui.components.st.markdown", lambda text, **_: markdown_calls.append(text))
+    monkeypatch.setattr("src.ui.components.st.caption", lambda text, **_: caption_calls.append(text))
+    monkeypatch.setattr("src.ui.components.st.form", lambda *_args, **_kwargs: _DummyBlock())
+    monkeypatch.setattr("src.ui.components.st.columns", lambda spec, **_: [_DummyBlock() for _ in range(len(spec))])
+    monkeypatch.setattr("src.ui.components.st.text_input", lambda *_args, **_kwargs: "005930")
+    monkeypatch.setattr("src.ui.components.st.form_submit_button", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr("src.ui.components.st.success", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.ui.components.st.warning", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.ui.components.st.info", lambda *_args, **_kwargs: None)
+
+    query, submitted = render_stock_lookup_control(
+        market_id="KR",
+        query_value="",
+        status="",
+        message="",
+    )
+
+    assert submitted is True
+    assert query == "005930"
+    assert any("종목" in call or "Stock" in call for call in markdown_calls)
+    assert any("구성종목" in call or "constituent membership" in call for call in caption_calls)
+
+
+def test_render_stock_lookup_control_surfaces_market_specific_feedback(monkeypatch):
+    caption_calls: list[str] = []
+    success_calls: list[str] = []
+
+    monkeypatch.setattr("src.ui.components.st.markdown", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.ui.components.st.caption", lambda text, **_: caption_calls.append(text))
+    monkeypatch.setattr("src.ui.components.st.form", lambda *_args, **_kwargs: _DummyBlock())
+    monkeypatch.setattr("src.ui.components.st.columns", lambda spec, **_: [_DummyBlock() for _ in range(len(spec))])
+    monkeypatch.setattr("src.ui.components.st.text_input", lambda *_args, **_kwargs: "MSFT")
+    monkeypatch.setattr("src.ui.components.st.form_submit_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("src.ui.components.st.success", lambda text, **_: success_calls.append(text))
+    monkeypatch.setattr("src.ui.components.st.warning", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.ui.components.st.info", lambda *_args, **_kwargs: None)
+
+    query, submitted = render_stock_lookup_control(
+        market_id="US",
+        query_value="MSFT",
+        status="success",
+        message="resolved",
+    )
+
+    assert submitted is False
+    assert query == "MSFT"
+    assert success_calls == ["resolved"]
+    assert any("issuer classification" in call or "발행사 업종" in call for call in caption_calls)
+
+
+def test_render_stock_lookup_control_renders_all_matched_sectors(monkeypatch):
+    markdown_calls: list[str] = []
+    caption_calls: list[str] = []
+
+    monkeypatch.setattr("src.ui.components.st.markdown", lambda text, **_: markdown_calls.append(text))
+    monkeypatch.setattr("src.ui.components.st.caption", lambda text, **_: caption_calls.append(text))
+    monkeypatch.setattr("src.ui.components.st.form", lambda *_args, **_kwargs: _DummyBlock())
+    monkeypatch.setattr("src.ui.components.st.columns", lambda spec, **_: [_DummyBlock() for _ in range(len(spec))])
+    monkeypatch.setattr("src.ui.components.st.text_input", lambda *_args, **_kwargs: "005930")
+    monkeypatch.setattr("src.ui.components.st.form_submit_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("src.ui.components.st.success", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.ui.components.st.warning", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.ui.components.st.info", lambda *_args, **_kwargs: None)
+
+    query, submitted = render_stock_lookup_control(
+        market_id="KR",
+        query_value="005930",
+        status="success",
+        message="resolved",
+        display_model={
+            "canonical_sector": {"sector_code": "5044", "sector_name": "KRX 반도체"},
+            "matched_sectors": [
+                {"sector_code": "5044", "sector_name": "KRX 반도체", "snapshot_date": "20260417"},
+                {"sector_code": "1155", "sector_name": "KOSPI200 정보기술", "snapshot_date": "20260417"},
+                {"sector_code": "5042", "sector_name": "KRX 산업재", "snapshot_date": "20260417"},
+            ],
+            "result": {
+                "canonicalization_basis": "lookup_priority_same_date",
+                "match_date_mode": "same_date",
+                "match_effective_date": "20260417",
+            },
+        },
+    )
+
+    assert submitted is False
+    assert query == "005930"
+    assert any("매칭 섹터" in call or "Matched sectors" in call for call in caption_calls)
+    assert any("KRX 반도체 (현재 적용)" in call or "KRX 반도체 (Selected)" in call for call in markdown_calls)
+    assert any("KOSPI200 정보기술" in call for call in markdown_calls)
+    assert any("KRX 산업재" in call for call in markdown_calls)
+
+
+def test_render_stock_lookup_control_does_not_require_hierarchy_metadata(monkeypatch):
+    markdown_calls: list[str] = []
+
+    monkeypatch.setattr("src.ui.components.st.markdown", lambda text, **_: markdown_calls.append(text))
+    monkeypatch.setattr("src.ui.components.st.caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.ui.components.st.form", lambda *_args, **_kwargs: _DummyBlock())
+    monkeypatch.setattr("src.ui.components.st.columns", lambda spec, **_: [_DummyBlock() for _ in range(len(spec))])
+    monkeypatch.setattr("src.ui.components.st.text_input", lambda *_args, **_kwargs: "005930")
+    monkeypatch.setattr("src.ui.components.st.form_submit_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr("src.ui.components.st.success", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.ui.components.st.warning", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr("src.ui.components.st.info", lambda *_args, **_kwargs: None)
+
+    render_stock_lookup_control(
+        market_id="KR",
+        query_value="005930",
+        status="success",
+        message="resolved",
+        display_model={
+            "canonical_sector": {"sector_code": "5044", "sector_name": "KRX 반도체"},
+            "matched_sectors": [
+                {"sector_code": "5044", "sector_name": "KRX 반도체", "snapshot_date": "20260417"},
+            ],
+            "result": {"canonicalization_basis": "single_match", "match_date_mode": "not_applicable", "match_effective_date": ""},
+        },
+    )
+
+    assert any("KRX 반도체" in call for call in markdown_calls)
 
 
 def test_range_preset_helpers_use_year_windows():

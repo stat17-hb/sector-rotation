@@ -74,6 +74,16 @@ _SETTINGS = {
     "fx_shock_pct": 3.0,
 }
 
+_HYBRID_SETTINGS = {
+    **_SETTINGS,
+    "momentum_method": "hybrid_return_rank_v1",
+    "momentum_skip_recent_days": 21,
+    "momentum_lookback_6m_days": 126,
+    "momentum_lookback_12m_days": 252,
+    "momentum_rank_threshold_pct": 0.60,
+    "momentum_abs_filter": "price_gt_200dma",
+}
+
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -265,3 +275,154 @@ class TestSignalPipelineIntegration:
             assert "Overheat" in sec01.alerts, (
                 f"RSI={sec01.rsi_d:.1f} >= 70 but Overheat alert missing"
             )
+
+    def test_hybrid_momentum_uses_rank_and_200dma_gate(self):
+        bench = _make_prices(320, seed=0, trend=0.0)
+        sec01 = _make_prices(320, seed=1, trend=0.009)
+        sec02 = _make_prices(320, seed=2, trend=-0.002)
+
+        df = pd.concat(
+            [
+                _sector_prices_df("BENCH", "Benchmark", bench),
+                _sector_prices_df("SEC01", "Test Sector A", sec01),
+                _sector_prices_df("SEC02", "Test Sector B", sec02),
+            ]
+        ).sort_index()
+
+        signals = build_signal_table(
+            sector_prices=df,
+            benchmark_prices=bench,
+            macro_result=_macro_result("Recovery"),
+            sector_map=_SECTOR_MAP,
+            settings=_HYBRID_SETTINGS,
+            fx_change_pct=None,
+        )
+        by_code = {signal.index_code: signal for signal in signals}
+
+        assert by_code["SEC01"].momentum_method == "hybrid_return_rank_v1"
+        assert by_code["SEC01"].mom_rank == 1
+        assert by_code["SEC01"].momentum_strong is True
+        assert by_code["SEC01"].trend_ok is True
+
+    def test_legacy_rs_insufficiency_still_returns_na(self):
+        bench = _make_prices(15, seed=0, trend=0.0)
+        sec01 = _make_prices(15, seed=1, trend=0.008)
+        df = pd.concat(
+            [
+                _sector_prices_df("BENCH", "Benchmark", bench),
+                _sector_prices_df("SEC01", "Test Sector A", sec01),
+            ]
+        ).sort_index()
+
+        signals = build_signal_table(
+            sector_prices=df,
+            benchmark_prices=bench,
+            macro_result=_macro_result("Recovery"),
+            sector_map=_SECTOR_MAP,
+            settings=_SETTINGS,
+            fx_change_pct=None,
+        )
+        by_code = {signal.index_code: signal for signal in signals}
+
+        assert by_code["SEC01"].action == "N/A"
+        assert "RS Data Insufficient" in by_code["SEC01"].alerts
+
+    def test_hybrid_non_positive_momentum_raw_does_not_pass(self):
+        bench = _make_prices(320, seed=0, trend=0.006)
+        sec01 = _make_prices(320, seed=1, trend=0.001)
+        sec02 = _make_prices(320, seed=2, trend=0.0005)
+
+        df = pd.concat(
+            [
+                _sector_prices_df("BENCH", "Benchmark", bench),
+                _sector_prices_df("SEC01", "Test Sector A", sec01),
+                _sector_prices_df("SEC02", "Test Sector B", sec02),
+            ]
+        ).sort_index()
+
+        signals = build_signal_table(
+            sector_prices=df,
+            benchmark_prices=bench,
+            macro_result=_macro_result("Recovery"),
+            sector_map=_SECTOR_MAP,
+            settings=_HYBRID_SETTINGS,
+            fx_change_pct=None,
+        )
+        by_code = {signal.index_code: signal for signal in signals}
+
+        assert by_code["SEC01"].mom_score >= 0.0
+        assert by_code["SEC01"].mom_raw <= 0.0
+        assert by_code["SEC01"].momentum_strong is False
+
+    def test_hybrid_price_below_200dma_blocks_momentum(self):
+        dates = pd.bdate_range("2024-01-01", periods=320)
+        bench = pd.Series([100.0 + idx * 0.05 for idx in range(len(dates))], index=dates)
+        sec01_values = [100.0 + idx * 0.9 for idx in range(300)] + [50.0 - idx * 0.5 for idx in range(20)]
+        sec02_values = [100.0 + idx * 0.1 for idx in range(len(dates))]
+        sec01 = pd.Series(sec01_values, index=dates)
+        sec02 = pd.Series(sec02_values, index=dates)
+
+        df = pd.concat(
+            [
+                _sector_prices_df("BENCH", "Benchmark", bench),
+                _sector_prices_df("SEC01", "Test Sector A", sec01),
+                _sector_prices_df("SEC02", "Test Sector B", sec02),
+            ]
+        ).sort_index()
+
+        signals = build_signal_table(
+            sector_prices=df,
+            benchmark_prices=bench,
+            macro_result=_macro_result("Recovery"),
+            sector_map=_SECTOR_MAP,
+            settings=_HYBRID_SETTINGS,
+            fx_change_pct=None,
+        )
+        by_code = {signal.index_code: signal for signal in signals}
+
+        assert by_code["SEC01"].mom_raw > 0.0
+        assert by_code["SEC01"].trend_ok is False
+        assert by_code["SEC01"].momentum_strong is False
+
+    def test_kr_sector_universe_does_not_inherit_regime_mapping_from_sector_map(self):
+        bench = _make_prices(320, seed=0, trend=0.0)
+        kr_sector = _make_prices(320, seed=1, trend=0.009)
+        df = pd.concat(
+            [
+                _sector_prices_df("1001", "KOSPI", bench),
+                _sector_prices_df("5064", "KRX 정보기술", kr_sector),
+            ]
+        ).sort_index()
+
+        signals = build_signal_table(
+            sector_prices=df,
+            benchmark_prices=bench,
+            macro_result=_macro_result("Recovery"),
+            sector_map={
+                "regimes": {
+                    "Recovery": {
+                        "sectors": [
+                            {"code": "5064", "name": "KRX 정보기술", "export_sector": False},
+                        ]
+                    }
+                }
+            },
+            settings=_HYBRID_SETTINGS,
+            market_id="KR",
+            sector_universe_rows=[
+                {
+                    "index_code": "5064",
+                    "index_name": "KRX 정보기술",
+                    "export_sector": False,
+                    "taxonomy_kind": "INDEX",
+                    "taxonomy_label": "정보기술",
+                }
+            ],
+            fx_change_pct=None,
+        )
+        by_code = {signal.index_code: signal for signal in signals}
+
+        assert by_code["5064"].action_policy == "KR_MOMENTUM_ONLY"
+        assert by_code["5064"].macro_context_regime == "Recovery"
+        assert by_code["5064"].macro_fit is False
+        assert by_code["5064"].macro_regime == "Unassigned"

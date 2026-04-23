@@ -29,6 +29,10 @@ SESSION_DEFAULTS: dict[str, Any] = {
     "analysis_end_date": None,
     "analysis_heatmap_palette": "classic",
     "flow_profile": "foreign_lead",
+    "stock_lookup_query": "",
+    "stock_lookup_status": "",
+    "stock_lookup_message": "",
+    "stock_lookup_result": {},
 }
 
 
@@ -84,6 +88,14 @@ def ensure_session_defaults(
         session_state["analysis_heatmap_palette"] = "classic"
     if "flow_profile" not in session_state:
         session_state["flow_profile"] = "foreign_lead"
+    if "stock_lookup_query" not in session_state:
+        session_state["stock_lookup_query"] = ""
+    if "stock_lookup_status" not in session_state:
+        session_state["stock_lookup_status"] = ""
+    if "stock_lookup_message" not in session_state:
+        session_state["stock_lookup_message"] = ""
+    if "stock_lookup_result" not in session_state or not isinstance(session_state.get("stock_lookup_result"), dict):
+        session_state["stock_lookup_result"] = {}
 
 
 def apply_market_selection(
@@ -104,7 +116,142 @@ def apply_market_selection(
     session_state["selected_range_preset"] = "1Y"
     session_state["analysis_start_date"] = None
     session_state["analysis_end_date"] = None
+    session_state["stock_lookup_query"] = ""
+    session_state["stock_lookup_status"] = ""
+    session_state["stock_lookup_message"] = ""
+    session_state["stock_lookup_result"] = {}
     return True
+
+
+def normalize_stock_lookup_result(result: Mapping[str, Any] | None) -> dict[str, Any]:
+    payload = dict(result or {})
+    normalized = {
+        "status": str(payload.get("status", "")).strip().lower(),
+        "market": str(payload.get("market", "")).strip().upper(),
+        "query": str(payload.get("query", "")).strip(),
+        "normalized_query": str(payload.get("normalized_query", "")).strip(),
+        "matched_symbol": str(payload.get("matched_symbol", "")).strip(),
+        "matched_name": str(payload.get("matched_name", "")).strip(),
+        "sector_code": str(payload.get("sector_code", "")).strip(),
+        "sector_name": str(payload.get("sector_name", "")).strip(),
+        "resolution_kind": str(payload.get("resolution_kind", "")).strip(),
+        "source": str(payload.get("source", "")).strip(),
+        "confidence": str(payload.get("confidence", "")).strip(),
+        "explanation": str(payload.get("explanation", "")).strip(),
+        "canonicalization_applied": bool(payload.get("canonicalization_applied", False)),
+        "canonicalization_basis": str(payload.get("canonicalization_basis", "not_applicable") or "not_applicable").strip(),
+        "match_effective_date": str(payload.get("match_effective_date", "")).strip(),
+        "match_date_mode": str(payload.get("match_date_mode", "not_applicable") or "not_applicable").strip(),
+        "matched_sector_candidates": [],
+    }
+    candidates = payload.get("matched_sector_candidates", [])
+    if isinstance(candidates, list):
+        normalized["matched_sector_candidates"] = [
+            {
+                "sector_code": str(dict(item or {}).get("sector_code", "")).strip(),
+                "sector_name": str(dict(item or {}).get("sector_name", "")).strip(),
+                "lookup_priority": dict(item or {}).get("lookup_priority"),
+                "source": str(dict(item or {}).get("source", "")).strip(),
+                "resolved_from": str(dict(item or {}).get("resolved_from", "")).strip(),
+                "snapshot_date": str(dict(item or {}).get("snapshot_date", "")).strip(),
+            }
+            for item in candidates
+            if isinstance(item, Mapping)
+        ]
+    return normalized
+
+
+def _sector_name_lookup(sector_map: Mapping[str, Any] | None) -> dict[str, str]:
+    lookup: dict[str, str] = {}
+    for regime_payload in dict(sector_map or {}).get("regimes", {}).values():
+        for item in list(dict(regime_payload or {}).get("sectors", [])):
+            code = str(dict(item or {}).get("code", "")).strip()
+            name = str(dict(item or {}).get("name", "")).strip()
+            if code and name and code not in lookup:
+                lookup[code] = name
+    return lookup
+
+
+def _resolve_display_sector_name(
+    sector_code: str,
+    sector_name: str,
+    *,
+    name_lookup: Mapping[str, str],
+) -> str:
+    code = str(sector_code or "").strip()
+    name = str(sector_name or "").strip()
+    if code and (not name or name == code):
+        return str(name_lookup.get(code, code)).strip()
+    return name
+
+
+def apply_stock_lookup_result(
+    session_state: MutableMapping[str, Any],
+    *,
+    result: Mapping[str, Any],
+) -> bool:
+    """Persist a stock-lookup result; return True when selected sector changed."""
+    normalized = normalize_stock_lookup_result(result)
+    status = str(normalized.get("status", "")).strip().lower()
+    query = str(normalized.get("query", "")).strip()
+    explanation = str(normalized.get("explanation", "")).strip()
+    sector_name = str(normalized.get("sector_name", "")).strip()
+
+    session_state["stock_lookup_query"] = query
+    session_state["stock_lookup_status"] = status
+    session_state["stock_lookup_message"] = explanation
+    session_state["stock_lookup_result"] = normalized
+
+    if status != "success" or not sector_name:
+        return False
+
+    changed = sector_name != str(session_state.get("selected_sector", "")).strip()
+    session_state["selected_sector"] = sector_name
+    return changed
+
+
+def build_stock_lookup_display_model(
+    stock_lookup_result: Mapping[str, Any] | None,
+    sector_map: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    normalized = normalize_stock_lookup_result(stock_lookup_result)
+    name_lookup = _sector_name_lookup(sector_map)
+    candidates = [
+        {
+            **dict(item),
+            "sector_name": _resolve_display_sector_name(
+                str(dict(item).get("sector_code", "")).strip(),
+                str(dict(item).get("sector_name", "")).strip(),
+                name_lookup=name_lookup,
+            ),
+        }
+        for item in list(normalized.get("matched_sector_candidates", []))
+    ]
+    canonical_code = str(normalized.get("sector_code", "")).strip()
+    canonical_name = _resolve_display_sector_name(
+        canonical_code,
+        str(normalized.get("sector_name", "")).strip(),
+        name_lookup=name_lookup,
+    )
+    matched_sectors = sorted(
+        [
+            item for item in candidates
+            if str(dict(item).get("sector_code", "")).strip()
+        ],
+        key=lambda item: (
+            0 if str(dict(item).get("sector_code", "")).strip() == canonical_code else 1,
+            int(dict(item).get("lookup_priority")) if dict(item).get("lookup_priority") is not None else 9999,
+            str(dict(item).get("sector_name", "")).strip(),
+        ),
+    )
+    return {
+        "result": normalized,
+        "canonical_sector": {
+            "sector_code": canonical_code,
+            "sector_name": canonical_name,
+        },
+        "matched_sectors": matched_sectors,
+    }
 
 
 def normalize_session_state(

@@ -35,12 +35,22 @@ _SHARED_SESSION: _requests.Session | None = None
 _SESSION_LOCK = threading.Lock()
 _SESSION_AUTHENTICATED: bool | None = None
 _SESSION_AUTH_DETAIL = "KRX_ID/KRX_PW not configured"
+_ACCESS_DENIED_DETAIL: str = ""
 
 _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/122.0.0.0 Safari/537.36"
 )
+
+
+class KRXAccessDeniedError(RuntimeError):
+    """Raised when KRX responds with deterministic access-denied HTML."""
+
+
+def _set_access_denied_detail(detail: str | None) -> None:
+    global _ACCESS_DENIED_DETAIL
+    _ACCESS_DENIED_DETAIL = str(detail or "").strip()
 
 
 def _load_secret_or_env(name: str) -> str:
@@ -108,7 +118,9 @@ def _parse_login_response(response: _requests.Response) -> tuple[bool, str]:
     except ValueError:
         snippet = " ".join(text.split())[:160]
         if "access denied" in text.lower():
-            return False, f"access denied during KRX login ({snippet})"
+            detail = f"access denied during KRX login ({snippet})"
+            _set_access_denied_detail(detail)
+            return False, detail
         if "login" in text.lower() or "로그인" in text:
             return False, f"login HTML returned instead of JSON ({snippet})"
         return False, (
@@ -119,6 +131,7 @@ def _parse_login_response(response: _requests.Response) -> tuple[bool, str]:
     error_code = str(payload.get("_error_code", "")).strip()
     error_msg = str(payload.get("_error_msg", "")).strip()
     if error_code == "CD001":
+        _set_access_denied_detail("")
         return True, "authenticated"
     if error_code:
         return False, f"{error_code}: {error_msg or 'login failed'}"
@@ -195,14 +208,18 @@ def _get_shared_session() -> _requests.Session:
         session = _requests.Session()
         login_id = _load_secret_or_env("KRX_ID")
         login_pw = _load_secret_or_env("KRX_PW")
+        blocked_detail = _ACCESS_DENIED_DETAIL
         try:
             if login_id and login_pw:
-                _set_krx_login_state(False, "KRX login warmup not completed yet")
-                _warmup_krx_login_session(session)
-                authenticated, detail = _login_krx_session(session, login_id, login_pw)
-                _set_krx_login_state(authenticated, detail)
-                if not authenticated:
-                    logger.warning("KRX login failed; proceeding without authenticated session: %s", detail)
+                if blocked_detail:
+                    _set_krx_login_state(False, blocked_detail)
+                else:
+                    _set_krx_login_state(False, "KRX login warmup not completed yet")
+                    _warmup_krx_login_session(session)
+                    authenticated, detail = _login_krx_session(session, login_id, login_pw)
+                    _set_krx_login_state(authenticated, detail)
+                    if not authenticated:
+                        logger.warning("KRX login failed; proceeding without authenticated session: %s", detail)
             else:
                 _set_krx_login_state(None, "KRX_ID/KRX_PW not configured")
             session.get(
@@ -232,7 +249,9 @@ def reset_krx_shared_session() -> None:
             logger.debug("KRX shared session close failed during reset.", exc_info=True)
     login_id = _load_secret_or_env("KRX_ID")
     login_pw = _load_secret_or_env("KRX_PW")
-    if login_id and login_pw:
+    if _ACCESS_DENIED_DETAIL:
+        _set_krx_login_state(False, _ACCESS_DENIED_DETAIL)
+    elif login_id and login_pw:
         _set_krx_login_state(False, "KRX session reset; next request will re-authenticate")
     else:
         _set_krx_login_state(None, "KRX session reset; KRX_ID/KRX_PW not configured")
@@ -342,14 +361,51 @@ def request_krx_data(
     timeout: int = 15,
 ) -> _requests.Response:
     """Issue a raw KRX JSON-endpoint POST using the shared session."""
-    session = _get_shared_session()
     headers = {
         "User-Agent": _BROWSER_UA,
         "Referer": referer,
         "X-Requested-With": "XMLHttpRequest",
         "Origin": "https://data.krx.co.kr",
     }
-    return session.post(KRX_JSON_URL, headers=headers, data=payload, timeout=timeout)
+
+    def _raise_for_non_json_response(response: _requests.Response) -> None:
+        try:
+            response.json()
+        except ValueError as exc:
+            content_type = str(response.headers.get("content-type", "")).lower()
+            text = response.text or ""
+            snippet = " ".join(text.split())[:160]
+            if "access denied" in text.lower():
+                detail = (
+                    "KRX JSON endpoint returned access denied HTML "
+                    f"(status={response.status_code}, snippet={snippet!r})"
+                )
+                _set_access_denied_detail(detail)
+                raise KRXAccessDeniedError(detail) from exc
+            if "html" in content_type or text.lstrip().startswith("<"):
+                raise RuntimeError(
+                    f"KRX JSON endpoint returned non-JSON HTML (status={response.status_code}, snippet={snippet!r})"
+                ) from exc
+            raise RuntimeError(
+                "KRX JSON endpoint returned non-JSON payload "
+                f"(status={response.status_code}, content_type={content_type or 'unknown'}, snippet={snippet!r})"
+            ) from exc
+
+    for attempt in range(2):
+        session = _get_shared_session()
+        response = session.post(KRX_JSON_URL, headers=headers, data=payload, timeout=timeout)
+        try:
+            _raise_for_non_json_response(response)
+            _set_access_denied_detail("")
+            return response
+        except KRXAccessDeniedError:
+            raise
+        except RuntimeError as exc:
+            if attempt == 0:
+                logger.warning("KRX JSON endpoint returned invalid payload; resetting session and retrying once: %s", exc)
+                reset_krx_shared_session()
+                continue
+            raise
 
 
 def resolve_ohlcv_close_column(df: pd.DataFrame) -> str:

@@ -106,6 +106,17 @@ def test_profile_switch_changes_summary_without_mutating_input():
     assert set(frame["investor_type"].unique()) == {"외국인", "기관합계", "개인"}
 
 
+def test_flow_score_uses_profile_selected_sigma_not_weighted_state_sum():
+    frame = _flow_frame(foreign=0.14, institutional=-0.08, retail=-0.10)
+    foreign_led = summarize_sector_investor_flow(frame, flow_profile="foreign_lead")["5044"]
+    contrarian = summarize_sector_investor_flow(frame, flow_profile="contrarian_retail")["5044"]
+
+    assert foreign_led.flow_score > 0
+    assert foreign_led.flow_state == "supportive"
+    assert contrarian.flow_score > 0
+    assert contrarian.flow_state == "supportive"
+
+
 def test_disabled_flow_overlay_keeps_base_action_even_when_frame_is_supportive():
     signals, summary_map = apply_flow_overlay(
         [_signal("Watch")],

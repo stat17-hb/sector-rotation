@@ -33,6 +33,11 @@ def test_ensure_session_defaults_populates_missing_keys():
     assert session["held_sectors"] == []
     assert session["selected_cycle_phase"] == "ALL"
     assert session["flow_profile"] == "foreign_lead"
+    assert session["stock_lookup_query"] == ""
+    assert session["stock_lookup_status"] == ""
+    assert session["stock_lookup_message"] == ""
+    assert session["stock_lookup_result"] == {}
+    assert "momentum_method" not in session
 
 
 def test_normalize_session_state_repairs_legacy_values():
@@ -109,6 +114,10 @@ def test_apply_market_selection_clears_held_sector_context():
         "held_sectors": ["KRX Semiconductor"],
         "selected_sector": "KRX Semiconductor",
         "selected_month": "2025-01",
+        "stock_lookup_query": "005930",
+        "stock_lookup_status": "success",
+        "stock_lookup_message": "done",
+        "stock_lookup_result": {"status": "success"},
     }
 
     changed = state.apply_market_selection(session, market_id="US")
@@ -117,3 +126,128 @@ def test_apply_market_selection_clears_held_sector_context():
     assert session["market_id"] == "US"
     assert session["held_sectors"] == []
     assert session["selected_sector"] == ""
+    assert session["stock_lookup_query"] == ""
+    assert session["stock_lookup_status"] == ""
+    assert session["stock_lookup_message"] == ""
+    assert session["stock_lookup_result"] == {}
+
+
+def test_apply_stock_lookup_result_updates_selected_sector_on_success():
+    session = {"selected_sector": "Old Sector"}
+
+    changed = state.apply_stock_lookup_result(
+        session,
+        result={
+            "status": "success",
+            "query": "005930",
+            "sector_name": "KRX 반도체",
+            "explanation": "resolved",
+        },
+    )
+
+    assert changed is True
+    assert session["selected_sector"] == "KRX 반도체"
+    assert session["stock_lookup_query"] == "005930"
+    assert session["stock_lookup_status"] == "success"
+    assert session["stock_lookup_message"] == "resolved"
+    assert session["stock_lookup_result"]["status"] == "success"
+
+
+def test_apply_stock_lookup_result_preserves_selected_sector_on_non_success():
+    session = {"selected_sector": "Keep Sector"}
+
+    changed = state.apply_stock_lookup_result(
+        session,
+        result={
+            "status": "ambiguous",
+            "query": "Apple",
+            "sector_name": "",
+            "explanation": "ambiguous",
+        },
+    )
+
+    assert changed is False
+    assert session["selected_sector"] == "Keep Sector"
+    assert session["stock_lookup_query"] == "Apple"
+    assert session["stock_lookup_status"] == "ambiguous"
+    assert session["stock_lookup_message"] == "ambiguous"
+    assert session["stock_lookup_result"]["canonicalization_basis"] == "not_applicable"
+
+
+def test_build_stock_lookup_display_model_returns_all_matched_sectors_with_canonical_first():
+    model = state.build_stock_lookup_display_model(
+        {
+            "status": "success",
+            "sector_code": "5044",
+            "sector_name": "KRX 반도체",
+            "matched_sector_candidates": [
+                {"sector_code": "1155", "sector_name": "KOSPI200 정보기술", "lookup_priority": 20, "source": "raw", "resolved_from": "20260417", "snapshot_date": "20260417"},
+                {"sector_code": "5044", "sector_name": "KRX 반도체", "lookup_priority": 10, "source": "raw", "resolved_from": "20260417", "snapshot_date": "20260417"},
+                {"sector_code": "5042", "sector_name": "KRX 산업재", "lookup_priority": 30, "source": "raw", "resolved_from": "20260417", "snapshot_date": "20260417"},
+            ],
+        },
+        {
+            "regimes": {
+                "Recovery": {"sectors": [{"code": "1155", "name": "KOSPI200 정보기술"}]},
+                "Expansion": {
+                    "sectors": [
+                        {"code": "5044", "name": "KRX 반도체", "lookup_display_parent_code": "1155"},
+                        {"code": "5042", "name": "KRX 산업재"},
+                    ]
+                },
+            }
+        },
+    )
+
+    assert [item["sector_code"] for item in model["matched_sectors"]] == ["5044", "1155", "5042"]
+
+
+def test_build_stock_lookup_display_model_keeps_only_present_matches():
+    model = state.build_stock_lookup_display_model(
+        {
+            "status": "success",
+            "sector_code": "5044",
+            "sector_name": "KRX 반도체",
+            "matched_sector_candidates": [
+                {"sector_code": "5044", "sector_name": "KRX 반도체", "lookup_priority": 10, "source": "raw", "resolved_from": "20260417", "snapshot_date": "20260417"},
+            ],
+        },
+        {
+            "regimes": {
+                "Expansion": {
+                    "sectors": [
+                        {"code": "5044", "name": "KRX 반도체", "lookup_display_parent_code": "1155"},
+                        {"code": "1155", "name": "KOSPI200 정보기술"},
+                    ]
+                }
+            }
+        },
+    )
+
+    assert [item["sector_code"] for item in model["matched_sectors"]] == ["5044"]
+
+
+def test_build_stock_lookup_display_model_enriches_code_only_names_from_sector_map():
+    model = state.build_stock_lookup_display_model(
+        {
+            "status": "success",
+            "sector_code": "5044",
+            "sector_name": "5044",
+            "matched_sector_candidates": [
+                {"sector_code": "1155", "sector_name": "1155", "lookup_priority": 20, "source": "raw", "resolved_from": "20260417", "snapshot_date": "20260417"},
+                {"sector_code": "5044", "sector_name": "5044", "lookup_priority": 10, "source": "raw", "resolved_from": "20260417", "snapshot_date": "20260417"},
+            ],
+        },
+        {
+            "regimes": {
+                "Recovery": {"sectors": [{"code": "1155", "name": "KOSPI200 정보기술"}]},
+                "Expansion": {"sectors": [{"code": "5044", "name": "KRX 반도체"}]},
+            }
+        },
+    )
+
+    assert model["canonical_sector"]["sector_name"] == "KRX 반도체"
+    assert [item["sector_name"] for item in model["matched_sectors"]] == [
+        "KRX 반도체",
+        "KOSPI200 정보기술",
+    ]
