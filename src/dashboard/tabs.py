@@ -66,18 +66,18 @@ def build_dashboard_page_options(market_id: str) -> list[DashboardPageOption]:
         DashboardPageOption("overview", "대시보드", f"{normalized_market.lower()}-overview"),
         DashboardPageOption("signals", "섹터 모멘텀", f"{normalized_market.lower()}-signals"),
         DashboardPageOption("research", "상대강도 분석", f"{normalized_market.lower()}-research"),
-        DashboardPageOption("constituents", "섹터맵", f"{normalized_market.lower()}-constituents"),
+        DashboardPageOption("constituents", "구성종목", f"{normalized_market.lower()}-constituents"),
     ]
     if normalized_market in {"KR", "US"}:
         options.append(
             DashboardPageOption(
                 "flow",
-                "섹터 맵(히트맵)" if normalized_market == "KR" else "섹터 맵(히트맵)",
+                "투자자 수급" if normalized_market == "KR" else "ETF 수급 프록시",
                 f"{normalized_market.lower()}-flow",
             )
         )
     if normalized_market == "KR":
-        options.append(DashboardPageOption("quality", "리서치 노트", "kr-quality"))
+        options.append(DashboardPageOption("quality", "데이터 수집 이력", "kr-quality"))
     return options
 
 

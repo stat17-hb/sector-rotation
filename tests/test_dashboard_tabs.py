@@ -216,9 +216,9 @@ def test_build_dashboard_page_options_returns_kr_pages_in_expected_order():
         "대시보드",
         "섹터 모멘텀",
         "상대강도 분석",
-        "섹터맵",
-        "섹터 맵(히트맵)",
-        "리서치 노트",
+        "구성종목",
+        "투자자 수급",
+        "데이터 수집 이력",
     ]
     assert [option.url_path for option in options] == [
         "kr-overview",
@@ -244,8 +244,8 @@ def test_build_dashboard_page_options_returns_us_pages_without_monitoring():
         "대시보드",
         "섹터 모멘텀",
         "상대강도 분석",
-        "섹터맵",
-        "섹터 맵(히트맵)",
+        "구성종목",
+        "ETF 수급 프록시",
     ]
     assert [option.url_path for option in options] == [
         "us-overview",
