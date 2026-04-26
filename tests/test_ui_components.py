@@ -3,9 +3,18 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
-import app as app_module
+import src.dashboard.data as dashboard_data_module
 import src.ui.panels as panels_module
 
+from src.dashboard.analysis import (
+    build_cycle_segments as _build_cycle_segments,
+    build_heatmap_display as _build_heatmap_display,
+    build_monthly_return_views as _build_monthly_return_views,
+    build_monthly_sector_returns as _build_monthly_sector_returns,
+    build_prices_wide as _build_prices_wide,
+    extract_heatmap_selection as _extract_heatmap_selection,
+    filter_monthly_frame_for_analysis as _filter_monthly_frame_for_analysis,
+)
 from src.signals.flow import summarize_sector_investor_flow
 from src.signals.matrix import SectorSignal
 from src.ui.copy import ALL_ACTION_KEY
@@ -28,6 +37,7 @@ from src.ui.components import (
     render_investor_decision_boards,
     render_page_header,
     render_panel_header,
+    render_research_page_frame,
     render_rs_momentum_bar,
     render_rs_scatter,
     render_signal_table,
@@ -111,8 +121,39 @@ def test_render_page_header_renders_shell_markup(monkeypatch):
 
     assert markdown_calls
     assert "page-shell" in markdown_calls[0]
+    assert "page-shell__grid" in markdown_calls[0]
+    assert "page-shell__meta" in markdown_calls[0]
     assert "Korea Sector Rotation" in markdown_calls[0]
     assert "page-shell__pill" in markdown_calls[0]
+
+
+def test_render_page_header_avoids_forbidden_brokerage_or_live_claims(monkeypatch):
+    markdown_calls: list[str] = []
+
+    monkeypatch.setattr("src.ui.components.st.markdown", lambda text, **_: markdown_calls.append(text))
+
+    render_page_header(
+        title="섹터 로테이션",
+        description="규칙 기반 의사결정 지원",
+        pills=[
+            {"label": "시장", "value": "KR", "tone": "info"},
+            {"label": "가격", "value": "캐시", "tone": "success"},
+        ],
+    )
+
+    markup = markdown_calls[0]
+    assert "market context" in markup
+    for phrase in (
+        "live overview",
+        "Watchlist",
+        "order",
+        "account",
+        "brokerage",
+        "risk-stock",
+        "거래량 순위",
+        "거래대금 순위",
+    ):
+        assert phrase not in markup
 
 
 def test_render_status_strip_renders_markup_and_details(monkeypatch):
@@ -186,6 +227,31 @@ def test_render_panel_header_renders_panel_markup(monkeypatch):
     assert "panel-header" in markdown_calls[0]
     assert "RS scatter" in markdown_calls[0]
     assert "panel-header__badge" in markdown_calls[0]
+
+
+def test_render_research_page_frame_renders_consistent_non_dashboard_shell(monkeypatch):
+    markdown_calls: list[str] = []
+
+    monkeypatch.setattr("src.ui.components.st.markdown", lambda text, **_: markdown_calls.append(text))
+
+    render_research_page_frame(
+        page_key="signals",
+        eyebrow="Signal Review",
+        title="섹터 모멘텀 필터 보드",
+        description="필터 조건과 보유 범위를 같은 기준으로 검토합니다.",
+        summary_items=[
+            {"label": "유니버스", "value": "12개 섹터"},
+            {"label": "필터", "value": "전체"},
+        ],
+    )
+
+    assert markdown_calls
+    markup = markdown_calls[0]
+    assert "research-page-frame" in markup
+    assert 'data-page="signals"' in markup
+    assert "research-page-frame__summary" in markup
+    assert "섹터 모멘텀 필터 보드" in markup
+    assert "12개 섹터" in markup
 
 
 def test_render_rs_scatter_filters_nan_points():
@@ -479,12 +545,12 @@ def test_describe_signal_decision_changes_by_held_state():
     english_view = describe_signal_decision(signal, ["Sector A"], locale="en")
 
     assert held_view["held"] is True
-    assert held_view["decision"] == "추가 매수 후보"
+    assert held_view["decision"] == "추가 검토 후보"
     assert "국면 적합" in held_view["reason"]
     assert held_view["alerts_text"] == "Overheat"
     assert new_view["held"] is False
-    assert new_view["decision"] == "신규 매수 후보"
-    assert english_view["decision"] == "Add candidate"
+    assert new_view["decision"] == "신규 검토 후보"
+    assert english_view["decision"] == "Add-review candidate"
     assert "Regime fit" in english_view["reason"]
     assert held_view["judgment_structure"] == "기본 모형"
     assert held_view["judgment_confidence"] == "제한적 판단 규칙"
@@ -573,7 +639,7 @@ def test_render_investor_flow_summary_marks_reference_only_preview(monkeypatch):
         investor_flow_detail={"bootstrap_partial_preview": True},
     )
 
-    assert any("최종 투자판단에는 반영되지 않았습니다" in text for text in warning_calls)
+    assert any("최종 신호에는 반영되지 않았습니다" in text for text in warning_calls)
     assert not any("표시할 투자자 수급 데이터가 없습니다" in text for text in info_calls)
     assert not any("투자자 수급 탭" in text for text in caption_calls)
     assert any("단기 평균" in text for text in markdown_calls)
@@ -935,8 +1001,8 @@ def test_render_top_picks_table_preserves_held_and_new_empty_states(monkeypatch)
     render_top_picks_table([new_only_signal], held_sectors=["Alpha"], position_mode="new")
 
     assert info_calls == [
-        "포트폴리오 대응 추천을 위해 보유 섹터를 먼저 추가하세요.",
-        "현재 결정 규칙에 부합하는 신규 매수 아이디어가 없습니다.",
+        "보유 섹터 검토 후보를 보려면 보유 섹터를 먼저 추가하세요.",
+        "현재 결정 규칙에 부합하는 신규 검토 후보가 없습니다.",
     ]
 
 
@@ -1037,8 +1103,8 @@ def test_render_decision_board_cards_renders_action_why_and_invalidation(monkeyp
     assert len(markdown_calls) == 1
     markup = markdown_calls[0]
     assert "Alpha" in markup
-    assert "보유 대응" in markup
-    assert "추가 매수 후보" in markup
+    assert "보유 검토" in markup
+    assert "추가 검토 후보" in markup
     assert "핵심 판단" in markup
     assert "왜" in markup
     assert "무효화 조건" in markup
@@ -1345,6 +1411,7 @@ def test_render_analysis_toolbar_surfaces_page_level_context_summary(monkeypatch
     assert any('analysis-toolbar__summary-item"><span>사이클</span>' in call for call in markdown_calls)
     assert any('analysis-toolbar__summary-item"><span>섹터</span>' in call for call in markdown_calls)
     assert any("리서치 범위" in call or "Research scope" in call for call in markdown_calls)
+    assert any("리서치 캔버스 범위 조정" in call or "Adjust research canvas scope" in call for call in markdown_calls)
     assert any("기본 판단 규칙은 바꾸지 않습니다" in call or "does not change the base judgment rules" in call for call in markdown_calls)
 
 
@@ -1526,7 +1593,7 @@ def test_get_analysis_heatmap_colorscale_returns_distinct_presets():
     assert contrast != blue_orange
     assert classic[0][0] == 0.0 and classic[-1][0] == 1.0
     assert contrast[2][0] == 0.50
-    assert blue_orange[0][1] == "#0066CC"
+    assert blue_orange[0][1] == "#2E6BC9"
 
 
 def test_build_sector_strength_heatmap_marks_selected_row_column():
@@ -1740,7 +1807,7 @@ def test_build_cycle_segments_normalizes_month_bounds_and_skips_nan():
         ),
     )
 
-    segments, phase_by_month = app_module._build_cycle_segments(
+    segments, phase_by_month = _build_cycle_segments(
         macro_result=macro_result,
         monthly_close=monthly_close,
     )
@@ -1772,13 +1839,14 @@ def test_analysis_cache_loader_exposes_full_history_for_5y_and_all(monkeypatch):
     )
     cached.index.name = "trade_date"
 
-    monkeypatch.setattr(app_module, "read_market_prices", lambda *_args, **_kwargs: cached)
+    monkeypatch.setattr(dashboard_data_module, "read_market_prices", lambda *_args, **_kwargs: cached)
 
-    history = app_module._load_analysis_sector_prices_from_cache(
+    history = dashboard_data_module.load_analysis_sector_prices_from_cache(
+        "KR",
         end_date_str="20260306",
         benchmark_code="1001",
     )
-    prices_wide = app_module._build_prices_wide(
+    prices_wide = _build_prices_wide(
         sector_prices=history,
         sector_name_map={"1001": "KOSPI", "5044": "KRX Semiconductor"},
     )
@@ -1813,7 +1881,7 @@ def test_build_monthly_sector_returns_keeps_first_visible_month_non_null():
         index=pd.to_datetime(["2023-02-28", "2023-03-07", "2023-03-31"]),
     )
 
-    monthly_close_full, monthly_returns_full = app_module._build_monthly_sector_returns(
+    monthly_close_full, monthly_returns_full = _build_monthly_sector_returns(
         prices_wide=prices_wide,
         sector_columns=["Sector A"],
     )
@@ -1835,7 +1903,7 @@ def test_build_monthly_return_views_computes_excess_return_vs_kospi():
         index=pd.to_datetime(["2025-01-31", "2025-02-28", "2025-03-31"]),
     )
 
-    monthly_close_full, monthly_returns_full, benchmark_monthly_return, monthly_excess_returns_full = app_module._build_monthly_return_views(
+    monthly_close_full, monthly_returns_full, benchmark_monthly_return, monthly_excess_returns_full = _build_monthly_return_views(
         prices_wide=prices_wide,
         sector_columns=["Sector A", "Sector B"],
         benchmark_label="KOSPI",
@@ -1854,7 +1922,7 @@ def test_filter_monthly_frame_for_analysis_excludes_trailing_partial_month():
         index=pd.to_datetime(["2025-01-31", "2025-02-28", "2025-03-31"]),
     )
 
-    filtered = app_module._filter_monthly_frame_for_analysis(
+    filtered = _filter_monthly_frame_for_analysis(
         monthly_frame=monthly_frame,
         start_date=pd.Timestamp("2025-01-01").date(),
         end_date=pd.Timestamp("2025-03-06").date(),
@@ -1874,7 +1942,7 @@ def test_build_heatmap_display_preserves_shared_visible_month_set():
         index=pd.to_datetime(["2025-01-31", "2025-02-28"]),
     )
 
-    display = app_module._build_heatmap_display(monthly_frame)
+    display = _build_heatmap_display(monthly_frame)
 
     assert list(display.columns) == ["2025-01", "2025-02"]
     assert list(display.index) == ["Sector A", "Sector B"]
@@ -1889,7 +1957,7 @@ def test_extract_heatmap_selection_returns_shared_month_and_sector_pair():
         }
     }
 
-    assert app_module._extract_heatmap_selection(event) == ("2025-02", "Sector A")
+    assert _extract_heatmap_selection(event) == ("2025-02", "Sector A")
 
 
 def test_render_sector_detail_panel_returns_clicked_sector_and_preset(monkeypatch):

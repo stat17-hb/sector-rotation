@@ -156,8 +156,8 @@ class TestIntegration:
         assert not result.empty
         assert result["close"].tolist() == [100.0, 101.0, 102.0, 103.0, 104.0]
 
-    def test_load_sector_prices_raw_cache_import_tolerates_warehouse_write_lock(self, tmp_path, monkeypatch):
-        """Raw-cache-backed reads should still return CACHED when warehouse write-back is locked."""
+    def test_load_sector_prices_raw_cache_fast_path_stays_read_only(self, tmp_path, monkeypatch):
+        """Raw-cache-backed interactive reads should not attempt warehouse write-back."""
         import src.data_sources.krx_indices as krx_mod
 
         curated = tmp_path / "curated"
@@ -181,9 +181,7 @@ class TestIntegration:
         monkeypatch.setattr(
             krx_mod,
             "_sync_index_dimension",
-            lambda *a, **kw: (_ for _ in ()).throw(
-                RuntimeError("Cannot acquire write lock on warehouse.duckdb")
-            ),
+            lambda *a, **kw: (_ for _ in ()).throw(AssertionError("read path should stay read-only")),
         )
 
         status, result = krx_mod.load_sector_prices(["1001"], "20240101", "20240105")
@@ -557,8 +555,8 @@ class TestIntegration:
         assert summary["failed_days"] == ["20240103"]
         assert len(result) == len(cached)
 
-    def test_load_sector_prices_imports_stale_raw_cache_without_background_refresh(self, tmp_path, monkeypatch):
-        """Stale-but-usable raw cache returns CACHED and is imported into DuckDB without background warm."""
+    def test_load_sector_prices_uses_stale_raw_cache_without_background_refresh(self, tmp_path, monkeypatch):
+        """Stale-but-usable raw cache returns CACHED without background warm or warehouse writes."""
         import src.data_sources.krx_indices as krx_mod
         import src.data_sources.warehouse as warehouse
 
@@ -591,7 +589,7 @@ class TestIntegration:
         assert not result.empty
         assert scheduled == []
         warehouse_frame = warehouse.read_market_prices(["1001"], "20240101", "20240110")
-        assert not warehouse_frame.empty
+        assert warehouse_frame.empty
 
     def test_load_sector_prices_fails_fast_for_oversized_openapi_range(self, tmp_path, monkeypatch):
         """Interactive OpenAPI loads should reject ranges above the snapshot budget."""

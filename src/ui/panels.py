@@ -51,15 +51,24 @@ def render_page_header(
         if str(item.get("label", "")).strip() and str(item.get("value", "")).strip()
     )
     pills_html = (
-        f'<div class="page-shell__pills">{pill_markup}</div>' if pill_markup else ""
+        '<div class="page-shell__meta">'
+        '<div class="page-shell__meta-eyebrow">market context</div>'
+        f'<div class="page-shell__pills">{pill_markup}</div>'
+        "</div>"
+        if pill_markup
+        else ""
     )
     st.markdown(
         (
             '<section class="page-shell">'
+            '<div class="page-shell__grid">'
+            '<div class="page-shell__main">'
             '<div class="page-shell__eyebrow">섹터 로테이션 종합상황판</div>'
             f'<div class="page-shell__title">{html.escape(title)}</div>'
             f'<div class="page-shell__description">{html.escape(description)}</div>'
+            "</div>"
             f"{pills_html}"
+            "</div>"
             "</section>"
         ),
         unsafe_allow_html=True,
@@ -168,6 +177,46 @@ def render_panel_header(
     )
 
 
+def render_research_page_frame(
+    *,
+    page_key: str,
+    eyebrow: str,
+    title: str,
+    description: str,
+    summary_items: Sequence[Mapping[str, object]] | None = None,
+) -> None:
+    """Render a consistent intent/status frame for non-overview research pages."""
+    summary_markup = "".join(
+        (
+            '<div class="research-page-frame__item">'
+            f'<span>{html.escape(str(item.get("label", "")))}</span>'
+            f'<strong>{html.escape(str(item.get("value", "")))}</strong>'
+            "</div>"
+        )
+        for item in (summary_items or [])
+        if str(item.get("label", "")).strip() and str(item.get("value", "")).strip()
+    )
+    summary_html = (
+        f'<div class="research-page-frame__summary">{summary_markup}</div>'
+        if summary_markup
+        else ""
+    )
+    st.markdown(
+        (
+            '<section class="research-page-frame" '
+            f'data-page="{html.escape(str(page_key))}">'
+            '<div class="research-page-frame__copy">'
+            f'<div class="research-page-frame__eyebrow">{html.escape(eyebrow)}</div>'
+            f'<div class="research-page-frame__title">{html.escape(title)}</div>'
+            f'<div class="research-page-frame__description">{html.escape(description)}</div>'
+            "</div>"
+            f"{summary_html}"
+            "</section>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
 def render_analysis_toolbar(
     *,
     min_date: date,
@@ -198,6 +247,7 @@ def render_analysis_toolbar(
             '<div class="analysis-toolbar">'
             f'<div class="analysis-toolbar__eyebrow">{html.escape(get_ui_text("analysis_toolbar_eyebrow", locale))}</div>'
             f'<div class="analysis-toolbar__title">{html.escape(get_ui_text("analysis_toolbar_title", locale))}</div>'
+            f'<div class="analysis-toolbar__description">{html.escape(get_ui_text("analysis_toolbar_description", locale))}</div>'
             f"{summary_markup}"
             "</div>"
         ),
@@ -281,6 +331,7 @@ def render_stock_lookup_control(
             '<div class="analysis-toolbar">'
             f'<div class="analysis-toolbar__eyebrow">{html.escape(get_ui_text("stock_lookup_eyebrow", locale))}</div>'
             f'<div class="analysis-toolbar__title">{html.escape(get_ui_text("stock_lookup_title", locale))}</div>'
+            f'<div class="analysis-toolbar__description">{html.escape(get_ui_text("stock_lookup_description", locale))}</div>'
             "</div>"
         ),
         unsafe_allow_html=True,
@@ -341,6 +392,358 @@ def render_stock_lookup_control(
             st.caption(f"{get_ui_text('stock_lookup_provenance_label', locale)}: {' · '.join(provenance_bits)}")
 
     return str(query_input or ""), submitted
+
+
+def _format_overview_number(value: object, *, decimals: int = 2) -> str:
+    numeric = _safe_float(value)
+    if numeric is None:
+        return "N/A"
+    return f"{numeric:,.{decimals}f}"
+
+
+def _format_overview_pct(value: object, *, decimals: int = 2) -> str:
+    numeric = _safe_float(value)
+    if numeric is None:
+        return "N/A"
+    return f"{numeric:+.{decimals}f}%"
+
+
+def _series_change_pct(series: pd.Series, periods: int = 1) -> float | None:
+    clean = pd.to_numeric(series, errors="coerce").dropna()
+    if len(clean) <= periods:
+        return None
+    previous = float(clean.iloc[-(periods + 1)])
+    latest = float(clean.iloc[-1])
+    if previous == 0:
+        return None
+    return (latest / previous - 1.0) * 100.0
+
+
+def _period_to_days(period: str) -> int:
+    return {"1M": 22, "3M": 66, "6M": 132, "1Y": 252, "YTD": 252}.get(str(period), 66)
+
+
+def _build_overview_market_cards(
+    *,
+    prices_wide: pd.DataFrame,
+    benchmark_label: str,
+    signals: Sequence,
+    current_regime: str,
+    price_status: str,
+    macro_status: str,
+) -> list[str]:
+    cards: list[str] = []
+    preferred = [benchmark_label]
+    preferred.extend(
+        str(getattr(signal, "sector_name", "")).strip()
+        for signal in sorted(signals, key=signal_display_sort_key)[:2]
+    )
+    labels: list[str] = []
+    for label in preferred:
+        if label and label in prices_wide.columns and label not in labels:
+            labels.append(label)
+
+    for label in labels[:2]:
+        series = prices_wide[label]
+        latest = pd.to_numeric(series, errors="coerce").dropna()
+        value = latest.iloc[-1] if not latest.empty else None
+        change = _series_change_pct(series)
+        tone = "positive" if (change or 0.0) >= 0 else "negative"
+        cards.append(
+            '<div class="overview-market-card">'
+            f'<div class="overview-market-card__label">{html.escape(label)}</div>'
+            f'<div class="overview-market-card__value">{html.escape(_format_overview_number(value))}</div>'
+            f'<div class="overview-market-card__change" data-tone="{tone}">{html.escape(_format_overview_pct(change))}</div>'
+            "</div>"
+        )
+
+    status_items = [
+        ("시장 국면", current_regime),
+        ("시장 데이터", price_status),
+        ("매크로", macro_status),
+    ]
+    cards.append(
+        '<div class="overview-market-card overview-market-card--status">'
+        + "".join(
+            '<div class="overview-market-card__status-row">'
+            f"<span>{html.escape(label)}</span><strong>{html.escape(str(value))}</strong>"
+            "</div>"
+            for label, value in status_items
+        )
+        + "</div>"
+    )
+    return cards
+
+
+def _build_overview_sector_frame(signals: Sequence, *, sort_key: str) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for rank, signal in enumerate(sorted(signals, key=signal_display_sort_key), start=1):
+        if str(getattr(signal, "action", "N/A")) == "N/A":
+            continue
+        rs_gap = _rs_divergence_pct(signal)
+        ret_1m = _pct_value(getattr(signal, "returns", {}).get("1M"))
+        ret_3m = _pct_value(getattr(signal, "returns", {}).get("3M"))
+        mom_score = _safe_float(getattr(signal, "mom_percentile", None))
+        if mom_score is None:
+            mom_score = rs_gap
+        rows.append(
+            {
+                "순위": rank,
+                "섹터": str(getattr(signal, "sector_name", "")),
+                "모멘텀 점수": mom_score,
+                "상대강도": rs_gap,
+                "1M": ret_1m,
+                "3M": ret_3m,
+                "액션": format_action_label(str(getattr(signal, "action", "N/A"))),
+            }
+        )
+    frame = pd.DataFrame(rows)
+    if frame.empty:
+        return frame
+    if sort_key == "수익률(3M)":
+        frame = frame.sort_values("3M", ascending=False, na_position="last")
+    elif sort_key == "상대강도":
+        frame = frame.sort_values("상대강도", ascending=False, na_position="last")
+    else:
+        frame = frame.sort_values("모멘텀 점수", ascending=False, na_position="last")
+    frame["순위"] = range(1, len(frame) + 1)
+    return frame
+
+
+def _render_overview_sector_table(frame: pd.DataFrame) -> None:
+    if frame.empty:
+        st.info("표시할 섹터 신호가 없습니다.")
+        return
+    rows: list[str] = []
+    for _, row in frame.head(12).iterrows():
+        ret_3m = _safe_float(row.get("3M"))
+        ret_tone = "positive" if (ret_3m or 0.0) >= 0 else "negative"
+        rows.append(
+            "<tr>"
+            f"<td>{int(row['순위'])}</td>"
+            f"<td>{html.escape(str(row['섹터']))}</td>"
+            f"<td>{html.escape(_format_overview_number(row.get('모멘텀 점수'), decimals=2))}</td>"
+            f"<td>{html.escape(_format_overview_number(row.get('상대강도'), decimals=2))}</td>"
+            f'<td data-tone="{ret_tone}">{html.escape(_format_overview_pct(row.get("3M"), decimals=2))}</td>'
+            "</tr>"
+        )
+    st.markdown(
+        '<div class="overview-sector-table-wrap">'
+        '<table class="overview-sector-table">'
+        "<thead><tr>"
+        "<th>순위</th><th>섹터</th><th>모멘텀</th><th>상대강도</th><th>3M</th>"
+        "</tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody>"
+        "</table></div>",
+        unsafe_allow_html=True,
+    )
+
+
+def _build_overview_trend_figure(
+    *,
+    prices_wide: pd.DataFrame,
+    signals: Sequence,
+    benchmark_label: str,
+    period: str,
+    theme_mode: str,
+) -> go.Figure:
+    template = get_plotly_template(theme_mode)
+    tokens = get_theme_tokens(theme_mode)
+    fig = go.Figure()
+    if prices_wide.empty:
+        fig.update_layout(**template, title="섹터 상대강도 추이")
+        return fig
+
+    days = _period_to_days(period)
+    visible = prices_wide.tail(days).copy()
+    candidates = [benchmark_label]
+    candidates.extend(str(getattr(signal, "sector_name", "")) for signal in sorted(signals, key=signal_display_sort_key)[:5])
+    for label in dict.fromkeys(item for item in candidates if item in visible.columns):
+        series = pd.to_numeric(visible[label], errors="coerce").dropna()
+        if series.empty:
+            continue
+        base = float(series.iloc[0])
+        if base == 0:
+            continue
+        normalized = series / base
+        fig.add_trace(
+            go.Scatter(
+                x=normalized.index,
+                y=normalized.values,
+                mode="lines",
+                name=label,
+                line={"width": 2.4 if label == benchmark_label else 1.8},
+                hovertemplate="%{fullData.name}<br>%{x|%Y-%m-%d}<br>%{y:.3f}<extra></extra>",
+            )
+        )
+    if not fig.data:
+        fig.add_annotation(
+            text="표시할 가격 시계열이 없습니다.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 13, "color": tokens["text"]},
+        )
+    fig.update_layout(**template)
+    fig.update_layout(
+        title="섹터 상대강도 추이 (vs 기준값 1.0)",
+        height=340,
+        margin={"l": 36, "r": 18, "t": 48, "b": 36},
+        legend={"orientation": "v", "x": 1.01, "y": 1.0},
+    )
+    fig.update_yaxes(tickformat=".2f", title="")
+    fig.update_xaxes(title="")
+    return fig
+
+
+def _render_overview_heatmap(signals: Sequence) -> None:
+    ordered = sorted(
+        [signal for signal in signals if str(getattr(signal, "action", "N/A")) != "N/A"],
+        key=lambda signal: (_pct_value(getattr(signal, "returns", {}).get("3M")) or -999.0),
+        reverse=True,
+    )[:10]
+    if not ordered:
+        st.info("히트맵에 표시할 섹터 수익률 데이터가 없습니다.")
+        return
+    tiles: list[str] = []
+    for signal in ordered:
+        ret_3m = _pct_value(getattr(signal, "returns", {}).get("3M"))
+        tone = "positive" if (ret_3m or 0.0) >= 0 else "negative"
+        magnitude = min(100, max(18, int(abs(ret_3m or 0.0) * 8)))
+        tiles.append(
+            '<div class="overview-heatmap-tile" '
+            f'data-tone="{tone}" style="--tile-strength:{magnitude}%">'
+            f'<span>{html.escape(str(getattr(signal, "sector_name", "")))}</span>'
+            f'<strong>{html.escape(_format_overview_pct(ret_3m, decimals=2))}</strong>'
+            "</div>"
+        )
+    st.markdown(
+        '<div class="overview-heatmap-grid">' + "".join(tiles) + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+def render_toss_overview_dashboard(
+    *,
+    market_id: str,
+    current_regime: str,
+    price_status: str,
+    macro_status: str,
+    prices_wide: pd.DataFrame,
+    benchmark_label: str,
+    signals: Sequence,
+    theme_mode: str,
+    sector_map: Mapping[str, object],
+    lookup_query_value: str = "",
+    lookup_status: str = "",
+    lookup_message: str = "",
+    lookup_display_model: Mapping[str, Any] | None = None,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> tuple[str, bool]:
+    """Render the reference-style overview and return stock lookup submission state."""
+    cards = _build_overview_market_cards(
+        prices_wide=prices_wide,
+        benchmark_label=benchmark_label,
+        signals=signals,
+        current_regime=current_regime,
+        price_status=price_status,
+        macro_status=macro_status,
+    )
+    st.markdown(
+        '<section class="overview-reference-shell">'
+        '<div class="overview-section-title">시장/국면 한눈에 보기</div>'
+        f'<div class="overview-market-grid">{"".join(cards)}</div>'
+        "</section>",
+        unsafe_allow_html=True,
+    )
+
+    lookup_query = str(lookup_query_value or "")
+    lookup_submitted = False
+    with st.container(border=True):
+        st.markdown('<div class="overview-section-title">종목-섹터 조회</div>', unsafe_allow_html=True)
+        with st.form("overview_stock_lookup_form"):
+            input_col, market_col, button_col = st.columns([3.5, 1.2, 0.82])
+            with input_col:
+                lookup_query = st.text_input(
+                    get_ui_text("stock_lookup_label", locale),
+                    value=lookup_query,
+                    placeholder="종목명 또는 티커를 입력하세요 (예: 삼성전자, 005930)",
+                    label_visibility="collapsed",
+                )
+            with market_col:
+                st.selectbox(
+                    "시장",
+                    options=[f"{market_id} ({'KOSPI/KOSDAQ' if market_id == 'KR' else 'US'})"],
+                    index=0,
+                    label_visibility="collapsed",
+                    disabled=True,
+                )
+            with button_col:
+                lookup_submitted = st.form_submit_button("상세 조회", width="stretch", type="primary")
+
+        if lookup_status or lookup_message:
+            status_text = " · ".join(item for item in [lookup_status, lookup_message] if item)
+            st.caption(status_text)
+        detail = dict(lookup_display_model or {})
+        candidates = list(detail.get("candidates", []) or detail.get("matched_sectors", []) or [])
+        if candidates:
+            selected_suffix = get_ui_text("stock_lookup_selected_suffix", locale)
+            selected_code = str(dict(detail.get("canonical_sector") or {}).get("sector_code", "")).strip()
+            chips = []
+            for candidate in candidates[:4]:
+                sector_name = str(candidate.get("sector_name", "")).strip()
+                selected = bool(candidate.get("selected")) or str(candidate.get("sector_code", "")).strip() == selected_code
+                if sector_name:
+                    chips.append(
+                        '<span class="overview-lookup-chip" data-selected="{}">{}</span>'.format(
+                            "true" if selected else "false",
+                            html.escape(f"{sector_name} ({selected_suffix})" if selected else sector_name),
+                        )
+                    )
+            if chips:
+                st.markdown('<div class="overview-lookup-chips">' + "".join(chips) + "</div>", unsafe_allow_html=True)
+
+    filter_col_1, filter_col_2, filter_col_3, filter_col_4 = st.columns([1, 1.2, 1.2, 1.2])
+    with filter_col_1:
+        period = st.segmented_control(
+            "기간",
+            options=["1M", "3M", "6M", "1Y"],
+            default="3M",
+            label_visibility="visible",
+        )
+    with filter_col_2:
+        compare_basis = st.selectbox("비교 기준", options=["벤치마크 대비", "절대 수익률"], index=0)
+    with filter_col_3:
+        sort_key = st.selectbox("정렬 기준", options=["모멘텀 점수", "수익률(3M)", "상대강도"], index=0)
+    with filter_col_4:
+        sector_group = st.selectbox("섹터 그룹", options=["WICS 대분류", "전체"], index=0)
+    del compare_basis, sector_group, sector_map
+
+    sector_frame = _build_overview_sector_frame(signals, sort_key=str(sort_key))
+    left_col, center_col, right_col = st.columns([1.28, 1.52, 1.0], gap="medium")
+    with left_col:
+        with st.container(border=True):
+            st.markdown('<div class="overview-section-title">섹터 모멘텀 & 상대강도</div>', unsafe_allow_html=True)
+            _render_overview_sector_table(sector_frame)
+    with center_col:
+        with st.container(border=True):
+            st.markdown('<div class="overview-section-title">섹터 상대강도 추이</div>', unsafe_allow_html=True)
+            fig = _build_overview_trend_figure(
+                prices_wide=prices_wide,
+                signals=signals,
+                benchmark_label=benchmark_label,
+                period=str(period or "3M"),
+                theme_mode=theme_mode,
+            )
+            st.plotly_chart(fig, width="stretch")
+    with right_col:
+        with st.container(border=True):
+            st.markdown('<div class="overview-section-title">섹터 히트맵 (3M 수익률)</div>', unsafe_allow_html=True)
+            _render_overview_heatmap(signals)
+
+    return lookup_query, lookup_submitted
 
 
 def render_top_bar_filters(
@@ -712,7 +1115,7 @@ def render_investor_flow_summary(
             tone = _state_tone(raw_state, ratio=ratio)
             return (
                 '<span style="display:inline-flex; align-items:center; gap:0.3rem; '
-                'padding:0.22rem 0.5rem; border-radius:999px; font-size:0.76rem; '
+                'padding:0.3rem 0.62rem; border-radius:var(--radius-pill); font-size:var(--flow-chip-size,0.78rem); '
                 f'font-weight:700; background:color-mix(in srgb, var(--{tone}) 16%, transparent); '
                 f'color:var(--{tone}); border:1px solid color-mix(in srgb, var(--{tone}) 28%, transparent);">'
                 f'<span>{html.escape(label)}</span><strong>{html.escape(value)}</strong>'
@@ -728,7 +1131,7 @@ def render_investor_flow_summary(
             score_label = f'{get_ui_text("flow_col_score", locale)} {float(row["flow_score"]):+.2f}'
             show_score_label = use_signal_rows or str(row.get("flow_state_raw", "unavailable")) != "unavailable"
             score_html = (
-                f'<span style="font-size:0.8rem; color:var(--text-muted); font-weight:700;">{html.escape(score_label)}</span>'
+                f'<span style="font-size:var(--flow-chip-size,0.78rem); color:var(--text-muted); font-weight:700;">{html.escape(score_label)}</span>'
                 if show_score_label
                 else ""
             )
@@ -853,7 +1256,7 @@ def render_investor_decision_boards(
             render_panel_header(
                 eyebrow="보유 포지션 대응",
                 title="포지션 관리",
-                description="보유 섹터의 추가 매수, 유지, 비중 축소, 청산 검토 후보를 제시합니다.",
+                description="보유 섹터의 추가 검토, 유지, 비중 축소, 이탈 검토 후보를 제시합니다.",
                 badge=f"{len(selected_held)}개 추적 중",
             )
             _render_decision_board_cards(
@@ -867,7 +1270,7 @@ def render_investor_decision_boards(
         with new_col:
             render_panel_header(
                 eyebrow="신규 아이디어",
-                title="신규 매수 탐색",
+                title="신규 후보 탐색",
                 description="관심 종목 중 신규 진입 후보와 그렇지 않은 종목을 구분합니다.",
                 badge="기회 종목군",
             )
@@ -1049,7 +1452,7 @@ def render_sector_detail_panel(
                 clicked = st.button(
                     f"{rank}. {sector_label}",
                     key=f"sector_rank_button_{rank}_{sector_label}",
-                    use_container_width=True,
+                    width="stretch",
                     type="primary" if is_selected else "secondary",
                 )
                 if clicked:
@@ -1128,7 +1531,7 @@ def render_sector_detail_panel(
                 _render_card_html(
                     eyebrow="경고",
                     value=str(detail_summary.get("alerts_text", alerts_none)),
-                    detail="활성 위험 신호",
+                    detail="활성 리스크 신호",
                     tone="warning" if str(detail_summary.get("alerts_text", alerts_none)) != alerts_none else "success",
                 ),
             ]

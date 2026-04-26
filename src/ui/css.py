@@ -10,8 +10,10 @@ from config.theme import (
     THEME_TOKENS as CANONICAL_THEME_TOKENS,
     get_chart_tokens as get_chart_section_tokens,
     get_dataframe_tokens as get_dataframe_section_tokens,
+    get_layout_tokens as get_layout_section_tokens,
     get_navigation_tokens as get_navigation_section_tokens,
     get_signal_tokens as get_signal_section_tokens,
+    get_typography_tokens as get_typography_section_tokens,
     get_ui_tokens as get_ui_section_tokens,
     normalize_theme_mode as normalize_theme_mode_base,
 )
@@ -21,7 +23,7 @@ def _flatten_ui_tokens(theme_mode: str) -> dict[str, str]:
     ui = get_ui_section_tokens(theme_mode)
     return {
         "bg": str(ui["background"]),
-        "surface": str(ui["card"]),
+        "surface": str(ui["card_alt"]),
         "border": str(ui["border"]),
         "text": str(ui["foreground"]),
         "text_muted": str(ui["muted"]),
@@ -73,20 +75,6 @@ ACTION_COLORS: dict[str, str] = ACTION_COLORS_BY_THEME["dark"]
 BLUE = ACTION_COLORS["Watch"]
 GREY = ACTION_COLORS["Hold"]
 DARK_GREY = ACTION_COLORS["N/A"]
-
-
-PRIMARY_FONT_CSS = (
-    "'Pretendard Local', 'Pretendard', 'Noto Sans KR', 'Segoe UI', "
-    "'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif"
-)
-PRIMARY_FONT_PLOTLY = (
-    "Pretendard Local, Pretendard, Noto Sans KR, Segoe UI, "
-    "Apple SD Gothic Neo, Malgun Gothic, sans-serif"
-)
-MONO_FONT_CSS = (
-    "'JetBrains Mono Local', 'JetBrains Mono', 'Fira Code', "
-    "'SFMono-Regular', Consolas, 'Liberation Mono', monospace"
-)
 
 
 def normalize_theme_mode(theme_mode: str | None) -> str:
@@ -168,50 +156,55 @@ def inject_css(theme_mode: str) -> None:
     mode = normalize_theme_mode(theme_mode)
     tokens = get_theme_tokens(mode)
     ui_tokens = get_ui_section_tokens(mode)
+    layout_tokens = get_layout_section_tokens(mode)
     signal_tokens = get_signal_section_tokens(mode)
     tab_tokens = get_tab_style_tokens(mode)
     table_tokens = get_table_style_tokens(mode)
+    typography_tokens = get_typography_section_tokens(mode)
     badge_styles = get_action_badge_styles(mode)
     font_face_css = build_font_face_css()
     color_scheme = "dark" if mode == "dark" else "light"
+    ui_font_css = str(typography_tokens["ui_family"])
+    body_font_css = str(typography_tokens["body_family"])
+    display_font_css = str(typography_tokens["display_family"])
+    mono_font_css = str(typography_tokens["mono_family"])
+    button_font_size = str(typography_tokens["button_size"])
+    caption_font_size = str(typography_tokens["caption_size"])
+    body_font_size = str(typography_tokens["body_size"])
+    body_small_font_size = str(typography_tokens["body_small_size"])
+    section_title_size = str(typography_tokens["section_title_size"])
+    card_title_size = str(typography_tokens["card_title_size"])
+    display_hero_size = str(typography_tokens["display_hero_size"])
+    display_secondary_size = str(typography_tokens["display_secondary_size"])
+    display_line_height = str(typography_tokens["display_line_height"])
+    heading_line_height = str(typography_tokens["heading_line_height"])
+    body_line_height = str(typography_tokens["body_line_height"])
+    body_font_weight = str(typography_tokens["body_weight"])
+    heading_font_weight = str(typography_tokens["heading_weight"])
+    display_font_weight = str(typography_tokens["display_weight"])
+    badge_font_weight = str(typography_tokens["caption_weight"])
+    button_font_weight = str(typography_tokens["button_weight"])
 
     if mode == "dark":
-        app_background_css = (
-            "background:"
-            "radial-gradient(1200px 480px at -8% -10%, color-mix(in srgb, var(--primary) 22%, transparent), transparent 72%),"
-            "linear-gradient(180deg, color-mix(in srgb, var(--bg) 92%, #000 8%), var(--bg));"
-        )
+        app_background_css = f"background: {ui_tokens['background']};"
         header_background_css = str(ui_tokens["header_bg"])
         header_border_css = str(ui_tokens["header_border"])
-        sidebar_background_css = (
-            "linear-gradient(165deg, "
-            f"{ui_tokens['sidebar_gradient_start']}, {ui_tokens['sidebar_gradient_end']})"
-        )
-        card_background_css = "color-mix(in srgb, var(--surface) 92%, var(--bg) 8%)"
+        sidebar_background_css = str(ui_tokens["sidebar_bg"])
+        card_background_css = str(ui_tokens["card"])
         card_shadow_css = str(ui_tokens["card_shadow"])
         control_bg_css = str(ui_tokens["input_bg"])
         control_border_css = str(ui_tokens["input_border"])
         control_hover_css = str(ui_tokens["sidebar_hover"])
         inline_code_bg_css = str(ui_tokens["inline_code_bg"])
         font_smoothing_css = "-webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;"
-        body_font_weight = "400"
-        heading_font_weight = "600"
-        badge_font_size = "12px"
-        badge_font_weight = "600"
+        badge_font_size = caption_font_size
         provisional_badge_text = str(ui_tokens["provisional_badge_text"])
         provisional_badge_border = "color-mix(in srgb, var(--warning) 45%, transparent)"
     else:
-        app_background_css = (
-            "background:"
-            "radial-gradient(1250px 520px at -10% -14%, color-mix(in srgb, var(--primary) 12%, white 88%), transparent 70%),"
-            f"linear-gradient(180deg, {ui_tokens['sidebar_gradient_start']} 0%, {ui_tokens['background']} 100%);"
-        )
+        app_background_css = f"background: {ui_tokens['background']};"
         header_background_css = str(ui_tokens["header_bg"])
         header_border_css = str(ui_tokens["header_border"])
-        sidebar_background_css = (
-            "linear-gradient(180deg, "
-            f"{ui_tokens['sidebar_gradient_start']} 0%, {ui_tokens['sidebar_gradient_end']} 100%)"
-        )
+        sidebar_background_css = str(ui_tokens["sidebar_bg"])
         card_background_css = str(ui_tokens["card"])
         card_shadow_css = str(ui_tokens["card_shadow"])
         control_bg_css = str(ui_tokens["input_bg"])
@@ -219,10 +212,7 @@ def inject_css(theme_mode: str) -> None:
         control_hover_css = str(ui_tokens["sidebar_hover"])
         inline_code_bg_css = str(ui_tokens["inline_code_bg"])
         font_smoothing_css = "-webkit-font-smoothing: subpixel-antialiased; -moz-osx-font-smoothing: auto;"
-        body_font_weight = "450"
-        heading_font_weight = "650"
-        badge_font_size = "12.5px"
-        badge_font_weight = "700"
+        badge_font_size = caption_font_size
         provisional_badge_text = str(ui_tokens["provisional_badge_text"])
         provisional_badge_border = "color-mix(in srgb, var(--warning) 60%, transparent)"
 
@@ -243,18 +233,30 @@ def inject_css(theme_mode: str) -> None:
         --info: {tokens['info']};
         --muted: {ui_tokens['card_alt']};
         --muted-foreground: var(--text-muted);
-        --accent-surface: color-mix(in srgb, var(--surface) 82%, var(--primary) 18%);
+        --accent-surface: color-mix(in srgb, var(--surface) 90%, var(--primary) 10%);
         --ring: {ui_tokens['focus_ring']};
-        --radius-sm: 10px;
-        --radius-md: 14px;
-        --radius-lg: 18px;
-        --radius-xl: 24px;
-        --space-1: 0.25rem;
-        --space-2: 0.5rem;
-        --space-3: 0.75rem;
-        --space-4: 1rem;
-        --space-5: 1.25rem;
-        --space-6: 1.5rem;
+        --accent-link: {ui_tokens['accent_link']};
+        --accent-blue-hover: {ui_tokens['accent_blue_hover']};
+        --surface-tint: {ui_tokens['surface_tint']};
+        --radius-xs: {layout_tokens['radius_xs']};
+        --radius-sm: {layout_tokens['radius_sm']};
+        --radius-md: {layout_tokens['radius_md']};
+        --radius-lg: {layout_tokens['radius_lg']};
+        --radius-xl: {layout_tokens['radius_xl']};
+        --radius-pill: {layout_tokens['radius_pill']};
+        --radius-full: {layout_tokens['radius_full']};
+        --space-1: {layout_tokens['space_1']};
+        --space-2: {layout_tokens['space_2']};
+        --space-3: {layout_tokens['space_3']};
+        --space-4: {layout_tokens['space_4']};
+        --space-5: {layout_tokens['space_5']};
+        --space-6: {layout_tokens['space_6']};
+        --space-7: {layout_tokens['space_7']};
+        --font-display: {display_font_css};
+        --font-ui: {ui_font_css};
+        --font-body: {body_font_css};
+        --font-mono: {mono_font_css};
+        --flow-chip-size: {caption_font_size};
 
         /* Streamlit theme variable aliases for native widgets */
         --primary-color: {tokens['primary']};
@@ -264,13 +266,16 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     html, body, [class*="css"] {{
-        font-family: {PRIMARY_FONT_CSS} !important;
+        font-family: var(--font-body) !important;
         color: var(--text);
         font-weight: {body_font_weight};
-        line-height: 1.65;
-        letter-spacing: 0.012em;
+        font-size: {body_font_size};
+        line-height: {body_line_height};
+        letter-spacing: 0;
         font-optical-sizing: auto;
         text-rendering: optimizeLegibility;
+        word-break: keep-all;
+        overflow-wrap: anywhere;
         {font_smoothing_css}
         color-scheme: {color_scheme};
     }}
@@ -281,10 +286,7 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     [data-testid="stHeader"] {{
-        background: color-mix(in srgb, {header_background_css} 80%, transparent) !important;
-        border-bottom: 1px solid {header_border_css};
-        backdrop-filter: blur(12px) !important;
-        -webkit-backdrop-filter: blur(12px) !important;
+        display: none !important;
     }}
 
     [data-testid="stDecoration"] {{
@@ -295,18 +297,81 @@ def inject_css(theme_mode: str) -> None:
         background: transparent !important;
     }}
 
+    [data-testid="stDeployButton"],
+    [data-testid="stStatusWidget"],
+    [data-testid="manage-app-button"] {{
+        display: none !important;
+    }}
+
     [data-testid="stSidebar"] {{
         background: {sidebar_background_css};
         border-right: 1px solid var(--border);
+        box-shadow: inset -1px 0 0 color-mix(in srgb, var(--surface) 68%, transparent);
     }}
 
     .block-container {{
-        padding-top: 3.5rem;
-        padding-bottom: 1.2rem;
+        padding-top: 1.05rem;
+        padding-bottom: 1.15rem;
+        padding-left: clamp(1rem, 2vw, 1.8rem);
+        padding-right: clamp(1rem, 2vw, 1.8rem);
+        max-width: 1480px;
+    }}
+
+    [data-testid="stSidebarContent"] {{
+        padding: 1.05rem 0.92rem 1rem;
+    }}
+
+    [data-testid="stSidebar"] [data-testid="stHeading"] h1,
+    [data-testid="stSidebar"] h1 {{
+        font-size: 1.02rem !important;
+        font-weight: 750 !important;
+        letter-spacing: -0.01em;
+        margin-bottom: 0.9rem;
+    }}
+
+    [data-testid="stSidebar"] hr {{
+        margin: 0.9rem 0;
+        border-color: color-mix(in srgb, var(--border) 72%, transparent);
+    }}
+
+    [data-testid="stSidebar"] [data-testid="stSidebarNav"] {{
+        padding-top: 0.2rem;
+    }}
+
+    [data-testid="stSidebar"] [data-testid="stSidebarNav"] ul {{
+        gap: 0.18rem;
+    }}
+
+    [data-testid="stSidebar"] [data-testid="stSidebarNav"] span,
+    [data-testid="stSidebar"] [data-testid="stSidebarNav"] p {{
+        font-family: var(--font-ui) !important;
+        font-size: 0.78rem !important;
+        font-weight: 680 !important;
+        color: var(--text-muted) !important;
+    }}
+
+    [data-testid="stSidebar"] [data-testid="stSidebarNav"] a {{
+        min-height: 1.82rem;
+        border-radius: var(--radius-sm);
+        padding: 0.3rem 0.5rem;
+        color: var(--text-muted) !important;
+        transition: background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease;
+    }}
+
+    [data-testid="stSidebar"] [data-testid="stSidebarNav"] a:hover {{
+        background: {control_hover_css};
+        color: var(--text) !important;
+    }}
+
+    [data-testid="stSidebar"] [data-testid="stSidebarNav"] a[aria-current="page"],
+    [data-testid="stSidebar"] [data-testid="stSidebarNav"] a[aria-selected="true"] {{
+        background: color-mix(in srgb, var(--primary) 10%, #ffffff 90%);
+        color: var(--primary) !important;
+        box-shadow: inset 2px 0 0 var(--primary);
     }}
 
     div[data-testid="stMetricValue"], code, pre {{
-        font-family: {MONO_FONT_CSS} !important;
+        font-family: var(--font-mono) !important;
         font-variant-numeric: tabular-nums;
     }}
 
@@ -328,8 +393,23 @@ def inject_css(theme_mode: str) -> None:
     .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 {{
         color: var(--text);
         font-weight: {heading_font_weight};
-        line-height: 1.3;
-        letter-spacing: -0.01em;
+        line-height: {heading_line_height};
+        letter-spacing: -0.004em;
+    }}
+
+    .stApp h1,
+    .stApp h2 {{
+        font-family: var(--font-display) !important;
+        font-weight: {display_font_weight};
+        line-height: {display_line_height};
+        letter-spacing: -0.02em;
+    }}
+
+    .stApp h3,
+    .stApp h4,
+    .stApp h5,
+    .stApp h6 {{
+        font-family: var(--font-ui) !important;
     }}
 
     .stApp [data-testid="stMarkdownContainer"] p,
@@ -345,7 +425,7 @@ def inject_css(theme_mode: str) -> None:
     .stApp code {{
         background: {inline_code_bg_css};
         color: var(--text);
-        border-radius: 6px;
+        border-radius: var(--radius-xs);
         padding: 1px 6px;
     }}
 
@@ -371,6 +451,9 @@ def inject_css(theme_mode: str) -> None:
         background-color: {control_bg_css};
         border: 1px solid {control_border_css};
         color: var(--text);
+        border-radius: var(--radius-sm);
+        min-height: 2.1rem;
+        box-shadow: 0 1px 0 color-mix(in srgb, var(--surface) 72%, transparent);
     }}
 
     [data-testid="stSidebar"] button[kind]:hover {{
@@ -378,81 +461,166 @@ def inject_css(theme_mode: str) -> None:
         border-color: {tokens['primary']};
     }}
 
+    .stApp .stButton > button,
+    .stApp .stDownloadButton > button,
+    .stApp div[data-testid="stFormSubmitButton"] > button {{
+        font-family: var(--font-ui) !important;
+        font-size: {button_font_size} !important;
+        font-weight: {button_font_weight} !important;
+        letter-spacing: 0;
+        border-radius: var(--radius-pill) !important;
+        min-height: 2.28rem;
+        padding: 0.46rem 0.82rem;
+        border: 1px solid var(--border) !important;
+        background: var(--surface) !important;
+        color: var(--text) !important;
+        box-shadow: none !important;
+        transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease, transform 0.18s ease;
+    }}
+
+    .stApp .stButton > button:hover,
+    .stApp .stDownloadButton > button:hover,
+    .stApp div[data-testid="stFormSubmitButton"] > button:hover {{
+        background: var(--accent-blue-hover) !important;
+        border-color: var(--accent-blue-hover) !important;
+        color: #ffffff !important;
+        transform: translateY(0);
+    }}
+
+    .stApp .stButton > button[kind="primary"],
+    .stApp div[data-testid="stFormSubmitButton"] > button[kind="primary"] {{
+        background: var(--primary) !important;
+        border-color: var(--primary) !important;
+        color: #ffffff !important;
+    }}
+
+    .stApp [data-testid="stVerticalBlockBorderWrapper"],
+    .stApp [data-testid="stContainer"] [data-testid="stVerticalBlockBorderWrapper"] {{
+        border-color: var(--border) !important;
+        border-radius: var(--radius-md) !important;
+        background: color-mix(in srgb, var(--surface) 97%, var(--surface-tint) 3%) !important;
+        box-shadow: none !important;
+    }}
+
+    .stApp [data-testid="stVerticalBlockBorderWrapper"] > div {{
+        border-radius: var(--radius-md) !important;
+    }}
+
     .app-summary-card {{
         border: 1px solid var(--border);
         background: {card_background_css};
-        box-shadow: {card_shadow_css};
-        border-radius: 14px;
-        padding: 14px 16px;
+        box-shadow: none;
+        border-radius: var(--radius-sm);
+        padding: 13px 15px;
         margin-bottom: 0.8rem;
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        transition: border-color 0.2s ease, background-color 0.2s ease;
     }}
 
-    .app-summary-card:hover {{
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px color-mix(in srgb, var(--primary) 12%, transparent);
+    @keyframes riseIn {{
+        from {{ opacity: 0; transform: translate3d(0, 12px, 0); }}
+        to {{ opacity: 1; transform: translate3d(0, 0, 0); }}
     }}
 
     .page-shell {{
         position: relative;
         overflow: hidden;
-        border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--border));
-        background:
-            radial-gradient(960px 320px at 110% -20%, color-mix(in srgb, var(--primary) 18%, transparent), transparent 58%),
-            linear-gradient(180deg, color-mix(in srgb, var(--surface) 94%, var(--bg) 6%), var(--surface));
-        box-shadow: {card_shadow_css};
-        border-radius: var(--radius-xl);
-        padding: 1.25rem 1.35rem 1.1rem;
-        margin-bottom: 1rem;
+        border: 0;
+        background: transparent;
+        box-shadow: none;
+        border-radius: 0;
+        padding: {layout_tokens['page_shell_padding']};
+        margin-bottom: 0.45rem;
+        animation: riseIn 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+    }}
+
+    .page-shell__grid {{
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 1rem;
+        align-items: center;
+    }}
+
+    .page-shell__main {{
+        max-width: 58ch;
+    }}
+
+    .page-shell__meta {{
+        align-self: center;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+        gap: 0.45rem;
+        padding: 0;
+        border-left: 0;
+        background: transparent;
+        border-radius: 0;
+        box-shadow: none;
+        overflow: visible;
+    }}
+
+    .page-shell__meta-eyebrow {{
+        color: var(--text-muted);
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
+        letter-spacing: 0;
+        text-transform: uppercase;
+        text-align: right;
     }}
 
     .page-shell__eyebrow {{
         color: var(--text-muted);
-        font-size: 0.78rem;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        margin-bottom: 0.35rem;
+        font-family: var(--font-ui);
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
+        letter-spacing: 0;
+        text-transform: none;
+        margin-bottom: 0.22rem;
     }}
 
     .page-shell__title {{
         color: var(--text);
-        font-size: clamp(1.7rem, 2.8vw, 2.35rem);
-        font-weight: 750;
+        font-family: var(--font-display);
+        font-size: {display_hero_size};
+        font-weight: {display_font_weight};
         line-height: 1.08;
-        letter-spacing: -0.03em;
+        letter-spacing: 0;
     }}
 
     .page-shell__description {{
         color: var(--text-muted);
-        font-size: 0.98rem;
-        max-width: 72ch;
-        margin-top: 0.45rem;
+        font-size: {body_small_font_size};
+        line-height: {body_line_height};
+        max-width: 65ch;
+        margin-top: 0.24rem;
+        text-wrap: pretty;
     }}
 
     .page-shell__pills {{
         display: flex;
         flex-wrap: wrap;
-        gap: 0.65rem;
-        margin-top: 1rem;
+        gap: 0.34rem;
+        justify-content: flex-end;
     }}
 
     .page-shell__pill {{
         display: inline-flex;
         align-items: center;
-        gap: 0.55rem;
-        padding: 0.45rem 0.72rem;
-        border-radius: 999px;
+        gap: 0.4rem;
+        padding: 0.24rem 0.48rem;
+        border-radius: var(--radius-sm);
         border: 1px solid var(--border);
-        background: color-mix(in srgb, var(--surface) 88%, var(--bg) 12%);
-        font-size: 0.84rem;
+        background: color-mix(in srgb, var(--surface) 84%, var(--surface-tint) 16%);
+        font-family: var(--font-ui);
+        font-size: 0.64rem;
         color: var(--text-muted);
+        letter-spacing: 0;
+        text-transform: none;
     }}
 
     .page-shell__pill strong {{
         color: var(--text);
-        font-size: 0.86rem;
-        font-weight: 700;
+        font-size: 0.66rem;
+        font-weight: {badge_font_weight};
     }}
 
     .page-shell__pill[data-tone="success"] {{
@@ -474,51 +642,49 @@ def inject_css(theme_mode: str) -> None:
     .status-strip {{
         display: grid;
         grid-template-columns: auto 1fr auto;
-        align-items: center;
-        gap: 0.9rem;
+        align-items: start;
+        gap: 0.85rem;
         border: 1px solid var(--border);
-        background: color-mix(in srgb, var(--surface) 94%, var(--bg) 6%);
-        box-shadow: {card_shadow_css};
+        background: color-mix(in srgb, var(--surface) 96%, var(--surface-tint) 4%);
+        box-shadow: none;
         border-radius: var(--radius-lg);
-        padding: 0.85rem 1rem;
-        margin-bottom: 0.9rem;
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
-    }}
-    
-    .status-strip:hover {{
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px color-mix(in srgb, var(--primary) 12%, transparent);
+        padding: 0.68rem 0.78rem;
+        margin-bottom: 0.72rem;
+        transition: none;
+        animation: riseIn 480ms cubic-bezier(0.16, 1, 0.3, 1) both;
     }}
 
     .status-strip__badge {{
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        min-width: 72px;
-        border-radius: 999px;
-        padding: 0.36rem 0.6rem;
-        font-size: 0.72rem;
-        font-weight: 800;
-        letter-spacing: 0.06em;
+        min-width: 56px;
+        border-radius: var(--radius-sm);
+        padding: 0.34rem 0.56rem;
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
+        letter-spacing: 0;
+        text-transform: none;
     }}
 
     .status-strip__title {{
         color: var(--text);
-        font-size: 0.95rem;
-        font-weight: 700;
-        line-height: 1.25;
+        font-family: var(--font-ui);
+        font-size: {card_title_size};
+        font-weight: {heading_font_weight};
+        line-height: {heading_line_height};
     }}
 
     .status-strip__message {{
         color: var(--text-muted);
-        font-size: 0.86rem;
+        font-size: {body_small_font_size};
         margin-top: 0.12rem;
     }}
 
     .status-strip__meta {{
         color: var(--text-muted);
-        font-size: 0.78rem;
-        font-weight: 600;
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
     }}
 
     .status-strip[data-tone="error"] {{
@@ -551,6 +717,212 @@ def inject_css(theme_mode: str) -> None:
         color: var(--primary);
     }}
 
+    .overview-reference-shell {{
+        margin-bottom: 0.72rem;
+    }}
+
+    .overview-section-title {{
+        color: var(--text);
+        font-family: var(--font-ui);
+        font-size: {section_title_size};
+        font-weight: {heading_font_weight};
+        line-height: {heading_line_height};
+        margin-bottom: 0.58rem;
+        letter-spacing: 0;
+    }}
+
+    .overview-market-grid {{
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.58rem;
+    }}
+
+    .overview-market-card {{
+        border: 1px solid var(--border);
+        background: var(--surface);
+        border-radius: var(--radius-lg);
+        padding: 0.72rem 0.8rem;
+        min-height: 5.3rem;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+    }}
+
+    .overview-market-card__label {{
+        color: var(--text);
+        font-size: {body_small_font_size};
+        font-weight: 720;
+        line-height: 1.2;
+    }}
+
+    .overview-market-card__value {{
+        color: var(--text);
+        font-family: var(--font-mono);
+        font-size: 1.16rem;
+        font-weight: 760;
+        font-variant-numeric: tabular-nums;
+        line-height: 1.2;
+        margin-top: 0.32rem;
+    }}
+
+    .overview-market-card__change {{
+        font-family: var(--font-mono);
+        font-size: {body_small_font_size};
+        font-weight: 700;
+        margin-top: 0.2rem;
+    }}
+
+    .overview-market-card__change[data-tone="positive"] {{
+        color: var(--danger);
+    }}
+
+    .overview-market-card__change[data-tone="negative"] {{
+        color: var(--primary);
+    }}
+
+    .overview-market-card--status {{
+        gap: 0.42rem;
+    }}
+
+    .overview-market-card__status-row {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.8rem;
+        color: var(--text-muted);
+        font-size: {caption_font_size};
+        line-height: 1.3;
+    }}
+
+    .overview-market-card__status-row strong {{
+        color: var(--text);
+        font-size: {body_small_font_size};
+        font-weight: 760;
+    }}
+
+    .overview-lookup-chips {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.4rem;
+        margin-top: 0.52rem;
+    }}
+
+    .overview-lookup-chip {{
+        border: 1px solid var(--border);
+        background: color-mix(in srgb, var(--surface) 88%, var(--surface-tint) 12%);
+        color: var(--text-muted);
+        border-radius: var(--radius-sm);
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
+        padding: 0.28rem 0.48rem;
+    }}
+
+    .overview-lookup-chip[data-selected="true"] {{
+        border-color: color-mix(in srgb, var(--primary) 42%, var(--border));
+        background: color-mix(in srgb, var(--primary) 9%, #ffffff 91%);
+        color: var(--primary);
+    }}
+
+    .overview-sector-table-wrap {{
+        max-height: 410px;
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: var(--surface);
+    }}
+
+    .overview-sector-table {{
+        width: 100%;
+        border-collapse: collapse;
+        font-size: {caption_font_size};
+        color: var(--text);
+    }}
+
+    .overview-sector-table th,
+    .overview-sector-table td {{
+        padding: 0.48rem 0.46rem;
+        border-bottom: 1px solid var(--border);
+        white-space: nowrap;
+        vertical-align: middle;
+    }}
+
+    .overview-sector-table th {{
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        background: color-mix(in srgb, var(--surface) 88%, var(--surface-tint) 12%);
+        color: var(--text-muted);
+        font-weight: {badge_font_weight};
+        text-align: left;
+    }}
+
+    .overview-sector-table td:first-child,
+    .overview-sector-table td:nth-child(3),
+    .overview-sector-table td:nth-child(4),
+    .overview-sector-table td:nth-child(5) {{
+        font-family: var(--font-mono);
+        font-variant-numeric: tabular-nums;
+        text-align: right;
+    }}
+
+    .overview-sector-table td:nth-child(2) {{
+        font-weight: 650;
+        min-width: 8rem;
+    }}
+
+    .overview-sector-table td[data-tone="positive"] {{
+        color: var(--danger);
+        font-weight: 760;
+    }}
+
+    .overview-sector-table td[data-tone="negative"] {{
+        color: var(--primary);
+        font-weight: 760;
+    }}
+
+    .overview-heatmap-grid {{
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.35rem;
+    }}
+
+    .overview-heatmap-tile {{
+        min-height: 4.25rem;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        padding: 0.62rem 0.58rem;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 0.18rem;
+        text-align: center;
+    }}
+
+    .overview-heatmap-tile[data-tone="positive"] {{
+        background: color-mix(in srgb, var(--danger) var(--tile-strength), #ffffff);
+        color: #ffffff;
+        border-color: color-mix(in srgb, var(--danger) 42%, var(--border));
+    }}
+
+    .overview-heatmap-tile[data-tone="negative"] {{
+        background: color-mix(in srgb, var(--success) var(--tile-strength), #ffffff);
+        color: #0F3428;
+        border-color: color-mix(in srgb, var(--success) 42%, var(--border));
+    }}
+
+    .overview-heatmap-tile span {{
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
+        line-height: 1.24;
+    }}
+
+    .overview-heatmap-tile strong {{
+        font-family: var(--font-mono);
+        font-size: 0.96rem;
+        font-weight: 780;
+        font-variant-numeric: tabular-nums;
+    }}
+
     div[data-testid="stVerticalBlockBorderWrapper"] {{
         border-color: var(--border) !important;
         background: {card_background_css};
@@ -564,31 +936,32 @@ def inject_css(theme_mode: str) -> None:
 
     .command-bar__eyebrow {{
         color: var(--text-muted);
-        font-size: 0.76rem;
-        font-weight: 700;
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
         letter-spacing: 0.08em;
-        text-transform: uppercase;
+        text-transform: lowercase;
         margin-bottom: 0.18rem;
     }}
 
     .command-bar__title {{
         color: var(--text);
-        font-size: 1.02rem;
-        font-weight: 650;
-        line-height: 1.35;
+        font-family: var(--font-ui);
+        font-size: {section_title_size};
+        font-weight: {heading_font_weight};
+        line-height: {heading_line_height};
     }}
 
     .top-bar-summary {{
         border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--border));
-        background: color-mix(in srgb, var(--surface) 90%, var(--primary) 10%);
+        background: color-mix(in srgb, var(--surface) 90%, var(--surface-tint) 10%);
         border-radius: var(--radius-md);
         color: var(--text);
-        font-size: 0.92rem;
-        line-height: 1.5;
+        font-size: {body_small_font_size};
+        line-height: {body_line_height};
         padding: 0.72rem 0.9rem;
         min-height: 3rem;
         display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
         gap: 0.65rem;
     }}
 
@@ -600,74 +973,84 @@ def inject_css(theme_mode: str) -> None:
 
     .top-bar-summary__item span {{
         color: var(--text-muted);
-        font-size: 0.74rem;
-        font-weight: 700;
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
         letter-spacing: 0.05em;
-        text-transform: uppercase;
+        text-transform: lowercase;
     }}
 
     .top-bar-summary__item strong {{
         color: var(--text);
-        font-size: 0.93rem;
-        font-weight: 700;
+        font-size: {body_small_font_size};
+        font-weight: {button_font_weight};
     }}
 
     .analysis-toolbar {{
-        border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--border));
-        background:
-            linear-gradient(180deg, color-mix(in srgb, var(--surface) 96%, var(--bg) 4%), var(--surface));
-        box-shadow: {card_shadow_css};
+        border: 1px solid var(--border);
+        background: var(--surface);
+        box-shadow: none;
         border-radius: var(--radius-lg);
-        padding: 1rem 1.05rem 0.95rem;
-        margin-bottom: 0.85rem;
+        padding: {layout_tokens['panel_padding']};
+        margin-bottom: 0.72rem;
     }}
 
     .analysis-toolbar__eyebrow {{
         color: var(--text-muted);
-        font-size: 0.76rem;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
+        letter-spacing: 0;
+        text-transform: none;
         margin-bottom: 0.16rem;
     }}
 
     .analysis-toolbar__title {{
         color: var(--text);
-        font-size: 1.05rem;
-        font-weight: 700;
-        line-height: 1.35;
+        font-family: var(--font-ui);
+        font-size: {section_title_size};
+        font-weight: {heading_font_weight};
+        line-height: {heading_line_height};
+        letter-spacing: 0;
+    }}
+
+    .analysis-toolbar__description {{
+        color: var(--text-muted);
+        font-size: {body_small_font_size};
+        line-height: 1.5;
+        letter-spacing: 0;
+        max-width: 72ch;
+        margin-top: 0.2rem;
     }}
 
     .analysis-toolbar__summary {{
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 0.7rem;
-        margin-top: 0.85rem;
+        gap: 0.56rem;
+        margin-top: 0.58rem;
     }}
 
     .analysis-toolbar__summary-item {{
         border: 1px solid var(--border);
-        background: color-mix(in srgb, var(--surface) 90%, var(--primary) 10%);
-        border-radius: var(--radius-md);
-        padding: 0.7rem 0.82rem;
-        min-height: 3.1rem;
+        background: color-mix(in srgb, var(--surface) 88%, var(--surface-tint) 12%);
+        border-radius: var(--radius-sm);
+        padding: 0.58rem 0.68rem;
+        min-height: 2.6rem;
     }}
 
     .analysis-toolbar__summary-item span {{
         display: block;
         color: var(--text-muted);
-        font-size: 0.72rem;
-        font-weight: 700;
-        letter-spacing: 0.05em;
-        text-transform: uppercase;
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
+        letter-spacing: 0;
+        text-transform: none;
         margin-bottom: 0.22rem;
     }}
 
     .analysis-toolbar__summary-item strong {{
         color: var(--text);
-        font-size: 0.92rem;
-        font-weight: 700;
-        line-height: 1.35;
+        font-size: {body_small_font_size};
+        font-weight: {button_font_weight};
+        line-height: {body_line_height};
     }}
 
     .phase-chip-row {{
@@ -695,18 +1078,18 @@ def inject_css(theme_mode: str) -> None:
         align-items: center;
         gap: 0.42rem;
         border: 1px solid var(--border);
-        border-radius: 999px;
-        background: color-mix(in srgb, var(--surface) 92%, var(--bg) 8%);
+        border-radius: var(--radius-pill);
+        background: color-mix(in srgb, var(--surface) 92%, var(--surface-tint) 8%);
         color: var(--text);
-        font-size: 0.78rem;
-        font-weight: 600;
-        padding: 0.32rem 0.6rem;
+        font-size: {caption_font_size};
+        font-weight: {button_font_weight};
+        padding: 0.38rem 0.7rem;
     }}
 
     .cycle-palette__swatch {{
         width: 10px;
         height: 10px;
-        border-radius: 999px;
+        border-radius: var(--radius-full);
         display: inline-block;
         border: 1px solid {ui_tokens['cycle_swatch_border']};
     }}
@@ -737,27 +1120,28 @@ def inject_css(theme_mode: str) -> None:
 
     .sector-rank-list__eyebrow {{
         color: var(--text-muted);
-        font-size: 0.76rem;
-        font-weight: 700;
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
         letter-spacing: 0.08em;
-        text-transform: uppercase;
+        text-transform: lowercase;
         margin-bottom: 0.16rem;
     }}
 
     .sector-rank-list__title {{
         color: var(--text);
-        font-size: 0.94rem;
-        font-weight: 650;
-        line-height: 1.35;
+        font-family: var(--font-ui);
+        font-size: {card_title_size};
+        font-weight: {heading_font_weight};
+        line-height: {heading_line_height};
     }}
 
     .sector-rank-list__metric {{
-        border-radius: 999px;
+        border-radius: var(--radius-pill);
         border: 1px solid var(--border);
-        background: color-mix(in srgb, var(--surface) 94%, var(--bg) 6%);
+        background: color-mix(in srgb, var(--surface) 92%, var(--surface-tint) 8%);
         color: var(--text-muted);
-        font-size: 0.78rem;
-        font-weight: 700;
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
         line-height: 1;
         padding: 0.58rem 0.6rem;
         text-align: center;
@@ -778,144 +1162,161 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     .decision-hero {{
+        display: grid;
+        grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.85fr);
+        gap: 0.78rem;
         border: 1px solid var(--border);
-        background:
-            linear-gradient(135deg, color-mix(in srgb, var(--surface) 90%, var(--bg) 10%), var(--surface));
-        box-shadow: {card_shadow_css};
+        background: var(--surface);
+        box-shadow: none;
         border-radius: var(--radius-lg);
-        padding: 1.2rem 1.2rem 1rem;
-        margin-bottom: 1rem;
+        padding: 0.86rem 0.9rem 0.82rem;
+        margin-bottom: 0.74rem;
         position: relative;
         overflow: hidden;
+        animation: riseIn 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
     }}
 
     .decision-hero::before {{
         content: "";
         position: absolute;
-        inset: 0 auto 0 0;
-        width: 6px;
+        inset: 0 0 auto;
+        height: 2px;
+        width: auto;
         background: var(--decision-hero-accent, var(--primary));
+    }}
+
+    .decision-hero::after {{
+        display: none;
     }}
 
     .decision-hero__eyebrow {{
         color: var(--text-muted);
-        font-size: 0.8rem;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
-        margin-bottom: 0.35rem;
+        font-size: {caption_font_size};
+        letter-spacing: 0;
+        text-transform: none;
+        margin-bottom: 0.26rem;
     }}
 
     .decision-hero__copy {{
-        margin-bottom: 1rem;
+        position: relative;
+        z-index: 1;
+        margin-bottom: 0.7rem;
     }}
 
     .decision-hero__title {{
         color: var(--text);
-        font-size: 1.8rem;
-        font-weight: 700;
-        letter-spacing: -0.02em;
-        line-height: 1.15;
+        font-family: var(--font-display);
+        font-size: {display_secondary_size};
+        font-weight: {display_font_weight};
+        letter-spacing: 0;
+        line-height: 1.08;
     }}
 
     .decision-hero__subtitle {{
         color: var(--text-muted);
-        font-size: 0.96rem;
-        font-weight: 550;
-        margin-top: 0.4rem;
-        letter-spacing: 0.01em;
+        font-size: {body_small_font_size};
+        font-weight: 520;
+        margin-top: 0.25rem;
+        letter-spacing: 0;
         max-width: 56ch;
     }}
 
     .decision-hero__chips {{
         display: flex;
         flex-wrap: wrap;
-        gap: 0.55rem;
-        margin-top: 0.85rem;
+        gap: 0.4rem;
+        margin-top: 0.62rem;
     }}
 
     .decision-hero__chip {{
         border: 1px solid color-mix(in srgb, var(--primary) 32%, var(--border));
         background: color-mix(in srgb, var(--surface) 86%, var(--primary) 14%);
         color: var(--text);
-        border-radius: 999px;
-        font-size: 0.76rem;
-        font-weight: 700;
+        border-radius: var(--radius-sm);
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
         line-height: 1;
-        padding: 0.45rem 0.7rem;
+        padding: 0.34rem 0.52rem;
         white-space: nowrap;
+        text-transform: none;
     }}
 
     .decision-hero__badge {{
         border: 1px solid {provisional_badge_border};
         background: color-mix(in srgb, var(--warning) 18%, transparent);
         color: {provisional_badge_text};
-        border-radius: 999px;
-        font-size: 0.78rem;
-        font-weight: 700;
+        border-radius: var(--radius-sm);
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
         line-height: 1;
-        padding: 0.42rem 0.7rem;
+        padding: 0.34rem 0.52rem;
         white-space: nowrap;
+        text-transform: none;
     }}
 
     .decision-hero__stats,
     .status-card-grid,
     .summary-kpi-grid {{
         display: grid;
-        gap: 0.75rem;
+        gap: 0.58rem;
     }}
 
     .decision-hero__stats {{
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+        position: relative;
+        z-index: 1;
+        grid-template-columns: 1fr;
+        align-self: stretch;
     }}
 
     .status-card-grid {{
         grid-template-columns: repeat(4, minmax(0, 1fr));
-        margin-bottom: 1rem;
+        margin-bottom: 0.72rem;
     }}
 
     .summary-kpi-grid {{
         grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-        margin-bottom: 0.9rem;
+        margin-bottom: 0.72rem;
     }}
 
     .decision-hero__stat,
     .status-card {{
         border: 1px solid var(--border);
-        background: color-mix(in srgb, var(--surface) 94%, transparent);
-        border-radius: var(--radius-md);
-        padding: 0.85rem 0.95rem;
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        background: color-mix(in srgb, var(--surface) 97%, var(--surface-tint) 3%);
+        border-radius: var(--radius-lg);
+        padding: 0.64rem 0.72rem;
+        transition: border-color 0.18s ease, background-color 0.18s ease;
+        box-shadow: none;
     }}
     
     .decision-hero__stat:hover,
     .status-card:hover {{
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px color-mix(in srgb, var(--primary) 12%, transparent);
+        border-color: color-mix(in srgb, var(--primary) 36%, var(--border));
+        background: color-mix(in srgb, var(--surface) 92%, var(--primary) 8%);
     }}
 
     .decision-hero__stat-label,
     .status-card__eyebrow {{
         display: block;
         color: var(--text-muted);
-        font-size: 0.78rem;
-        font-weight: 600;
-        letter-spacing: 0.04em;
-        text-transform: uppercase;
-        margin-bottom: 0.35rem;
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
+        letter-spacing: 0;
+        text-transform: none;
+        margin-bottom: 0.24rem;
     }}
 
     .decision-hero__stat strong,
     .status-card__value {{
         display: block;
         color: var(--text);
-        font-size: 1.15rem;
+        font-size: 0.96rem;
         font-weight: 700;
         line-height: 1.2;
     }}
 
     .status-card__detail {{
         color: var(--text-muted);
-        font-size: 0.84rem;
+        font-size: 0.74rem;
         line-height: 1.45;
         margin-top: 0.32rem;
     }}
@@ -949,34 +1350,107 @@ def inject_css(theme_mode: str) -> None:
         margin-bottom: 0.2rem;
     }}
 
+    .research-page-frame {{
+        display: grid;
+        grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.65fr);
+        gap: 0.9rem;
+        align-items: stretch;
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        background: color-mix(in srgb, var(--surface) 96%, var(--surface-tint) 4%);
+        padding: 0.9rem 1rem;
+        margin: 0 0 0.82rem;
+    }}
+
+    .research-page-frame__copy {{
+        min-width: 0;
+    }}
+
+    .research-page-frame__eyebrow {{
+        color: var(--text-muted);
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
+        margin-bottom: 0.2rem;
+    }}
+
+    .research-page-frame__title {{
+        color: var(--text);
+        font-family: var(--font-ui);
+        font-size: {section_title_size};
+        font-weight: {heading_font_weight};
+        line-height: {heading_line_height};
+    }}
+
+    .research-page-frame__description {{
+        color: var(--text-muted);
+        font-size: {body_small_font_size};
+        line-height: {body_line_height};
+        margin-top: 0.24rem;
+        max-width: 82ch;
+    }}
+
+    .research-page-frame__summary {{
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.48rem;
+        align-self: stretch;
+    }}
+
+    .research-page-frame__item {{
+        min-width: 0;
+        border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+        border-radius: var(--radius-sm);
+        background: color-mix(in srgb, var(--surface) 92%, var(--surface-tint) 8%);
+        padding: 0.58rem 0.66rem;
+    }}
+
+    .research-page-frame__item span {{
+        display: block;
+        color: var(--text-muted);
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
+        line-height: 1.25;
+        margin-bottom: 0.22rem;
+    }}
+
+    .research-page-frame__item strong {{
+        display: block;
+        color: var(--text);
+        font-size: {body_small_font_size};
+        font-weight: {heading_font_weight};
+        line-height: 1.28;
+        overflow-wrap: anywhere;
+    }}
+
     .panel-header {{
         display: flex;
         align-items: flex-start;
         justify-content: space-between;
         gap: 1rem;
-        margin-bottom: 0.95rem;
+        margin-bottom: 0.68rem;
     }}
 
     .panel-header__eyebrow {{
         color: var(--text-muted);
-        font-size: 0.76rem;
-        font-weight: 700;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
+        letter-spacing: 0;
+        text-transform: none;
         margin-bottom: 0.18rem;
     }}
 
     .panel-header__title {{
         color: var(--text);
-        font-size: 1.08rem;
-        font-weight: 700;
-        line-height: 1.25;
+        font-family: var(--font-ui);
+        font-size: {section_title_size};
+        font-weight: {heading_font_weight};
+        line-height: {heading_line_height};
     }}
 
     .panel-header__description {{
         color: var(--text-muted);
-        font-size: 0.89rem;
-        line-height: 1.5;
+        font-size: {body_small_font_size};
+        line-height: {body_line_height};
         margin-top: 0.18rem;
         max-width: 72ch;
     }}
@@ -984,48 +1458,50 @@ def inject_css(theme_mode: str) -> None:
     .panel-header__badge {{
         display: inline-flex;
         align-items: center;
-        border-radius: 999px;
+        border-radius: var(--radius-pill);
         border: 1px solid color-mix(in srgb, var(--primary) 38%, var(--border));
         background: color-mix(in srgb, var(--surface) 86%, var(--primary) 14%);
         color: var(--text);
-        font-size: 0.76rem;
-        font-weight: 700;
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
         padding: 0.42rem 0.72rem;
         white-space: nowrap;
+        text-transform: none;
     }}
 
     .top-picks-container {{
         display: flex;
         flex-direction: column;
-        gap: 0.7rem;
+        gap: 0.52rem;
         margin-bottom: 0.6rem;
     }}
 
     .top-pick-card {{
         border: 1px solid var(--border);
-        background: color-mix(in srgb, var(--surface) 96%, var(--bg) 4%);
-        border-radius: var(--radius-md);
-        padding: 1rem 1.1rem;
+        background: var(--surface);
+        border-radius: var(--radius-lg);
+        padding: 0.76rem 0.84rem;
         transition: transform 0.2s ease, box-shadow 0.2s ease;
+        animation: riseIn 460ms cubic-bezier(0.16, 1, 0.3, 1) both;
     }}
 
     .top-pick-card:hover {{
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px color-mix(in srgb, var(--primary) 10%, transparent);
+        transform: translateY(-1px);
+        box-shadow: 0 3px 8px color-mix(in srgb, var(--primary) 8%, transparent);
     }}
 
     .top-pick-card__header {{
         display: flex;
         justify-content: space-between;
         align-items: flex-start;
-        margin-bottom: 0.7rem;
-        padding-bottom: 0.5rem;
+        margin-bottom: 0.52rem;
+        padding-bottom: 0.42rem;
         border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
     }}
 
     .top-pick-card__title {{
         color: var(--text);
-        font-size: 1.05rem;
+        font-size: 0.9rem;
         font-weight: 700;
         display: flex;
         align-items: center;
@@ -1035,46 +1511,47 @@ def inject_css(theme_mode: str) -> None:
 
     .top-pick-card__rank {{
         color: var(--text-muted);
-        font-size: 0.95rem;
+        font-size: 0.88rem;
         font-weight: 600;
         display: inline-block;
         min-width: 1.2rem;
     }}
 
     .top-pick-card__held-badge {{
-        font-size: 0.7rem;
+        font-size: {caption_font_size};
         background: color-mix(in srgb, var(--success) 15%, transparent);
         border: 1px solid color-mix(in srgb, var(--success) 35%, transparent);
         color: var(--success);
         padding: 0.15rem 0.45rem;
-        border-radius: 999px;
+        border-radius: var(--radius-sm);
         margin-left: 0.2rem;
-        font-weight: 700;
+        font-weight: {badge_font_weight};
     }}
 
     .top-pick-card__decision {{
-        font-size: 0.82rem;
-        font-weight: 750;
+        font-size: {body_small_font_size};
+        font-weight: {button_font_weight};
         color: var(--primary);
         background: color-mix(in srgb, var(--primary) 12%, transparent);
         border: 1px solid color-mix(in srgb, var(--primary) 25%, transparent);
         padding: 0.3rem 0.7rem;
-        border-radius: 999px;
+        border-radius: var(--radius-sm);
         white-space: nowrap;
         margin-left: 0.5rem;
+        text-transform: none;
     }}
 
     .top-pick-card__body {{
         display: flex;
         flex-direction: column;
-        gap: 0.5rem;
+        gap: 0.4rem;
     }}
 
     .top-pick-card__row {{
         display: flex;
         align-items: baseline;
         gap: 0.65rem;
-        font-size: 0.9rem;
+        font-size: 0.8rem;
     }}
 
     .top-pick-card__label {{
@@ -1082,7 +1559,7 @@ def inject_css(theme_mode: str) -> None:
         min-width: 75px;
         max-width: 75px;
         font-weight: 700;
-        font-size: 0.84rem;
+        font-size: 0.72rem;
         flex-shrink: 0;
     }}
 
@@ -1095,11 +1572,11 @@ def inject_css(theme_mode: str) -> None:
     .top-pick-card__metrics {{
         display: flex;
         flex-wrap: wrap;
-        gap: 1.2rem;
-        margin-top: 0.4rem;
-        padding-top: 0.6rem;
-        border-top: 1px dashed color-mix(in srgb, var(--border) 60%, transparent);
-        font-size: 0.84rem;
+        gap: 0.8rem;
+        margin-top: 0.28rem;
+        padding-top: 0.48rem;
+        border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+        font-size: 0.74rem;
         color: var(--text-muted);
     }}
     
@@ -1112,35 +1589,36 @@ def inject_css(theme_mode: str) -> None:
     .flow-container {{
         display: flex;
         flex-direction: column;
-        gap: 0.7rem;
+        gap: 0.52rem;
         margin-bottom: 0.6rem;
     }}
 
     .flow-card {{
         border: 1px solid var(--border);
-        background: color-mix(in srgb, var(--surface) 96%, var(--bg) 4%);
-        border-radius: var(--radius-md);
-        padding: 1rem 1.1rem;
+        background: var(--surface);
+        border-radius: var(--radius-lg);
+        padding: 0.76rem 0.84rem;
         transition: transform 0.2s ease, box-shadow 0.2s ease;
+        animation: riseIn 500ms cubic-bezier(0.16, 1, 0.3, 1) both;
     }}
 
     .flow-card:hover {{
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px color-mix(in srgb, var(--primary) 10%, transparent);
+        transform: translateY(-1px);
+        box-shadow: 0 3px 8px color-mix(in srgb, var(--primary) 8%, transparent);
     }}
 
     .flow-card__header {{
         display: flex;
         justify-content: space-between;
         align-items: flex-start;
-        margin-bottom: 0.7rem;
-        padding-bottom: 0.5rem;
+        margin-bottom: 0.52rem;
+        padding-bottom: 0.42rem;
         border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
     }}
 
     .flow-card__title {{
         color: var(--text);
-        font-size: 1.05rem;
+        font-size: 0.9rem;
         font-weight: 700;
         display: flex;
         align-items: center;
@@ -1150,20 +1628,21 @@ def inject_css(theme_mode: str) -> None:
 
     .flow-card__rank {{
         color: var(--text-muted);
-        font-size: 0.95rem;
+        font-size: 0.88rem;
         font-weight: 600;
         display: inline-block;
         min-width: 1.2rem;
     }}
 
     .flow-card__badge {{
-        font-size: 0.75rem;
-        font-weight: 750;
+        font-size: {caption_font_size};
+        font-weight: {button_font_weight};
         border: 1px solid transparent;
         padding: 0.25rem 0.65rem;
-        border-radius: 999px;
+        border-radius: var(--radius-sm);
         white-space: nowrap;
         margin-left: 0.5rem;
+        text-transform: none;
     }}
 
     .flow-card__badge--success {{
@@ -1193,14 +1672,14 @@ def inject_css(theme_mode: str) -> None:
     .flow-card__body {{
         display: flex;
         flex-direction: column;
-        gap: 0.5rem;
+        gap: 0.4rem;
     }}
 
     .flow-card__row {{
         display: flex;
         align-items: baseline;
         gap: 0.65rem;
-        font-size: 0.9rem;
+        font-size: 0.8rem;
     }}
 
     .flow-card__label {{
@@ -1208,7 +1687,7 @@ def inject_css(theme_mode: str) -> None:
         min-width: 75px;
         max-width: 75px;
         font-weight: 700;
-        font-size: 0.84rem;
+        font-size: 0.72rem;
         flex-shrink: 0;
     }}
 
@@ -1221,7 +1700,7 @@ def inject_css(theme_mode: str) -> None:
 
     [data-testid="stDataFrame"] {{
         border: 1px solid {table_tokens['grid']};
-        border-radius: 12px;
+        border-radius: var(--radius-sm);
         overflow: hidden;
         background: {table_tokens['row_bg_even']};
     }}
@@ -1234,7 +1713,7 @@ def inject_css(theme_mode: str) -> None:
         --gdg-border-color: {table_tokens['grid']};
         --gdg-horizontal-border-color: {table_tokens['grid']};
         --gdg-vertical-border-color: {table_tokens['grid']};
-        --gdg-header-font-style: 700 12px {PRIMARY_FONT_CSS};
+        --gdg-header-font-style: 700 12px {ui_font_css};
     }}
 
     [data-testid="stDataFrame"] div[class*="glideDataEditor"] > div {{
@@ -1265,7 +1744,7 @@ def inject_css(theme_mode: str) -> None:
         background-color: color-mix(in srgb, var(--warning) 22%, transparent);
         color: {provisional_badge_text};
         border: 1px solid {provisional_badge_border};
-        border-radius: 9999px;
+        border-radius: var(--radius-pill);
         padding: 2px 8px;
         font-size: 11.5px;
         font-weight: 700;
@@ -1304,28 +1783,32 @@ def inject_css(theme_mode: str) -> None:
     .action-hold,
     .action-avoid,
     .action-na {{
-        border-radius: 9999px;
-        padding: 2px 10px;
+        border-radius: var(--radius-pill);
+        padding: 2px 8px;
         font-weight: {badge_font_weight};
         font-size: {badge_font_size};
-        letter-spacing: 0.02em;
+        letter-spacing: 0.05em;
         display: inline-block;
         text-align: center;
-        min-width: 104px;
+        min-width: 84px;
+        text-transform: uppercase;
     }}
 
     [data-testid="stTabs"] [data-baseweb="tab-list"] {{
-        gap: 0.35rem;
+        gap: 0.24rem;
+        border-bottom: 1px solid var(--border);
     }}
 
     [data-testid="stTabs"] [data-baseweb="tab"] {{
-        font-family: {PRIMARY_FONT_CSS} !important;
+        font-family: var(--font-ui) !important;
         color: var(--text-muted) !important;
-        border-radius: 10px 10px 0 0;
-        padding: 0.45rem 0.78rem;
-        font-weight: 600 !important;
+        border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+        padding: {layout_tokens['tab_padding']};
+        font-size: {button_font_size};
+        font-weight: {button_font_weight} !important;
         border: 1px solid transparent;
-        transition: color 0.16s ease, background-color 0.16s ease;
+        background: transparent;
+        transition: color 0.16s ease, background-color 0.16s ease, border-color 0.16s ease;
     }}
 
     [data-testid="stTabs"] [data-baseweb="tab"] p {{
@@ -1335,6 +1818,7 @@ def inject_css(theme_mode: str) -> None:
     [data-testid="stTabs"] [data-baseweb="tab"]:hover {{
         color: var(--text) !important;
         background-color: {tab_tokens['tab_hover_bg']};
+        border-color: var(--border) !important;
     }}
 
     [data-testid="stTabs"] [data-baseweb="tab"][aria-selected="true"] {{
@@ -1350,19 +1834,19 @@ def inject_css(theme_mode: str) -> None:
 
     [data-testid="stTabs"] [data-baseweb="tab-highlight"] {{
         background-color: {tab_tokens['tab_selected_border']} !important;
-        height: 2px;
+        height: 0;
     }}
 
     div[data-testid="stMetricValue"] {{
-        font-size: 1.6rem;
+        font-size: 1.22rem;
         font-weight: {heading_font_weight} !important;
     }}
 
     .stApp [data-testid="stMetricLabel"] p,
     .stApp [data-testid="stCaptionContainer"] p {{
         color: var(--text-muted) !important;
-        font-size: 13px;
-        letter-spacing: 0.01em;
+        font-size: {caption_font_size};
+        letter-spacing: 0.004em;
     }}
 
     [data-testid="stSidebar"] p,
@@ -1408,13 +1892,47 @@ def inject_css(theme_mode: str) -> None:
         max-width: 48ch;
     }}
 
+    @media (max-width: 1120px) {{
+        .block-container {{
+            padding-left: 1rem;
+            padding-right: 1rem;
+        }}
+
+        .page-shell__grid {{
+            grid-template-columns: minmax(0, 1.2fr) minmax(210px, 0.8fr);
+            gap: 1rem;
+        }}
+
+        .status-card-grid {{
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }}
+
+        .decision-hero {{
+            grid-template-columns: minmax(0, 1.1fr) minmax(220px, 0.9fr);
+        }}
+    }}
+
     @media (max-width: 840px) {{
         .stApp h1 {{ font-size: 1.8rem !important; line-height: 1.25 !important; }}
         .stApp h2 {{ font-size: 1.5rem !important; line-height: 1.25 !important; }}
-        div[data-testid="stMetricValue"] {{ font-size: 1.35rem !important; }}
+        div[data-testid="stMetricValue"] {{ font-size: 1.28rem !important; }}
+
+        .block-container {{
+            padding-top: 2.2rem;
+        }}
 
         .page-shell {{
-            padding: 1rem 1rem 0.95rem;
+            padding: 0.95rem;
+        }}
+
+        .page-shell__grid {{
+            grid-template-columns: 1fr;
+        }}
+
+        .page-shell__meta {{
+            padding: 0.76rem 0.82rem;
+            border-left: 0;
+            border-top: 1px solid var(--border);
         }}
 
         .page-shell__pills {{
@@ -1427,11 +1945,12 @@ def inject_css(theme_mode: str) -> None:
         }}
 
         .decision-hero {{
+            grid-template-columns: 1fr;
             padding: 1rem 1rem 0.9rem;
         }}
 
         .decision-hero__title {{
-            font-size: 1.45rem;
+            font-size: 1.34rem;
         }}
 
         .decision-hero__stats,
@@ -1446,6 +1965,15 @@ def inject_css(theme_mode: str) -> None:
             padding: 0.68rem 0.82rem;
         }}
 
+        .research-page-frame {{
+            grid-template-columns: 1fr;
+            padding: 0.82rem;
+        }}
+
+        .research-page-frame__summary {{
+            grid-template-columns: 1fr;
+        }}
+
         .analysis-toolbar__summary {{
             grid-template-columns: 1fr;
         }}
@@ -1457,7 +1985,7 @@ def inject_css(theme_mode: str) -> None:
 
         [data-testid="stTabs"] [data-baseweb="tab"] {{
             padding: 0.4rem 0.62rem;
-            font-size: 0.92rem;
+            font-size: 0.88rem;
         }}
     }}
 
@@ -1473,6 +2001,7 @@ def get_plotly_template(theme_mode: str) -> dict:
     mode = normalize_theme_mode(theme_mode)
     tokens = get_theme_tokens(mode)
     chart_tokens = get_chart_section_tokens(mode)
+    typography_tokens = get_typography_section_tokens(mode)
 
     grid_color = str(chart_tokens["grid"])
     axis_color = str(chart_tokens["axis"])
@@ -1487,7 +2016,10 @@ def get_plotly_template(theme_mode: str) -> dict:
         "colorway": PLOTLY_COLORWAY_BY_THEME[mode],
         "paper_bgcolor": paper_bg,
         "plot_bgcolor": plot_bg,
-        "font": {"color": tokens["text"], "family": PRIMARY_FONT_PLOTLY},
+        "font": {
+            "color": tokens["text"],
+            "family": str(typography_tokens["ui_family"]).replace("'", "").replace('"', ""),
+        },
         "xaxis": {
             "gridcolor": grid_color,
             "linecolor": axis_color,

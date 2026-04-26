@@ -1,6 +1,7 @@
 """Dashboard UI entrypoints extracted from app.py."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
@@ -27,6 +28,7 @@ from src.ui.components import (
     get_flow_state_label,
     filter_signals_for_display,
     format_heatmap_palette_label,
+    format_position_mode_label,
     get_ui_text,
     normalize_range_preset,
     render_action_summary,
@@ -35,6 +37,7 @@ from src.ui.components import (
     render_investor_decision_boards,
     render_investor_flow_summary,
     render_panel_header,
+    render_research_page_frame,
     render_returns_heatmap,
     render_rs_momentum_bar,
     render_rs_scatter,
@@ -45,6 +48,45 @@ from src.ui.components import (
     render_top_bar_filters,
     render_top_picks_table,
 )
+
+
+@dataclass(frozen=True)
+class DashboardPageOption:
+    page_id: str
+    label: str
+    url_path: str
+
+
+DEFAULT_DASHBOARD_PAGE_ID = "overview"
+
+
+def build_dashboard_page_options(market_id: str) -> list[DashboardPageOption]:
+    normalized_market = str(market_id).strip().upper() or "KR"
+    options = [
+        DashboardPageOption("overview", "대시보드", f"{normalized_market.lower()}-overview"),
+        DashboardPageOption("signals", "섹터 모멘텀", f"{normalized_market.lower()}-signals"),
+        DashboardPageOption("research", "상대강도 분석", f"{normalized_market.lower()}-research"),
+        DashboardPageOption("constituents", "섹터맵", f"{normalized_market.lower()}-constituents"),
+    ]
+    if normalized_market in {"KR", "US"}:
+        options.append(
+            DashboardPageOption(
+                "flow",
+                "섹터 맵(히트맵)" if normalized_market == "KR" else "섹터 맵(히트맵)",
+                f"{normalized_market.lower()}-flow",
+            )
+        )
+    if normalized_market == "KR":
+        options.append(DashboardPageOption("quality", "리서치 노트", "kr-quality"))
+    return options
+
+
+def normalize_dashboard_page_id(page_id: object, market_id: str) -> str:
+    available_page_ids = {option.page_id for option in build_dashboard_page_options(market_id)}
+    normalized = str(page_id or DEFAULT_DASHBOARD_PAGE_ID).strip()
+    if normalized in available_page_ids:
+        return normalized
+    return DEFAULT_DASHBOARD_PAGE_ID
 
 
 def render_sidebar_controls(
@@ -61,18 +103,10 @@ def render_sidebar_controls(
     flow_profile: str = "foreign_lead",
     momentum_method: str = "legacy_rs_ma_v0",
     ui_locale: str = DEFAULT_UI_LOCALE,
-) -> tuple[str, date, str, bool, bool, bool, bool]:
-    market_options = ["KR", "US"]
-    selected_market = st.radio(
-        ui_labels.get("market_selector", "시장"),
-        options=market_options,
-        index=market_options.index(str(market_id or "KR").strip().upper() or "KR"),
-        horizontal=True,
-    )
-    st.title(ui_labels.get("sidebar_title", "Sector Rotation"))
-    st.caption("기준일, 테마, 데이터 작업")
-
-    st.subheader("기본 설정")
+) -> tuple[date, str, bool, bool, bool, bool]:
+    normalized_market = str(market_id or "KR").strip().upper() or "KR"
+    st.subheader("실행 환경")
+    st.caption(f"{normalized_market} 기준일, 테마, 데이터 작업")
     use_light_theme = st.toggle(
         "라이트 테마",
         value=theme_mode == "light",
@@ -102,7 +136,7 @@ def render_sidebar_controls(
     st.session_state["asof_date_str"] = asof_date.strftime("%Y%m%d")
 
     st.divider()
-    with st.popover("⚙️ 고급 설정", use_container_width=True):
+    with st.popover("고급 설정", width="stretch"):
         with st.form("model_params_form"):
             st.caption("슬라이더 숫자를 직접 클릭해 세밀하게 조정할 수 있습니다.")
             param_col1, param_col2 = st.columns(2)
@@ -163,7 +197,7 @@ def render_sidebar_controls(
             st.rerun()
 
     st.divider()
-    if market_id == "KR":
+    if normalized_market == "KR":
         st.subheader(get_ui_text("flow_profile_label", ui_locale))
         selected_flow_profile = st.selectbox(
             get_ui_text("flow_profile_label", ui_locale),
@@ -177,7 +211,7 @@ def render_sidebar_controls(
 
     st.divider()
     st.subheader("데이터 작업")
-    if market_id == "KR":
+    if normalized_market == "KR":
         st.caption(f"시장: {probe_price_status} · 매크로: {probe_macro_status} · 수급: {probe_investor_flow_status}")
     else:
         st.caption(f"시장: {probe_price_status} · 매크로: {probe_macro_status}")
@@ -192,7 +226,7 @@ def render_sidebar_controls(
         width="stretch",
     )
     refresh_flow = False
-    if market_id == "KR":
+    if normalized_market == "KR":
         refresh_flow = st.button(
             get_ui_text("flow_refresh_button", ui_locale),
             width="stretch",
@@ -205,7 +239,7 @@ def render_sidebar_controls(
     )
 
     st.caption(ui_labels.get("sidebar_title", "섹터 로테이션"))
-    return selected_market, asof_date, selected_flow_profile, refresh_market, refresh_macro, refresh_flow, recompute
+    return asof_date, selected_flow_profile, refresh_market, refresh_macro, refresh_flow, recompute
 
 
 def render_analysis_canvas(
@@ -427,6 +461,7 @@ def render_decision_first_sections(
     shared_flow_summary_map: dict[str, Any] | None = None,
     flow_short_window: int = 20,
     flow_long_window: int = 60,
+    include_analysis_canvas: bool = True,
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> list[str]:
     """Render the upper decision-first stack and return the selected held sectors."""
@@ -471,7 +506,8 @@ def render_decision_first_sections(
         held_sector_options=held_sector_options,
         locale=ui_locale,
     )
-    render_analysis_canvas(**analysis_canvas_kwargs)
+    if include_analysis_canvas:
+        render_analysis_canvas(**analysis_canvas_kwargs)
     return held_sectors
 
 
@@ -657,6 +693,19 @@ def render_all_signals_tab(
 ) -> None:
     with tab:
         kr_momentum_only = any(str(getattr(signal, "action_policy", "") or "") == "KR_MOMENTUM_ONLY" for signal in signals)
+        active_alert_count = sum(1 for signal in signals if getattr(signal, "alerts", []))
+        render_research_page_frame(
+            page_key="signals",
+            eyebrow="Signal Review",
+            title="섹터 모멘텀 필터 보드",
+            description="필터 조건, 보유 여부, 알림 상태를 한 화면에서 확인하고 같은 데이터 계약으로 상세 테이블을 검토합니다.",
+            summary_items=[
+                {"label": "유니버스", "value": f"{len(signals)}개 섹터"},
+                {"label": "필터", "value": get_action_filter_label(filter_action_global, ui_locale)},
+                {"label": "보유 범위", "value": format_position_mode_label(position_mode, locale=ui_locale)},
+                {"label": "알림", "value": f"{active_alert_count}개 활성"},
+            ],
+        )
         render_panel_header(
             eyebrow="전체 테이블",
             title="전체 섹터 신호",
@@ -759,10 +808,23 @@ def render_screening_tab(
 
     with tab:
         hybrid_active = str(settings.get("momentum_method", "legacy_rs_ma_v0")) == "hybrid_return_rank_v1"
+        strong_buy_count = sum(1 for sig in signals if getattr(sig, "action", "") == "Strong Buy")
+        render_research_page_frame(
+            page_key="constituents",
+            eyebrow="Constituent Map",
+            title="섹터맵 실행 참고",
+            description="섹터 신호를 바꾸지 않고 Strong Buy 섹터의 구성종목과 대표 ETF 실행 컨텍스트만 분리해 검토합니다.",
+            summary_items=[
+                {"label": "Strong Buy 섹터", "value": f"{strong_buy_count}개"},
+                {"label": "벤치마크", "value": benchmark_code},
+                {"label": "모멘텀", "value": "Hybrid" if hybrid_active else "Legacy RS"},
+                {"label": "ETF 매핑", "value": f"{len(etf_map or {})}개"},
+            ],
+        )
         render_panel_header(
             eyebrow="종목 스크리닝",
             title="Strong Buy 섹터 구성종목",
-            description="현재 Strong Buy 섹터의 구성종목을 legacy RS·RSI·SMA 기준으로 필터링한 execution-support 리스트" if hybrid_active else "현재 Strong Buy 섹터의 구성종목을 RS·RSI·SMA 기준으로 필터링한 매수 후보 리스트",
+            description="현재 Strong Buy 섹터의 구성종목을 legacy RS·RSI·SMA 기준으로 필터링한 decision-support 리스트" if hybrid_active else "현재 Strong Buy 섹터의 구성종목을 RS·RSI·SMA 기준으로 필터링한 신규 검토 후보 리스트",
         )
         if hybrid_active:
             st.caption("이 스크리닝 탭은 phase 1에서 legacy execution-support 로직을 유지합니다. KR 하이브리드 모멘텀 cutover evidence에는 포함되지 않습니다.")
@@ -814,7 +876,7 @@ def render_screening_tab(
             )
             return
 
-        status_label = {"LIVE": "실시간", "CACHED": "캐시(24h)"}
+        status_label = {"LIVE": "현재 세션", "CACHED": "캐시(24h)"}
         st.caption(f"데이터 상태: **{status_label.get(status, status)}** | 총 {len(rows)}개 종목")
 
         if show_momentum_only:
@@ -850,9 +912,9 @@ def render_screening_tab(
             if not isinstance(val, (int, float)) or pd.isna(val):
                 return ""
             if val > 0:
-                return "color: #ff4b4b; font-weight: 600;"
+                return "color: var(--danger); font-weight: 600;"
             elif val < 0:
-                return "color: #2b7af0; font-weight: 600;"
+                return "color: var(--primary); font-weight: 600;"
             return ""
 
         try:
@@ -891,7 +953,7 @@ def render_screening_tab(
             eyebrow="실행 참고",
             title="대표 ETF 실행 컨텍스트",
             description="섹터 판단 결과는 바꾸지 않고, 대표 ETF의 유동성·규모·freshness만 확인하는 보조 레이어입니다.",
-            badge={"LIVE": "실시간", "CACHED": "캐시(24h)"}.get(etf_status, etf_status),
+            badge={"LIVE": "현재 세션", "CACHED": "캐시(24h)"}.get(etf_status, etf_status),
         )
         st.caption("이 블록은 실행 참고용입니다. 섹터 액션, 순위, Strong Buy 계산에는 영향을 주지 않습니다.")
 
@@ -909,8 +971,8 @@ def render_screening_tab(
                         ),
                         "스타일": row.get("style_tags", ""),
                         "실행 상태": row.get("execution_state", ""),
-                        "최근 거래대금": row.get("latest_trade_value"),
-                        "20D 평균 거래대금": row.get("avg_trade_value_20d"),
+                        "최근 유동성 금액": row.get("latest_trade_value"),
+                        "20D 평균 유동성 금액": row.get("avg_trade_value_20d"),
                         "순자산": row.get("net_assets"),
                         "NAV": row.get("nav"),
                         "기준일": row.get("reference_date", ""),
@@ -929,8 +991,8 @@ def render_screening_tab(
                     "대표 ETF": st.column_config.TextColumn("대표 ETF", width="medium"),
                     "스타일": st.column_config.TextColumn("스타일", width="small"),
                     "실행 상태": st.column_config.TextColumn("실행 상태", width="small"),
-                    "최근 거래대금": st.column_config.NumberColumn("최근 거래대금", format="%.0f"),
-                    "20D 평균 거래대금": st.column_config.NumberColumn("20D 평균 거래대금", format="%.0f"),
+                    "최근 유동성 금액": st.column_config.NumberColumn("최근 유동성 금액", format="%.0f"),
+                    "20D 평균 유동성 금액": st.column_config.NumberColumn("20D 평균 유동성 금액", format="%.0f"),
                     "순자산": st.column_config.NumberColumn("순자산", format="%.0f"),
                     "NAV": st.column_config.NumberColumn("NAV", format="%.2f"),
                     "기준일": st.column_config.TextColumn("기준일", width="small"),
@@ -966,6 +1028,19 @@ def render_investor_flow_tab(
 ) -> None:
     with tab:
         normalized_market = str(market_id).strip().upper() or "KR"
+        flow_frame_rows = len(investor_flow_frame) if isinstance(investor_flow_frame, pd.DataFrame) else 0
+        render_research_page_frame(
+            page_key="flow",
+            eyebrow="Flow Context",
+            title="섹터 수급 맥락",
+            description="수급 또는 ETF proxy flow를 action-driving 신호가 아닌 보조 맥락으로 분리해 보여줍니다.",
+            summary_items=[
+                {"label": "시장", "value": normalized_market},
+                {"label": "상태", "value": investor_flow_status},
+                {"label": "프로파일", "value": get_flow_profile_label(investor_flow_profile, ui_locale) if normalized_market == "KR" else "ETF proxy"},
+                {"label": "레코드", "value": f"{flow_frame_rows:,}건"},
+            ],
+        )
         if normalized_market == "US":
             state_labels = {
                 "elevated": "활동 확대",
@@ -1036,7 +1111,7 @@ def render_investor_flow_tab(
             )
             latest_date = investor_flow_frame.index.max()
             ref_date_str = pd.Timestamp(latest_date).strftime("%Y-%m-%d")
-            source_label = {"LIVE": "실시간", "CACHED": "캐시", "SAMPLE": "샘플"}.get(
+            source_label = {"LIVE": "현재 세션", "CACHED": "캐시", "SAMPLE": "샘플"}.get(
                 str(investor_flow_status).upper(), investor_flow_status
             )
             st.caption(f"데이터 기준일: {ref_date_str} · 소스: {source_label}")
@@ -1276,7 +1351,7 @@ def render_investor_flow_tab(
             ref_date_str = pd.Timestamp(latest_date).strftime("%Y-%m-%d")
         except Exception:
             ref_date_str = str(latest_date)
-        source_label = {"LIVE": "실시간", "CACHED": "캐시", "SAMPLE": "샘플"}.get(
+        source_label = {"LIVE": "현재 세션", "CACHED": "캐시", "SAMPLE": "샘플"}.get(
             str(investor_flow_status).upper(), investor_flow_status
         )
         st.caption(f"데이터 기준일: {ref_date_str} · 소스: {source_label}")
@@ -1324,6 +1399,18 @@ def render_monitoring_tab(
 ) -> None:
     """Render the '데이터 모니터링' tab for investor-flow ingestion health."""
     with tab:
+        render_research_page_frame(
+            page_key="quality",
+            eyebrow="Data Quality",
+            title="리서치 노트와 수집 상태",
+            description="데이터 freshness, coverage, 오류 이력을 운영 상태와 분리해 점검합니다.",
+            summary_items=[
+                {"label": "시장", "value": market_id},
+                {"label": "runtime 상태", "value": investor_flow_status or "warehouse"},
+                {"label": "coverage", "value": "완전" if investor_flow_fresh else "확인 필요"},
+                {"label": "snapshot", "value": f"{len(investor_flow_frame) if isinstance(investor_flow_frame, pd.DataFrame) else 0:,}건"},
+            ],
+        )
         render_panel_header(
             eyebrow="운영 현황",
             title="투자자 수급 데이터 수집 모니터링",
@@ -1395,8 +1482,8 @@ def render_monitoring_tab(
         processed = int(warm.get("processed_requests", 0) or 0)
         completion_pct = round(processed / predicted * 100, 1) if predicted > 0 else 0.0
 
-        status_label = {"LIVE": "🟢 LIVE", "CACHED": "🟡 CACHED", "SAMPLE": "⚪ SAMPLE"}.get(
-            status_val, f"❓ {status_val}"
+        status_label = {"LIVE": "LIVE", "CACHED": "CACHED", "SAMPLE": "SAMPLE"}.get(
+            status_val, status_val
         )
         coverage_label = "✅ 완료" if coverage_ok else "❌ 미완료"
         watermark_label = watermark if watermark else "—"
@@ -1471,9 +1558,9 @@ def render_monitoring_tab(
                 [{"섹터코드": k, "오류": v} for k, v in failed_sector_codes.items()]
             )
             st.warning(f"오류 섹터 {len(failed_sector_codes)}건")
-            st.dataframe(err_df, hide_index=True, use_container_width=True)
+            st.dataframe(err_df, hide_index=True, width="stretch")
         if failed_ticker_codes:
-            st.info("오류 종목 수는 현재 실시간 probe 결과가 아니라 마지막 incomplete manual_refresh 저장 결과입니다.")
+            st.info("오류 종목 수는 현재 probe 결과가 아니라 마지막 incomplete manual_refresh 저장 결과입니다.")
             if failed_ticker_family_counts:
                 family_preview = ", ".join(
                     f"{str(k).replace('_', ' ')} {int(v)}건"
@@ -1484,13 +1571,13 @@ def render_monitoring_tab(
                 [{"종목코드": k, "오류": v} for k, v in failed_ticker_codes.items()]
             )
             st.warning(f"오류 종목 {len(failed_ticker_codes)}건")
-            st.dataframe(err_df, hide_index=True, use_container_width=True)
+            st.dataframe(err_df, hide_index=True, width="stretch")
         if failed_other_codes:
             err_df = pd.DataFrame(
                 [{"항목": k, "오류": v} for k, v in failed_other_codes.items()]
             )
             st.warning(f"기타 수집 오류 {len(failed_other_codes)}건")
-            st.dataframe(err_df, hide_index=True, use_container_width=True)
+            st.dataframe(err_df, hide_index=True, width="stretch")
         if not failed_days and not failed_sector_codes and not failed_ticker_codes and not failed_other_codes and not aborted:
             st.success("최근 수집 실행에서 미수집 항목 없음")
 
@@ -1523,7 +1610,7 @@ def render_monitoring_tab(
             st.dataframe(
                 display[cols_ordered].reset_index(drop=True),
                 hide_index=True,
-                use_container_width=True,
+                width="stretch",
                 column_config={
                     "수집일시": st.column_config.DatetimeColumn("수집일시", format="YYYY-MM-DD HH:mm:ss"),
                     "이유": st.column_config.TextColumn("이유", width="small"),
@@ -1560,9 +1647,14 @@ def render_dashboard_tabs(
     shared_flow_summary_map: dict[str, Any] | None = None,
     sector_map: dict[str, Any] | None = None,
     ui_locale: str = DEFAULT_UI_LOCALE,
+    selected_page_id: str = DEFAULT_DASHBOARD_PAGE_ID,
 ) -> None:
     etf_map = _build_etf_map(sector_map)
     normalized_market = str(market_id).strip().upper() or "KR"
+    selected_page_id = normalize_dashboard_page_id(selected_page_id, normalized_market)
+    if selected_page_id == "research":
+        return
+
     filter_action_global, filter_regime_only_global, position_mode, show_alerted_only = render_top_bar_filters(
         current_regime=current_regime,
         action_options=[ALL_ACTION_KEY, "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
@@ -1590,58 +1682,42 @@ def render_dashboard_tabs(
             key=lambda signal: signal_display_sort_key(signal, held_sectors),
         )
 
-    tab_labels = [
-        "대시보드 요약",
-        "모멘텀/차트 분석",
-        "전체 종목 데이터",
-        "종목 스크리닝",
-    ]
-    include_flow_tab = normalized_market in {"KR", "US"}
-    include_monitoring_tab = normalized_market == "KR"
-    if include_flow_tab:
-        tab_labels.append("투자자 수급" if normalized_market == "KR" else "US Flow Proxies")
-    if include_monitoring_tab:
-        tab_labels.append("데이터 모니터링")
-    tabs = st.tabs(tab_labels)
-    tab_summary, tab_charts, tab_all_signals, tab_screening = tabs[:4]
-    render_summary_tab(
-        tab=tab_summary,
-        theme_mode=theme_mode,
-        top_pick_signals=top_pick_signals,
-        signals_filtered=signals_filtered,
-        held_sectors=held_sectors,
-        ui_locale=ui_locale,
-    )
-    render_charts_tab(
-        tab=tab_charts,
-        signals_filtered=signals_filtered,
-        theme_mode=theme_mode,
-        is_mobile_client=is_mobile_client,
-    )
-    render_all_signals_tab(
-        tab=tab_all_signals,
-        signals=signals,
-        filter_action_global=filter_action_global,
-        filter_regime_only_global=filter_regime_only_global,
-        current_regime=current_regime,
-        held_sectors=held_sectors,
-        position_mode=position_mode,
-        show_alerted_only=show_alerted_only,
-        theme_mode=theme_mode,
-        settings=settings,
-        etf_map=etf_map,
-        ui_locale=ui_locale,
-    )
-    render_screening_tab(
-        tab=tab_screening,
-        signals=signals,
-        settings=settings,
-        benchmark_code=str(settings.get("benchmark_code", "1001")),
-        etf_map=etf_map,
-    )
-    if include_flow_tab:
+    page_container = st.container()
+    if selected_page_id == "overview":
+        render_summary_tab(
+            tab=page_container,
+            theme_mode=theme_mode,
+            top_pick_signals=top_pick_signals,
+            signals_filtered=signals_filtered,
+            held_sectors=held_sectors,
+            ui_locale=ui_locale,
+        )
+    elif selected_page_id == "signals":
+        render_all_signals_tab(
+            tab=page_container,
+            signals=signals,
+            filter_action_global=filter_action_global,
+            filter_regime_only_global=filter_regime_only_global,
+            current_regime=current_regime,
+            held_sectors=held_sectors,
+            position_mode=position_mode,
+            show_alerted_only=show_alerted_only,
+            theme_mode=theme_mode,
+            settings=settings,
+            etf_map=etf_map,
+            ui_locale=ui_locale,
+        )
+    elif selected_page_id == "constituents":
+        render_screening_tab(
+            tab=page_container,
+            signals=signals,
+            settings=settings,
+            benchmark_code=str(settings.get("benchmark_code", "1001")),
+            etf_map=etf_map,
+        )
+    elif selected_page_id == "flow":
         render_investor_flow_tab(
-            tab=tabs[4],
+            tab=page_container,
             signals=signals,
             investor_flow_frame=investor_flow_frame if investor_flow_frame is not None else pd.DataFrame(),
             investor_flow_status=investor_flow_status,
@@ -1654,10 +1730,9 @@ def render_dashboard_tabs(
             market_id=normalized_market,
             ui_locale=ui_locale,
         )
-    if include_monitoring_tab:
-        monitoring_tab_idx = 4 + (1 if include_flow_tab else 0)
+    elif selected_page_id == "quality":
         render_monitoring_tab(
-            tab=tabs[monitoring_tab_idx],
+            tab=page_container,
             market_id=str(market_id),
             investor_flow_status=investor_flow_status,
             investor_flow_fresh=investor_flow_fresh,

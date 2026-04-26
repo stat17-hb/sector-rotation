@@ -6,10 +6,12 @@ from pathlib import Path
 from config.theme import (
     THEME_SESSION_KEY,
     get_chart_tokens,
+    get_layout_tokens,
     get_navigation_tokens,
     get_signal_tokens,
     get_theme_mode,
     get_theme_tokens as get_canonical_theme_tokens,
+    get_typography_tokens,
     get_ui_tokens,
     set_theme_mode,
 )
@@ -49,13 +51,13 @@ def test_theme_tokens_have_required_keys():
 def test_canonical_theme_tokens_have_expected_sections():
     for mode in ("dark", "light"):
         tokens = get_canonical_theme_tokens(mode)
-        assert {"ui", "chart", "dataframe", "signal", "navigation"} <= set(tokens.keys())
+        assert {"ui", "layout", "typography", "chart", "dataframe", "signal", "navigation"} <= set(tokens.keys())
 
 
-def test_normalize_theme_mode_defaults_to_dark():
-    assert normalize_theme_mode(None) == "dark"
-    assert normalize_theme_mode("") == "dark"
-    assert normalize_theme_mode("unknown") == "dark"
+def test_normalize_theme_mode_defaults_to_light():
+    assert normalize_theme_mode(None) == "light"
+    assert normalize_theme_mode("") == "light"
+    assert normalize_theme_mode("unknown") == "light"
     assert normalize_theme_mode("LIGHT") == "light"
 
 
@@ -69,10 +71,10 @@ def test_plotly_template_is_theme_aware_and_uses_canonical_chart_colorway():
     assert light_template["font"]["color"] == THEME_TOKENS["light"]["text"]
     assert list(dark_template["colorway"]) == list(dark_chart["colorway"])
     assert list(light_template["colorway"]) == list(light_chart["colorway"])
-    assert dark_chart["candle_up"].lower() == "#26a69a"
-    assert dark_chart["ma20"] == "#FF9500"
-    assert dark_chart["ma60"] == "#0066CC"
-    assert dark_chart["ma120"] == "#CC3300"
+    assert dark_chart["candle_up"] == "#49B985"
+    assert dark_chart["ma20"] == "#D69A3A"
+    assert dark_chart["ma60"] == "#8AADFF"
+    assert dark_chart["ma120"] == "#E6ECF4"
 
 
 def test_light_plotly_template_uses_stronger_axis_and_legend_text():
@@ -93,10 +95,29 @@ def test_theme_state_helpers_use_existing_session_key(monkeypatch):
     dummy = DummyStreamlit()
     monkeypatch.setattr("config.theme.st", dummy)
 
-    assert get_theme_mode() == "dark"
+    assert get_theme_mode() == "light"
     assert set_theme_mode("light") == "light"
     assert dummy.session_state[THEME_SESSION_KEY] == "light"
     assert get_theme_mode() == "light"
+
+
+def test_layout_and_typography_tokens_cover_toss_inspired_density_contract():
+    light_layout = get_layout_tokens("light")
+    light_typography = get_typography_tokens("light")
+
+    assert light_layout["radius_pill"] == "7px"
+    assert light_layout["radius_full"] == "9999px"
+    assert light_layout["radius_sm"] == "6px"
+    assert light_layout["radius_md"] == "7px"
+    assert light_layout["radius_lg"] == "8px"
+    assert light_typography["display_line_height"] == "1.08"
+    assert "Pretendard" in light_typography["ui_family"]
+    assert light_typography["display_hero_size"] == "1.56rem"
+    assert light_typography["display_secondary_size"] == "1.34rem"
+    assert light_typography["body_size"] == "0.88rem"
+    assert light_typography["body_small_size"] == "0.8rem"
+    assert light_typography["caption_size"] == "0.68rem"
+    assert light_typography["button_size"] == "0.8rem"
 
 
 def test_build_font_face_css_handles_presence_and_missing_fonts(tmp_path):
@@ -132,6 +153,8 @@ def test_inject_css_reflects_selected_tab_tokens(monkeypatch):
     assert dark_tab["tab_selected_text"] in rendered[0]
     assert light_tab["tab_selected_bg"] in rendered[1]
     assert light_tab["tab_selected_text"] in rendered[1]
+    assert "border-radius: var(--radius-sm)" in rendered[0]
+    assert "background: var(--accent-blue-hover)" in rendered[0]
 
 
 def test_inject_css_reflects_cycle_palette_tokens(monkeypatch):
@@ -179,8 +202,12 @@ def test_inject_css_includes_new_dashboard_layout_classes(monkeypatch):
     assert len(rendered) == 1
     css = rendered[0]
     assert ".page-shell" in css
+    assert "[data-testid=\"stSidebarNav\"]" in css
+    assert "[data-testid=\"stVerticalBlockBorderWrapper\"]" in css
     assert ".status-strip" in css
     assert ".command-bar" in css
+    assert ".research-page-frame" in css
+    assert ".research-page-frame__summary" in css
     assert ".top-bar-summary" in css
     assert ".analysis-toolbar" in css
     assert ".analysis-toolbar__summary" in css
@@ -192,18 +219,37 @@ def test_inject_css_includes_new_dashboard_layout_classes(monkeypatch):
     assert ".sector-rank-list__metric" in css
     assert "--radius-xl" in css
     assert "--ring:" in css
+    assert "@media (max-width: 1120px)" in css
     assert "@media (max-width: 840px)" in css
 
 
-def test_streamlit_config_matches_dark_theme_tokens():
-    config_text = Path(".streamlit/config.toml").read_text(encoding="utf-8")
-    dark_ui = get_ui_tokens("dark")
+def test_light_theme_matches_refined_finance_palette():
+    light_ui = get_ui_tokens("light")
 
-    assert 'base = "dark"' in config_text
-    assert f'primaryColor = "{dark_ui["primary"]}"' in config_text
-    assert f'backgroundColor = "{dark_ui["background"]}"' in config_text
-    assert f'secondaryBackgroundColor = "{dark_ui["card"]}"' in config_text
-    assert f'textColor = "{dark_ui["foreground"]}"' in config_text
+    assert light_ui["background"] == "#F7F9FC"
+    assert light_ui["foreground"] == "#1B2433"
+    assert light_ui["primary"] == "#2567C8"
+    assert light_ui["card_alt"] == "#F0F4F9"
+    assert light_ui["sidebar_bg"] == "#F4F7FB"
+
+
+def test_streamlit_config_matches_light_theme_tokens():
+    config_text = Path(".streamlit/config.toml").read_text(encoding="utf-8")
+    light_ui = get_ui_tokens("light")
+
+    assert 'base = "light"' in config_text
+    assert f'primaryColor = "{light_ui["primary"]}"' in config_text
+    assert f'backgroundColor = "{light_ui["background"]}"' in config_text
+    assert f'secondaryBackgroundColor = "{light_ui["card_alt"]}"' in config_text
+    assert f'textColor = "{light_ui["foreground"]}"' in config_text
+
+
+def test_theme_contract_files_no_longer_expose_legacy_or_exchange_specific_theme():
+    legacy_literals = ("#6366F1", "#4F46E5", "#818CF8", "#0052FF", "Coinbase")
+    for path in (Path("config/theme.py"), Path(".streamlit/config.toml"), Path("DESIGN.md")):
+        text = path.read_text(encoding="utf-8")
+        for literal in legacy_literals:
+            assert literal not in text, f"{literal} still present in {path}"
 
 
 # ---------------------------------------------------------------------------

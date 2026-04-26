@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from pathlib import Path
+import logging
 
 import pandas as pd
 
@@ -257,3 +257,69 @@ def test_sync_provider_macro_refetches_full_window_when_current_alias_has_gaps()
     assert status == "LIVE"
     assert summary["delta_aliases"] == ["cpi_yoy"]
     assert expected_provider_series_id in set(frame["series_id"].astype(str))
+
+
+def test_sync_provider_macro_uses_info_log_for_interactive_lock_fallback(caplog):
+    warehouse.upsert_macro_dimension(
+        [
+            {
+                "series_alias": "cpi_yoy",
+                "provider": "KOSIS",
+                "provider_series_id": "101/DT_1J22042/T03/0",
+                "enabled": True,
+                "label": "CPI YoY",
+                "unit": "%",
+            }
+        ],
+        market="KR",
+    )
+    warehouse.upsert_macro_series_frame(
+        series_alias="cpi_yoy",
+        provider="KOSIS",
+        provider_series_id="101/DT_1J22042/T03/0",
+        frame=_macro_frame("101/DT_1J22042/T03/0", "2024-01", 1.0),
+        market="KR",
+    )
+
+    original_upsert = macro_sync.upsert_macro_dimension
+
+    def _locked_upsert(rows, *, market="KR"):
+        raise RuntimeError("Cannot acquire write lock on warehouse.duckdb")
+
+    macro_sync.upsert_macro_dimension = _locked_upsert
+    try:
+        with caplog.at_level(logging.INFO):
+            status, frame, summary = macro_sync.sync_provider_macro(
+                provider="KOSIS",
+                start_ym="202401",
+                end_ym="202403",
+                series_config={
+                    "cpi_yoy": {
+                        "org_id": "101",
+                        "tbl_id": "DT_1J22042",
+                        "item_id": "T03",
+                        "obj_params": {"objL1": "0"},
+                        "enabled": True,
+                        "label": "CPI YoY",
+                        "unit": "%",
+                    }
+                },
+                fetch_fn=lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("live fetch not expected")),
+                reason="load_kosis_macro",
+                force=False,
+                market="KR",
+            )
+    finally:
+        macro_sync.upsert_macro_dimension = original_upsert
+
+    assert status == "CACHED"
+    assert not frame.empty
+    assert summary["coverage_complete"] is False
+    assert any(
+        record.levelno == logging.INFO and "write lock unavailable" in record.getMessage()
+        for record in caplog.records
+    )
+    assert not any(
+        record.levelno >= logging.WARNING and "write lock unavailable" in record.getMessage()
+        for record in caplog.records
+    )

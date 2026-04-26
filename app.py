@@ -64,7 +64,6 @@ from src.dashboard.runtime import (
 )
 from src.dashboard.state import (
     apply_stock_lookup_result,
-    apply_market_selection,
     apply_analysis_toolbar_selection,
     build_stock_lookup_display_model,
     ensure_analysis_bounds,
@@ -74,7 +73,8 @@ from src.dashboard.state import (
     parse_asof_default,
 )
 from src.dashboard.tabs import (
-    render_decision_first_sections,
+    build_dashboard_page_options,
+    render_analysis_canvas,
     render_dashboard_tabs,
     render_sidebar_controls,
 )
@@ -92,7 +92,9 @@ from src.ui.components import (
     normalize_range_preset,
     render_analysis_toolbar,
     render_page_header,
+    render_research_page_frame,
     render_stock_lookup_control,
+    render_toss_overview_dashboard,
     resolve_range_from_preset,
     build_sector_detail_figure,
     render_progress_panel,
@@ -144,6 +146,34 @@ def _build_lookup_error_result(*, market_id: str, query: str, exc: Exception) ->
     }
 
 
+def _resolve_stock_lookup_result(
+    *,
+    market_id: str,
+    query: str,
+    sector_map: dict,
+    asof_date: object,
+) -> dict[str, object]:
+    try:
+        lookup_sector_universe_rows = (
+            read_active_index_dimension(market=market_id).to_dict("records")
+            if market_id == "KR"
+            else None
+        )
+        return resolve_stock_to_sector(
+            query,
+            market_id,
+            sector_map,
+            asof_date=asof_date,
+            sector_universe_rows=lookup_sector_universe_rows,
+        )
+    except Exception as exc:
+        return _build_lookup_error_result(
+            market_id=market_id,
+            query=query,
+            exc=exc,
+        )
+
+
 # Backward-compatible analysis exports kept for tests.
 _build_cycle_segments = build_cycle_segments
 _build_heatmap_display = build_heatmap_display
@@ -159,10 +189,34 @@ _top_pick_sort_key = top_pick_sort_key
 
 st.set_page_config(
     page_title="Sector Rotation Dashboard",
-    page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+
+def _select_navigation_page(market_id: str, page_id: str) -> None:
+    st.session_state["_nav_market_id"] = market_id
+    st.session_state["_nav_page_id"] = page_id
+
+
+def _build_navigation_pages() -> dict[str, list]:
+    pages: dict[str, list] = {}
+    for market_id in ("KR", "US"):
+        section_pages = []
+        for option in build_dashboard_page_options(market_id):
+            section_pages.append(
+                st.Page(
+                    lambda market_id=market_id, page_id=option.page_id: _select_navigation_page(market_id, page_id),
+                    title=option.label,
+                    url_path=option.url_path,
+                    default=market_id == "KR" and option.page_id == "overview",
+                )
+            )
+        pages[market_id] = section_pages
+    return pages
+
+
+st.navigation(_build_navigation_pages(), position="sidebar", expanded=True).run()
 
 
 @st.cache_data(ttl=3600)
@@ -171,7 +225,13 @@ def _load_config(market_id: str) -> tuple[dict, dict, dict, object]:
     return load_market_configs(market_id)
 
 
-selected_market_id = str(st.session_state.get("market_id", "KR")).strip().upper() or "KR"
+selected_market_id = str(st.session_state.get("_nav_market_id", "KR")).strip().upper() or "KR"
+selected_dashboard_page = str(st.session_state.get("_nav_page_id", "overview")).strip() or "overview"
+if str(st.session_state.get("market_id", selected_market_id)).strip().upper() != selected_market_id:
+    st.session_state["market_id"] = selected_market_id
+    invalidate_dashboard_caches("all")
+else:
+    st.session_state["market_id"] = selected_market_id
 settings, sector_map, macro_series_cfg, market_profile = _load_config(selected_market_id)
 CACHE_TTL = int(settings.get("cache_ttl", 21600))
 CURATED_SECTOR_PRICES_PATH = Path(
@@ -239,7 +299,7 @@ asof_default = parse_asof_default(st.session_state)
 selected_flow_profile_state = str(st.session_state.get("flow_profile", "foreign_lead"))
 
 with st.sidebar:
-    selected_market_sidebar, asof_date, selected_flow_profile, refresh_market, refresh_macro, refresh_flow, recompute = render_sidebar_controls(
+    asof_date, selected_flow_profile, refresh_market, refresh_macro, refresh_flow, recompute = render_sidebar_controls(
         market_id=selected_market_id,
         ui_labels=getattr(market_profile, "ui_labels", {}),
         theme_mode=theme_mode,
@@ -256,10 +316,6 @@ with st.sidebar:
     sidebar_progress_host = st.empty()
 
 st.session_state["flow_profile"] = selected_flow_profile
-
-if apply_market_selection(st.session_state, market_id=selected_market_sidebar):
-    invalidate_dashboard_caches("all")
-    st.rerun()
 
 rs_ma_period = int(st.session_state.get("rs_ma_period", settings.get("rs_ma_period", 20)))
 ma_fast = int(st.session_state.get("ma_fast", settings.get("ma_fast", 20)))
@@ -488,17 +544,24 @@ if not macro_df.empty:
         fx_change = float((fx_series.iloc[-1] / fx_series.iloc[-2] - 1) * 100)
 
 render_page_header(
-    title=str(getattr(market_profile, "page_header", "Sector Rotation")),
-    description="Start with the held/new decision boards, then validate the call in the research canvas and audit tabs without leaving the page.",
+    title="섹터 로테이션 리서치",
+    description={
+        "overview": "시장 국면 전략과 섹터 순환 전략으로 초과수익을 추구합니다.",
+        "signals": "섹터 액션과 필터 결과를 검토하는 랭킹 중심 페이지입니다.",
+        "research": "기간, 국면, 섹터를 바꿔가며 신호의 근거를 검증합니다.",
+        "constituents": "Strong Buy 섹터의 구성종목과 ETF 실행 참고 정보를 확인합니다.",
+        "flow": "투자자 수급 또는 ETF proxy flow를 신호 해석의 보조 맥락으로 확인합니다.",
+        "quality": "데이터 수집 상태, 캐시, provider, 오류 이력을 점검합니다.",
+    }.get(selected_dashboard_page, "섹터 로테이션 대시보드"),
     pills=[
-        {"label": "Regime", "value": current_regime, "tone": "success" if regime_is_confirmed else "warning"},
-        {"label": "Market", "value": price_status, "tone": "danger" if price_status == "SAMPLE" else "warning" if price_status == "CACHED" else "success"},
-        {"label": "Macro", "value": macro_status, "tone": "danger" if macro_status == "SAMPLE" else "warning" if macro_status == "CACHED" else "success"},
-        {"label": "Provider", "value": context.provider_effective, "tone": "info"},
+        {"label": "국면", "value": current_regime, "tone": "success" if regime_is_confirmed else "warning"},
+        {"label": "시장", "value": price_status, "tone": "danger" if price_status == "SAMPLE" else "warning" if price_status == "CACHED" else "success"},
+        {"label": "매크로", "value": macro_status, "tone": "danger" if macro_status == "SAMPLE" else "warning" if macro_status == "CACHED" else "success"},
+        {"label": "제공자", "value": context.provider_effective, "tone": "info"},
     ] + (
         [
             {
-                "label": "Flow",
+                "label": "수급",
                 "value": investor_flow_status if investor_flow_fresh else f"{investor_flow_status}*",
                 "tone": "success" if investor_flow_fresh else "warning" if investor_flow_status != "SAMPLE" else "info",
             }
@@ -574,58 +637,58 @@ st.session_state["selected_range_preset"] = current_range_preset
 toolbar_selected_sector = str(st.session_state.get("selected_sector", "")).strip() or "Auto"
 toolbar_selected_phase = str(st.session_state.get("selected_cycle_phase", "ALL")).strip() or "ALL"
 toolbar_selected_preset = normalize_range_preset(st.session_state.get("selected_range_preset", "1Y"))
-resolved_start, resolved_end, resolved_preset, toolbar_submitted = render_analysis_toolbar(
-    min_date=analysis_min_date,
-    max_date=analysis_max_date,
-    start_date=analysis_start_date,
-    end_date=analysis_end_date,
-    selected_range_preset=toolbar_selected_preset if current_range_preset == "CUSTOM" else current_range_preset,
-    selected_cycle_phase=toolbar_selected_phase,
-    selected_sector=toolbar_selected_sector,
-    locale=context.ui_locale,
-)
-if toolbar_submitted and apply_analysis_toolbar_selection(
-    st.session_state,
-    resolved_start=resolved_start,
-    resolved_end=resolved_end,
-    resolved_preset=resolved_preset,
-):
-    st.rerun()
+if selected_dashboard_page == "research":
+    render_research_page_frame(
+        page_key="research",
+        eyebrow="Research Canvas",
+        title="상대강도 분석 워크스페이스",
+        description="기간, 국면, 섹터 선택을 하나의 분석 상태로 고정하고 히트맵과 상세 추적 패널을 같은 기준으로 검증합니다.",
+        summary_items=[
+            {"label": "분석 기간", "value": f"{analysis_start_date} - {analysis_end_date}"},
+            {"label": "프리셋", "value": toolbar_selected_preset},
+            {"label": "국면", "value": toolbar_selected_phase},
+            {"label": "선택 섹터", "value": toolbar_selected_sector},
+        ],
+    )
+    resolved_start, resolved_end, resolved_preset, toolbar_submitted = render_analysis_toolbar(
+        min_date=analysis_min_date,
+        max_date=analysis_max_date,
+        start_date=analysis_start_date,
+        end_date=analysis_end_date,
+        selected_range_preset=toolbar_selected_preset if current_range_preset == "CUSTOM" else current_range_preset,
+        selected_cycle_phase=toolbar_selected_phase,
+        selected_sector=toolbar_selected_sector,
+        locale=context.ui_locale,
+    )
+    if toolbar_submitted and apply_analysis_toolbar_selection(
+        st.session_state,
+        resolved_start=resolved_start,
+        resolved_end=resolved_end,
+        resolved_preset=resolved_preset,
+    ):
+        st.rerun()
 
-lookup_query, lookup_submitted = render_stock_lookup_control(
-    market_id=context.market_id,
-    query_value=str(st.session_state.get("stock_lookup_query", "")),
-    status=str(st.session_state.get("stock_lookup_status", "")),
-    message=str(st.session_state.get("stock_lookup_message", "")),
-    display_model=build_stock_lookup_display_model(st.session_state.get("stock_lookup_result"), sector_map),
-    locale=context.ui_locale,
-)
-st.session_state["stock_lookup_query"] = lookup_query
-if lookup_submitted:
-    try:
-        lookup_sector_universe_rows = (
-            read_active_index_dimension(market=context.market_id).to_dict("records")
-            if context.market_id == "KR"
-            else None
-        )
-        lookup_result = resolve_stock_to_sector(
-            lookup_query,
-            context.market_id,
-            sector_map,
-            asof_date=st.session_state.get("asof_date_str"),
-            sector_universe_rows=lookup_sector_universe_rows,
-        )
-    except Exception as exc:
-        lookup_result = _build_lookup_error_result(
+    lookup_query, lookup_submitted = render_stock_lookup_control(
+        market_id=context.market_id,
+        query_value=str(st.session_state.get("stock_lookup_query", "")),
+        status=str(st.session_state.get("stock_lookup_status", "")),
+        message=str(st.session_state.get("stock_lookup_message", "")),
+        display_model=build_stock_lookup_display_model(st.session_state.get("stock_lookup_result"), sector_map),
+        locale=context.ui_locale,
+    )
+    st.session_state["stock_lookup_query"] = lookup_query
+    if lookup_submitted:
+        lookup_result = _resolve_stock_lookup_result(
             market_id=context.market_id,
             query=lookup_query,
-            exc=exc,
+            sector_map=sector_map,
+            asof_date=st.session_state.get("asof_date_str"),
         )
-    apply_stock_lookup_result(
-        st.session_state,
-        result=lookup_result,
-    )
-    st.rerun()
+        apply_stock_lookup_result(
+            st.session_state,
+            result=lookup_result,
+        )
+        st.rerun()
 
 analysis_prices = prices_wide.loc[
     (prices_wide.index >= pd.Timestamp(st.session_state["analysis_start_date"]))
@@ -684,50 +747,66 @@ held_sector_options = sorted({str(signal.sector_name) for signal in signals if s
 shared_flow_summary_map = _resolve_shared_flow_summary_map(runtime_payload)
 flow_short_window = int(settings.get("investor_flow_short_window", 20))
 flow_long_window = int(settings.get("investor_flow_long_window", 60))
-held_sectors = render_decision_first_sections(
-    current_regime=current_regime,
-    regime_is_confirmed=regime_is_confirmed,
-    growth_val=growth_val,
-    inflation_val=inflation_val,
-    fx_change=fx_change,
-    fx_label=str(getattr(market_profile, "ui_labels", {}).get("fx_metric_label", "FX move")),
-    is_provisional=is_provisional,
-    theme_mode=context.theme_mode,
-    price_status=price_status,
-    macro_status=macro_status,
-    investor_flow_status=investor_flow_status,
-    investor_flow_fresh=investor_flow_fresh,
-    investor_flow_profile=str(st.session_state.get("flow_profile", "foreign_lead")),
-    investor_flow_frame=investor_flow_frame,
-    investor_flow_detail=dict(investor_flow_detail),
-    shared_flow_summary_map=shared_flow_summary_map,
-    flow_short_window=flow_short_window,
-    flow_long_window=flow_long_window,
-    yield_curve_status=yield_curve_status,
-    signals=list(signals),
-    held_sector_options=held_sector_options,
-    analysis_canvas_kwargs={
-        "heatmap_return_display": heatmap_return_display,
-        "heatmap_strength_display": heatmap_strength_display,
-        "selected_cycle_phase": analysis_window.selected_cycle_phase,
-        "theme_mode": context.theme_mode,
-        "analysis_heatmap_palette": context.analysis_heatmap_palette,
-        "visible_segments": visible_segments,
-        "current_regime": current_regime,
-        "analysis_prices_phase": analysis_prices_phase,
-        "analysis_prices": analysis_prices,
-        "sector_columns": sector_columns,
-        "benchmark_label": benchmark_label,
-        "analysis_max_date": analysis_max_date,
-        "analysis_min_date": analysis_min_date,
-        "build_sector_detail_figure": build_sector_detail_figure,
-        "resolve_range_from_preset": resolve_range_from_preset,
-        "signal_lookup": signal_lookup,
-        "ui_locale": context.ui_locale,
-    },
-    market_id=context.market_id,
-    ui_locale=context.ui_locale,
-)
+analysis_canvas_kwargs = {
+    "heatmap_return_display": heatmap_return_display,
+    "heatmap_strength_display": heatmap_strength_display,
+    "selected_cycle_phase": analysis_window.selected_cycle_phase,
+    "theme_mode": context.theme_mode,
+    "analysis_heatmap_palette": context.analysis_heatmap_palette,
+    "visible_segments": visible_segments,
+    "current_regime": current_regime,
+    "analysis_prices_phase": analysis_prices_phase,
+    "analysis_prices": analysis_prices,
+    "sector_columns": sector_columns,
+    "benchmark_label": benchmark_label,
+    "analysis_max_date": analysis_max_date,
+    "analysis_min_date": analysis_min_date,
+    "build_sector_detail_figure": build_sector_detail_figure,
+    "resolve_range_from_preset": resolve_range_from_preset,
+    "signal_lookup": signal_lookup,
+    "ui_locale": context.ui_locale,
+}
+if selected_dashboard_page == "overview":
+    held_sectors = [
+        str(item)
+        for item in st.session_state.get("held_sectors", [])
+        if str(item).strip()
+    ]
+    lookup_query, lookup_submitted = render_toss_overview_dashboard(
+        market_id=context.market_id,
+        current_regime=current_regime,
+        price_status=price_status,
+        macro_status=macro_status,
+        prices_wide=prices_wide,
+        benchmark_label=benchmark_label,
+        signals=list(signals),
+        theme_mode=context.theme_mode,
+        sector_map=sector_map,
+        lookup_query_value=str(st.session_state.get("stock_lookup_query", "")),
+        lookup_status=str(st.session_state.get("stock_lookup_status", "")),
+        lookup_message=str(st.session_state.get("stock_lookup_message", "")),
+        lookup_display_model=build_stock_lookup_display_model(st.session_state.get("stock_lookup_result"), sector_map),
+        locale=context.ui_locale,
+    )
+    st.session_state["stock_lookup_query"] = lookup_query
+    if lookup_submitted:
+        lookup_result = _resolve_stock_lookup_result(
+            market_id=context.market_id,
+            query=lookup_query,
+            sector_map=sector_map,
+            asof_date=st.session_state.get("asof_date_str"),
+        )
+        apply_stock_lookup_result(
+            st.session_state,
+            result=lookup_result,
+        )
+        st.rerun()
+else:
+    held_sectors = [
+        str(item)
+        for item in st.session_state.get("held_sectors", [])
+        if str(item).strip()
+    ]
 
 bundle = DashboardDataBundle(
     signals=list(signals),
@@ -770,23 +849,27 @@ bundle = DashboardDataBundle(
     investor_flow_refresh_notice=investor_flow_refresh_notice,
 )
 
-render_dashboard_tabs(
-    current_regime=bundle.current_regime,
-    theme_mode=context.theme_mode,
-    signals=bundle.signals,
-    held_sectors=held_sectors,
-    settings=settings,
-    is_mobile_client=mobile_client,
-    market_id=context.market_id,
-    investor_flow_status=bundle.investor_flow_status,
-    investor_flow_fresh=bundle.investor_flow_fresh,
-    investor_flow_profile=bundle.investor_flow_profile,
-    investor_flow_frame=bundle.investor_flow_frame,
-    investor_flow_detail=bundle.investor_flow_detail,
-    shared_flow_summary_map=bundle.shared_flow_summary_map,
-    sector_map=sector_map,
-    ui_locale=context.ui_locale,
-)
+if selected_dashboard_page == "research":
+    render_analysis_canvas(**analysis_canvas_kwargs)
+elif selected_dashboard_page != "overview":
+    render_dashboard_tabs(
+        current_regime=bundle.current_regime,
+        theme_mode=context.theme_mode,
+        signals=bundle.signals,
+        held_sectors=held_sectors,
+        settings=settings,
+        is_mobile_client=mobile_client,
+        market_id=context.market_id,
+        investor_flow_status=bundle.investor_flow_status,
+        investor_flow_fresh=bundle.investor_flow_fresh,
+        investor_flow_profile=bundle.investor_flow_profile,
+        investor_flow_frame=bundle.investor_flow_frame,
+        investor_flow_detail=bundle.investor_flow_detail,
+        shared_flow_summary_map=bundle.shared_flow_summary_map,
+        sector_map=sector_map,
+        ui_locale=context.ui_locale,
+        selected_page_id=selected_dashboard_page,
+    )
 
 st.divider()
 st.caption(

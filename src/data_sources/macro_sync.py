@@ -112,6 +112,11 @@ def probe_macro_status(*, market: str = "KR") -> str:
     return probe_dataset_mode("macro_data", market=market)
 
 
+def _is_interactive_macro_read_reason(reason: str) -> bool:
+    normalized = str(reason or "").strip().lower()
+    return normalized.startswith("load_") and normalized.endswith("_macro")
+
+
 def sync_provider_macro(
     *,
     provider: MacroProvider,
@@ -193,7 +198,8 @@ def sync_provider_macro(
     except RuntimeError as exc:
         # Write lock unavailable (e.g. another process holds warehouse.duckdb).
         # Fall back to whatever cached data already exists in the warehouse.
-        logger.warning(
+        log = logger.info if _is_interactive_macro_read_reason(reason) else logger.warning
+        log(
             "%s sync skipped — write lock unavailable, returning cached data. (%s)",
             provider,
             exc,

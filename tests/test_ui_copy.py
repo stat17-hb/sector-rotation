@@ -19,17 +19,17 @@ def test_ui_copy_defaults_to_korean():
     assert DEFAULT_UI_LOCALE == "ko"
     assert get_all_action_label() == "전체"
     assert get_action_label("Watch") == "[~] 관망 (Watch)"
-    assert get_decision_label("Strong Buy", held=True) == "추가 매수 후보"
+    assert get_decision_label("Strong Buy", held=True) == "추가 검토 후보"
     assert get_heatmap_palette_label("classic") == "기본 빨강/초록"
     assert get_ui_text("signals_empty") == "신호 데이터가 없습니다."
     assert get_ui_text("hero_method_badge") == "규칙 기반 판단"
-    assert "규칙 기반 판단" in get_ui_text("judgment_disclaimer_caption")
+    assert "규칙 기반 의사결정 지원" in get_ui_text("judgment_disclaimer_caption")
 
 
 def test_ui_copy_supports_english_fallback():
     assert get_all_action_label("en") == "All"
     assert get_action_label("Watch", "en") == "[~] Watch"
-    assert get_decision_label("Strong Buy", held=False, locale="en") == "New buy candidate"
+    assert get_decision_label("Strong Buy", held=False, locale="en") == "New review candidate"
     assert get_heatmap_palette_label("contrast", "en") == "High-contrast red/green"
     assert get_action_filter_label(ALL_ACTION_KEY, "en") == "All"
     assert get_ui_text("hero_pit_badge", "en") == "confirmed_regime primary"
@@ -68,7 +68,12 @@ def test_ui_copy_marks_execution_and_research_scope_honestly():
     assert "하단" in get_ui_text("command_bar_eyebrow")
     assert "연구 뷰" in get_ui_text("command_bar_title")
     assert "상단 실전 대응 보드" in get_ui_text("command_bar_scope_note")
-    assert "기본 판단 규칙은 바꾸지 않습니다" in get_ui_text("analysis_toolbar_title")
+    assert get_ui_text("analysis_toolbar_title") == "리서치 캔버스 범위 조정"
+    assert "기본 판단 규칙은 바꾸지 않습니다" in get_ui_text("analysis_toolbar_description")
+    assert get_ui_text("stock_lookup_title") == "현재 적용 섹터 찾기"
+    assert "현재 캔버스 섹터 선택만 좁히며" in get_ui_text("stock_lookup_description")
+    assert "의사결정 지원" in get_ui_text("decision_lane_eyebrow")
+    assert "rules-based decision-support" in get_ui_text("judgment_disclaimer_caption", "en")
 
 
 def test_ui_copy_marks_all_flow_reference_only_states_as_non_actionable():
@@ -79,5 +84,28 @@ def test_ui_copy_marks_all_flow_reference_only_states_as_non_actionable():
     ):
         text = get_ui_text(key)
         assert "reference-only" in text
-        assert "상단 실행 보드" in text
+        assert "상단 의사결정 지원 보드" in text
         assert "반영되지 않았습니다" in text
+
+
+def test_ui_copy_avoids_brokerage_or_instructional_claims():
+    checked = [
+        get_ui_text("decision_lane_description"),
+        get_ui_text("top_picks_empty_new"),
+        get_ui_text("summary_tab_role_caption"),
+        get_ui_text("analysis_canvas_description"),
+        get_ui_text("flow_summary_description"),
+        get_decision_label("Strong Buy", held=True),
+        get_decision_label("Strong Buy", held=False),
+        get_decision_label("Avoid", held=True),
+        get_decision_label("Watch", held=False, locale="en"),
+        get_ui_text("decision_lane_description", "en"),
+    ]
+    joined = "\n".join(checked)
+
+    forbidden = ("Watchlist", "실시간 거래", "거래량 순위", "거래대금 순위", "매수 ETF", "청산 검토")
+    for phrase in forbidden:
+        assert phrase not in joined
+
+    assert "신규 검토 후보" in joined
+    assert "decision-support" in joined

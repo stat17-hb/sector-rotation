@@ -1,3 +1,319 @@
+# 2026-04-26 - DESIGN.md Frontend Fundamentals Rewrite
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Confirm Toss Frontend Fundamentals source scope
+- [x] Map code-quality principles to this Streamlit dashboard
+- [x] Rewrite `DESIGN.md` as the active frontend quality/design contract
+- [x] Verify the rewritten document references the requested standards clearly
+- [x] Record review result
+
+## Review
+- Scope:
+  Rewrote `DESIGN.md` around Toss Frontend Fundamentals and the Code Quality four-principle model.
+- Changed files:
+  `DESIGN.md`
+  `tasks/todo.md`
+- Implementation:
+  Promoted Readability, Predictability, Cohesion, and Coupling to the top-level frontend contract.
+  Mapped those principles to this Streamlit app's routing, UI modules, theme tokens, CSS, copy, accessibility, finance-truth, and verification expectations.
+  Kept Toss Invest only as a product-rhythm reference, not the governing quality standard.
+- Verification:
+  Document check confirmed the requested source links and all four principles are present.
+  No code tests were run because this was documentation-only.
+- Remaining risks:
+  Future code changes still need to update tests and implementation to enforce the new contract where current code diverges.
+
+# 2026-04-26 - Visual Ralph: Dedicated Reference Overview
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Identify where overview routing and stock lookup are rendered
+- [x] Add dedicated overview renderer with market cards, lookup, filter bar, sector table, trend chart, and heatmap
+- [x] Move overview away from the legacy decision-board stack
+- [x] Fix Plotly template margin conflict caught by browser capture
+- [x] Replace cramped dataframe with fixed HTML sector table
+- [x] Run full regression and final screenshot verification
+- [x] Record visual evidence and remaining risks
+
+## Review
+- Scope:
+  Build the requested reference-style overview structure while keeping the existing Streamlit stack and data contracts.
+- Changed files:
+  `app.py`
+  `src/ui/panels.py`
+  `src/ui/css.py`
+  `tasks/todo.md`
+- Implementation:
+  Added `render_toss_overview_dashboard()` for the `overview` route only.
+  It renders market/index cards, a compact stock-sector lookup form, reference-style filter controls, a compact sector table, a normalized sector trend chart, and a 3M return heatmap.
+  The old decision-board overview remains available through the existing downstream tab/render surfaces rather than occupying the first screen.
+- Verification so far:
+  `python -m py_compile app.py src\ui\panels.py src\ui\css.py`
+  `pytest -q tests\test_ui_theme.py tests\test_ui_components.py tests\test_dashboard_tabs.py tests\test_ui_copy.py` -> `117 passed`
+  `pytest -q` -> `521 passed`
+  Browser screenshot -> `.omx/artifacts/visual-ralph/toss-dashboard/overview-dedicated-final.png`
+  Visual verdict -> score `94`, pass threshold `90`
+- Remaining risks:
+  Exact KOSPI/KOSDAQ/global-index card content depends on which market series are available in the local warehouse.
+  Streamlit native navigation still limits pixel-level sidebar iconography and ordering compared with a fully custom frontend shell.
+
+# 2026-04-26 - Visual Ralph: Toss-Style Dashboard Match
+
+Status: Completed
+Owner: Codex
+
+## Cleanup / Redesign Plan
+- [x] Inspect current Streamlit frontend stack, styling tokens, and screenshot tooling
+- [x] Ground Toss frontend fundamentals as quality guidance, not a dependency
+- [x] Capture current Streamlit screenshot for visual baseline
+- [x] Retune light theme and Streamlit shell toward the supplied Toss-like reference
+- [x] Replace oversized/brand-heavy page chrome with compact dashboard hierarchy
+- [x] Run compile, focused UI tests, and screenshot capture
+- [x] Record visual evidence, simplifications, and remaining risks
+
+## Reference Target
+- Supplied static image in the current conversation.
+- Target qualities: Toss-like financial dashboard, light theme, dense left sidebar, compact header, thin panel borders, soft blue selection states, tabular numbers, restrained shadows, and Korean typography that stays small enough for data-heavy cards.
+- Toss frontend fundamentals reference: <https://github.com/toss/frontend-fundamentals>; applied as reliability/accessibility/maintainability guidance.
+
+## Review
+- Changed files:
+  `app.py`
+  `.streamlit/config.toml`
+  `config/theme.py`
+  `src/ui/css.py`
+  `src/dashboard/tabs.py`
+  `tests/test_ui_theme.py`
+  `tests/test_dashboard_tabs.py`
+  `.omx/artifacts/visual-ralph/toss-dashboard/README.md`
+  `.omx/state/visual-ralph-toss-dashboard-progress.json`
+  `tasks/todo.md`
+- Simplifications made:
+  Removed the oversized hero-card treatment by making the page shell unframed and compact.
+  Reused existing Streamlit/CSS token boundaries instead of adding a new frontend dependency or component library.
+  Replaced English navigation labels with Korean labels that better match the reference dashboard.
+  Removed duplicate sidebar brand chrome and hid Streamlit's default top chrome for a denser app-like viewport.
+- Verification:
+  `python -m py_compile app.py config\theme.py src\ui\css.py src\dashboard\tabs.py tests\test_ui_theme.py tests\test_dashboard_tabs.py`
+  `pytest -q tests\test_ui_theme.py tests\test_ui_components.py tests\test_dashboard_tabs.py tests\test_ui_copy.py` -> `117 passed`
+  `pytest -q` -> `521 passed`
+  Screenshot capture -> `.omx/artifacts/visual-ralph/toss-dashboard/current-final.png`
+  Visual verdict -> score `91`, pass threshold `90`
+- Remaining risks:
+  The static reference image is available only as a conversation attachment, so the recorded debug diff is baseline-vs-final rather than attachment-vs-final pixelmatch.
+  Exact content parity would require a dedicated overview route with market index cards, stock search, filter toolbar, sector table, line chart, and heatmap modules.
+
+# 2026-04-26 - Ralplan: Toss Invest-Inspired Frontend Redesign
+
+Status: Executing
+Owner: Codex
+
+## Planning Checklist
+- [x] Clear incompatible stale `ralph` OMX state so `$ralplan` can proceed
+- [x] Capture a fresh context snapshot for the redesign
+- [x] Inspect current Streamlit frontend/theme touchpoints
+- [x] Ground the Toss Invest reference from accessible public content
+- [x] Run Planner draft with RALPLAN-DR summary
+- [x] Run Architect review after the Planner draft
+- [x] Run Critic review after Architect completes
+- [x] Iterate until approval or loop limit
+- [x] Record final PRD, test spec, ADR, execution staffing, and verification path
+
+## Ralph Execution Checklist
+- [x] Load canonical v4 plan and context snapshot
+- [x] Replace `DESIGN.md` active design contract
+- [x] Complete risky-copy inventory
+- [x] Migrate theme/config away from the prior exchange-specific blue/pill contract
+- [x] Reframe high-risk copy toward decision-support language
+- [x] Update focused UI/copy/theme tests for the new contract
+- [x] Run py_compile and targeted pytest verification
+- [x] Run Streamlit runtime smoke where available
+- [x] Run architect verification, deslop, and post-deslop regression
+
+## Ralph Verification Evidence
+- `python -m py_compile app.py config\theme.py src\ui\css.py src\ui\copy.py src\ui\panels.py src\dashboard\tabs.py src\ui\figures.py src\ui\tables.py tests\test_ui_theme.py tests\test_ui_contrast.py tests\test_ui_components.py tests\test_ui_copy.py tests\test_dashboard_tabs.py tests\test_dashboard_runtime.py` -> passed
+- `pytest -q tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_ui_components.py tests/test_ui_copy.py tests/test_dashboard_tabs.py tests/test_dashboard_runtime.py` -> `136 passed`
+- Streamlit health smoke -> `STREAMLIT_SMOKE_OK port=8517`
+- Architect verification -> `APPROVE`
+- Deslop pass -> no-op; changed-files scan found no safe deletion/duplication cleanup beyond existing edits
+- Post-deslop: py_compile passed; targeted pytest -> `136 passed`; Streamlit health smoke -> `STREAMLIT_SMOKE_OK port=8517`
+
+## Ralph AI Slop Cleanup Report
+- Scope: `DESIGN.md`, `.streamlit/config.toml`, `config/theme.py`, `src/ui/copy.py`, `src/ui/panels.py`, `src/dashboard/tabs.py`, UI/copy/theme/tab tests, `.omx/artifacts/tossinvest-copy-inventory-v4.md`, `tasks/todo.md`
+- Behavior lock: targeted UI suite and Streamlit health smoke were green before cleanup
+- Cleanup plan: changed-files-only pass for dead code, duplicate copy, stale forbidden strings, needless abstraction, and boundary drift
+- Result: no-op cleanup; remaining forbidden strings are intentional test/inventory guard terms
+- Quality gates: py_compile pass; targeted pytest pass; Streamlit health smoke pass
+- Remaining risks: no browser screenshot was captured; health smoke verifies server startup, not final pixel layout
+
+## Scope
+Plan a full aesthetic redesign of the existing Streamlit sector-rotation dashboard using Toss Invest as the reference direction.
+Implementation follows `.omx/plans/ralplan-tossinvest-streamlit-redesign-v4.md`.
+
+## Grounded Initial Touchpoints
+- `config/theme.py`
+- `.streamlit/config.toml`
+- `src/ui/css.py`
+- `src/ui/panels.py`
+- `src/dashboard/tabs.py`
+- `src/ui/copy.py`
+- `tests/test_ui_theme.py`
+- `tests/test_ui_components.py`
+- `tests/test_dashboard_tabs.py`
+- `tests/test_ui_contrast.py`
+- `tests/test_dashboard_runtime.py`
+
+# 2026-04-24 - Warehouse Lock Noise On Interactive Reads
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Confirm which interactive read paths still attempt warehouse writes under lock
+- [x] Remove unnecessary write-back from the raw-cache market fast path
+- [x] Reduce macro lock fallback noise while preserving live-sync behavior when writes are actually possible
+- [x] Add focused regression coverage for locked-warehouse cached read behavior
+- [x] Run compile + targeted pytest verification
+
+## Review
+- Scope:
+  DuckDB `warehouse.duckdb` is already held by running Python/Streamlit processes, but interactive reads should still degrade cleanly to cached data without noisy write-first behavior.
+  This pass is limited to read-path lock handling and regression coverage; it will not change the warehouse bootstrap scripts or ask the user to stop the app.
+- Changed files:
+  `src/data_sources/krx_indices.py`
+  `src/data_sources/macro_sync.py`
+  `tests/test_integration.py`
+  `tests/test_macro_sync.py`
+  `tasks/todo.md`
+- Simplifications made:
+  Deleted the raw-cache-to-warehouse write-back helper from the interactive `load_sector_prices()` fast path.
+  Kept the explicit warm/sync path unchanged so bootstrap/manual refresh still writes to DuckDB when a writer can acquire the lock.
+  Macro lock fallback behavior stayed the same functionally, but interactive `load_*_macro` callers now log the fallback at `INFO` instead of `WARNING`.
+- Verification:
+  `python -m py_compile src\data_sources\krx_indices.py src\data_sources\macro_sync.py tests\test_integration.py tests\test_macro_sync.py tests\test_krx_indices.py`
+  `pytest -q tests\test_integration.py tests\test_macro_sync.py tests\test_krx_indices.py` -> `36 passed`
+  note:
+  pytest finished green, but Windows temp cleanup still emitted the known `pytest-current` permission warning during atexit.
+- Remaining risks:
+  If macro coverage is genuinely stale and no process can acquire a DuckDB write lock, the app will still fall back to cached macro data until a real writer runs.
+  Other intentional write-repair paths outside this scope (for example explicit refresh/bootstrap flows) still require exclusive access to `warehouse.duckdb`.
+
+# 2026-04-23 - Frontend Fix: Research Canvas Copy Scale
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Find the oversized research-canvas / stock-lookup copy surfaces
+- [x] Split long explanation copy into short title + small description tiers
+- [x] Lower the analysis toolbar title styling from display tier to section tier
+- [x] Update UI regression coverage for the split copy contract
+- [x] Run compile + focused pytest verification
+
+## Review
+- Scope:
+  리서치 캔버스 범위 안내와 종목→섹터 조회 안내가 제목급 크기로 보이던 문제를 고친다.
+  상단 보유/신규 대응 보드의 기본 판단 규칙과 동작은 바꾸지 않는다.
+- Changed files:
+  `src/ui/copy.py`
+  `src/ui/panels.py`
+  `src/ui/css.py`
+  `tests/test_ui_copy.py`
+  `tests/test_ui_components.py`
+  `tasks/todo.md`
+  `tasks/lessons.md`
+- Implementation:
+  `src/ui/copy.py`에서 긴 안내 문구를 짧은 title과 별도 description으로 분리했다.
+  `src/ui/panels.py`는 `analysis-toolbar`와 `stock lookup` 헤더에 description 줄을 따로 렌더하도록 바꿨다.
+  `src/ui/css.py`에서는 `analysis-toolbar__title`을 display tier가 아니라 section tier로 낮추고,
+  새 `analysis-toolbar__description`을 body-small 설명 계층으로 추가했다.
+- Simplifications made:
+  새 패널 구조를 만들지 않고 기존 `analysis-toolbar` 마크업 안에서 title/description만 분리했다.
+  동작 로직은 건드리지 않고 copy hierarchy와 CSS 계층만 수정했다.
+- Verification:
+  `python -m py_compile src/ui/copy.py src/ui/panels.py src/ui/css.py tests/test_ui_copy.py tests/test_ui_components.py`
+  `PYTHONPATH=. pytest -q tests/test_ui_copy.py tests/test_ui_components.py` -> `73 passed`
+- Remaining risks:
+  실제 브라우저 기준 최종 시각 밀도는 별도 스크린 확인 전까지 100% 닫히지는 않았다.
+
+# 2026-04-23 - Ralph: DESIGN.md Frontend Retune For Korean Typography
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Reuse the approved frontend migration PRD/test-spec artifacts and capture a fresh follow-up context snapshot
+- [x] Update task/lesson artifacts for the design-retune correction
+- [x] Retune theme typography and spacing tokens for smaller Korean-friendly density
+- [x] Tighten shell/card/button/tab CSS so the DESIGN.md language reads cleaner in Korean
+- [x] Run targeted compile + UI/dashboard regression
+- [x] Run architect verification, deslop on changed files, post-deslop regression, and close Ralph state
+
+## Review
+- Scope:
+  기존 Coinbase-inspired migration을 뒤엎지 않고, `DESIGN.md` 계약 안에서 한글 폰트와 패널 비례를 다시 조정한다.
+  핵심은 "더 화려하게"가 아니라 "덜 크고 더 정돈되게" 보이도록 헤더/카드/버튼/탭의 스케일을 조이는 것이다.
+- Artifacts:
+  `.omx/context/frontend-design-retune-20260423T144816Z.md`
+  `.omx/context/frontend-design-migration-20260423T104642Z.md`
+  `.omx/plans/prd-frontend-design-migration.md`
+  `.omx/plans/test-spec-frontend-design-migration.md`
+- Changed files:
+  `app.py`
+  `config/theme.py`
+  `src/ui/css.py`
+  `tests/test_ui_theme.py`
+  `tasks/todo.md`
+  `tasks/lessons.md`
+  `.omx/context/frontend-design-retune-20260423T144816Z.md`
+- Implementation:
+  `config/theme.py`의 typography 토큰을 전체적으로 한 단계 낮춰
+  hero / secondary display / section / card / body / caption / button 비율을 더 조밀하게 맞췄다.
+  동시에 `DISPLAY_FONT_STACK`에 `Pretendard` / `Noto Sans KR` 계열 fallback을 추가해
+  mixed KR/EN heading에서 OS serif fallback 편차를 줄였다.
+  `src/ui/css.py`는 global letter-spacing을 `0`으로 낮추고,
+  heading/display tracking도 덜 공격적으로 줄였다.
+  버튼과 탭은 `56px` pill geometry를 더 직접 반영하도록 반지름을 `var(--radius-pill)`로 맞췄고,
+  버튼 hover도 `DESIGN.md`의 hover blue 쪽으로 정렬했다.
+  카드/플로우/메트릭/title 계열 폰트도 한 단계씩 내려서
+  한글이 많은 실전 보드와 수급 카드가 덜 과장돼 보이도록 정리했다.
+  `app.py`의 page-shell 설명 문구는 한국어 로케일에서 더 짧고 밀도 있는 안내문으로 바꿨다.
+- Simplifications made:
+  새 컴포넌트나 새 helper를 추가하지 않고 기존 token + CSS seam 안에서만 조정했다.
+  visual retune은 `app.py`, `config/theme.py`, `src/ui/css.py` 세 경계에 최대한 모아 두었다.
+- Verification:
+  `python -m py_compile app.py config/theme.py src/ui/css.py tests/test_ui_theme.py`
+  `PYTHONPATH=. pytest -q tests/test_ui_theme.py tests/test_ui_components.py tests/test_dashboard_tabs.py tests/test_ui_contrast.py tests/test_dashboard_runtime.py` -> `127 passed`
+  note:
+  pytest 종료 후 Windows temp cleanup 단계에서 `pytest-current` 접근거부 warning이 남았지만,
+  테스트 본문은 모두 성공으로 끝났다.
+  architect verification -> `APPROVE`
+- AI slop cleanup report:
+  scope:
+  `app.py`
+  `config/theme.py`
+  `src/ui/css.py`
+  `tests/test_ui_theme.py`
+  `tasks/todo.md`
+  `tasks/lessons.md`
+  `.omx/context/frontend-design-retune-20260423T144816Z.md`
+  behavior lock:
+  compile + targeted pytest `127 passed`를 먼저 확보했다.
+  cleanup plan:
+  changed-files 범위에서 dead code, duplicate token bypass, needless abstraction, boundary drift만 확인했다.
+  result:
+  추가 simplification edit가 필요한 과잉 추상화나 중복은 없어 no-op으로 종료했다.
+  post-deslop regression:
+  no-op pass였으므로 마지막 compile + `127 passed` evidence를 post-deslop green으로 재사용했다.
+- Remaining risks:
+  최종 한글 시각 완성도는 실제 브라우저 화면 확인 없이 100% 닫힌 것은 아니다.
+  모바일에서 pill-style tabs/buttons가 실제로 얼마나 타이트하게 느껴지는지는 별도 시각 확인 여지가 남는다.
+
 # 2026-04-20 - Ralph: Investor Flow Lower Tabs Blank
 
 Status: Completed
@@ -5411,3 +5727,427 @@ Owner: Codex
   canonical-sector predicate drift는 닫혔다.
   남은 비차단 메모는 official-name repair가 아직 dashboard-local이라는 점인데,
   이번 리스크 범위와는 별개라 후속 일반 cleanup 대상으로 남긴다.
+
+# 2026-04-23 - Ralplan: DESIGN.md Frontend Migration
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Read `DESIGN.md` and current frontend/theme touchpoints
+- [x] Create a fresh OMX context snapshot for the migration
+- [x] Write PRD and test-spec artifacts for the migration
+- [x] Run Planner draft with RALPLAN-DR summary
+- [x] Run Architect review on the planner draft
+- [x] Run Critic evaluation and iterate until approval or loop limit
+- [x] Return the approved consensus migration plan
+- [x] Execute Phase 1 token/theme contract migration
+- [x] Execute shell/panel styling migration on approved surfaces
+- [x] Update theme/test contracts and rerun targeted regression
+- [x] Run KR/US x light/dark shell smoke and record deviations
+- [x] Run architect verification on the implementation
+
+## Planning Notes
+- Scope:
+  `DESIGN.md`를 기준으로 Streamlit 대시보드 프론트엔드 디자인 마이그레이션 계획을 수립한다.
+  핵심은 기존 데이터/분석 동작을 바꾸지 않고, 테마 토큰·레이아웃 계층·패널 조합을 Coinbase-inspired 디자인 언어로 옮기는 것이다.
+- Artifacts:
+  `.omx/context/frontend-design-migration-20260423T104642Z.md`
+  `.omx/plans/prd-frontend-design-migration.md`
+  `.omx/plans/test-spec-frontend-design-migration.md`
+  `.omx/plans/frontend-design-migration-execution-plan.md`
+- Grounded touchpoints:
+  `DESIGN.md`
+  `app.py`
+  `config/theme.py`
+  `src/ui/css.py`
+  `src/ui/panels.py`
+  `src/dashboard/tabs.py`
+
+## Review
+- Consensus result:
+  Planner 초안 -> Architect `ITERATE` -> Planner 보강 -> Architect `APPROVE` ->
+  Critic `ITERATE` -> Planner 보강 -> Critic `APPROVE` 순으로 합의가 닫혔다.
+- Final decision:
+  `Option A: token-first staged migration with shell proof slice`를 채택했다.
+  즉, 먼저 canonical visual contract를 넓게 정의하고, 그 계약을 얇은 shell slice에 증명한 뒤,
+  decision-first panels와 data surfaces로 확장한다.
+- Required early execution constraints:
+  Phase 1에서 색상만 아니라 geometry/radius, spacing, typography, pill/tab shape,
+  native-widget aliasing, `.streamlit/config.toml` 정합성까지 같이 다뤄야 한다.
+  그리고 각 phase 끝에 즉시 검증 게이트를 통과한 뒤 다음 phase로 넘어간다.
+- Verification surfaces captured in plan:
+  `tests/test_ui_theme.py`
+  `tests/test_ui_contrast.py`
+  `tests/test_ui_components.py`
+  `tests/test_dashboard_tabs.py`
+  `tests/test_dashboard_runtime.py`
+- Remaining risks:
+  Streamlit native widget 제약 때문에 `DESIGN.md`의 pill geometry와 typography를 완전히 동일하게 옮기지 못할 수 있다.
+  이 경우 deviation을 문서화하는 것이 계획의 일부다.
+
+# 2026-04-23 - Ralph: DESIGN.md Frontend Migration Implementation
+
+Status: Completed
+Owner: Codex
+
+## Execution Checklist
+- [x] Reuse the approved frontend migration context and plan artifacts
+- [x] Replace the legacy indigo/slate theme contract with Coinbase-inspired light-authority tokens
+- [x] Reconcile `.streamlit/config.toml` with the new theme authority
+- [x] Migrate shell/button/tab/hero surfaces to the new radius and typography contract
+- [x] Remove legacy hardcoded momentum colors from dashboard tabs
+- [x] Update theme/UI regression tests to the new contract
+- [x] Run targeted compile + pytest regression
+- [x] Run KR/US x light/dark shell smoke harness
+- [x] Close architect verification
+- [x] Run ai-slop-cleaner on Ralph-owned files
+- [x] Re-run post-deslop regression
+- [x] Cancel Ralph state cleanly
+
+## Review
+- Scope:
+  승인된 `$ralplan`을 그대로 구현했다.
+  이번 pass는 full redesign이 아니라, `DESIGN.md`를 canonical authority로 삼아
+  theme/token contract, Streamlit config contract, shell/panel styling, 그리고 검증면을
+  함께 옮기는 migration pass였다.
+- Changed files:
+  `app.py`
+  `.streamlit/config.toml`
+  `config/theme.py`
+  `src/ui/css.py`
+  `src/ui/panels.py`
+  `src/dashboard/tabs.py`
+  `tests/test_ui_theme.py`
+  `tests/test_ui_components.py`
+  `tests/test_dashboard_tabs.py`
+  `tasks/todo.md`
+- Implementation:
+  `config/theme.py`는 이제 light mode를 authority로 두고
+  Coinbase blue / white / near-black / cool-gray 기반 token contract를
+  `ui`, `layout`, `typography`, `chart`, `dataframe`, `signal`, `navigation` 섹션으로 제공한다.
+  `.streamlit/config.toml`도 same authority를 따르도록 `base=light`,
+  `primaryColor=#0052FF`, `secondaryBackgroundColor=#EEF0F3`로 맞췄다.
+  `src/ui/css.py`는 tokenized radius/spacing/typography를 root vars로 노출하고,
+  page shell, status strip, command bar, analysis toolbar, buttons, tabs,
+  hero/pill badges를 56px pill geometry와 Coinbase-inspired contrast로 재구성했다.
+  추가 refinement pass에서는 `design-taste-frontend` 기준으로
+  page shell을 비대칭 split hero로 재구성하고, `decision-hero`를 split layout + subtle motion으로 올렸으며,
+  shell/card surfaces에 waterfall-style reveal, sheen, hierarchy refinement를 넣었다.
+  `src/ui/panels.py`는 flow chips의 inline geometry를 token vars로 바꾸었고,
+  `src/dashboard/tabs.py`는 hardcoded momentum colors를 `var(--danger)` / `var(--primary)`로 치환했고,
+  monitoring status labels의 emoji를 제거했다.
+  `app.py`도 page icon emoji를 제거해 explicit frontend skill 규칙과 맞췄다.
+  `tests/test_ui_theme.py`와 `tests/test_ui_components.py`는
+  light-default contract, Streamlit config sync, new chart palette, legacy-indigo absence에 맞게 갱신했다.
+  `tests/test_dashboard_tabs.py`는 non-emoji monitoring status contract로 맞췄다.
+- Simplifications made:
+  app import-safe refactor 대신, `tests/test_ui_components.py`가 실제로 필요로 하는
+  dashboard analysis/data helpers를 직접 import하도록 바꿔
+  heavy app bootstrap dependency를 제거했다.
+  banner path는 structural rewrite 없이 기존 surface styling만 바꿨다.
+- Verification:
+  `python -m py_compile config/theme.py src/ui/css.py src/ui/panels.py src/dashboard/tabs.py tests/test_ui_theme.py tests/test_ui_components.py tests/test_ui_contrast.py`
+  `PYTHONPATH=. pytest -q tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_ui_components.py tests/test_dashboard_tabs.py tests/test_dashboard_runtime.py` -> `127 passed`
+  shell smoke harness:
+  `KR/light` -> `exceptions=0`, `tab_count=6`
+  `KR/dark` -> `exceptions=0`, `tab_count=6`
+  `US/light` -> `exceptions=0`, `tab_count=5`
+  `US/dark` -> `exceptions=0`, `tab_count=5`
+  note:
+  pytest 종료 후 Windows temp cleanup 단계에서 `pytest-current` 접근거부 warning이 남았지만,
+  test result 자체는 모두 성공으로 끝났다.
+  architect verification -> `APPROVE`
+- AI slop cleanup report:
+  scope:
+  `.streamlit/config.toml`
+  `config/theme.py`
+  `src/ui/css.py`
+  `src/ui/panels.py`
+  `src/dashboard/tabs.py`
+  `tests/test_ui_theme.py`
+  `tests/test_ui_components.py`
+  `tasks/todo.md`
+  behavior lock:
+  compile + targeted pytest green 상태를 먼저 확보한 뒤 same scope만 재검토했다.
+  cleanup plan:
+  dead code / duplicate helper / needless abstraction / boundary violation만 changed-files 범위에서 확인했다.
+  result:
+  추가로 지우거나 합칠 만한 safe simplification edit는 없어서 no-op으로 종료했다.
+  post-deslop regression:
+  no-op pass였으므로 마지막 compile + `127 passed` evidence를 post-deslop green으로 재사용했다.
+- Documented deviations:
+  Coinbase proprietary fonts는 repo에 없어서 local serif display fallback + existing Pretendard UI/body stack으로 근사했다.
+  Streamlit native controls의 exact Coinbase pill/hover behavior는 CSS selector 범위 내에서만 근사했으며,
+  완전한 pixel-match가 아니라 token/contrast/hierarchy 일치에 우선순위를 뒀다.
+
+# 2026-04-23 - Redesign Skill Pass: Visual Hierarchy Reset
+
+Status: Completed
+Owner: Codex
+
+## Review
+- Scope:
+  `$redesign-existing-projects` 기준으로 기존 Coinbase token migration 위에
+  전체 visual hierarchy를 더 명확하게 재배치했다.
+  full rewrite는 하지 않고, 기존 Streamlit shell / hero / filter / decision boards / card lists의
+  hierarchy, asymmetry, motion, spacing만 재설계했다.
+- Changed files:
+  `app.py`
+  `src/ui/css.py`
+  `src/ui/panels.py`
+  `src/dashboard/tabs.py`
+  `tests/test_ui_components.py`
+  `tests/test_dashboard_tabs.py`
+  `tasks/todo.md`
+- Implementation:
+  `src/ui/panels.py`의 page shell은 이제 split metadata rail을 가진 비대칭 hero header다.
+  `src/ui/css.py`는 shell/hero/card/list surfaces에 staggered reveal, sheen, split layout,
+  tighter typography hierarchy, auto-fit summary grid, 더 명확한 section contrast를 넣었다.
+  `decision-hero`는 copy + metric rail의 2-column composition으로 바뀌어
+  macro regime를 먼저 읽고, KPI stack은 그다음 읽히도록 hierarchy를 다시 잡았다.
+  skill 규칙에 맞춰 `app.py` page icon emoji와 `render_monitoring_tab()`의 emoji status labels를 제거했다.
+- Verification:
+  `python -m py_compile app.py src/ui/css.py src/ui/panels.py src/dashboard/tabs.py tests/test_ui_components.py tests/test_dashboard_tabs.py`
+  `PYTHONPATH=. pytest -q tests/test_ui_theme.py tests/test_ui_contrast.py tests/test_ui_components.py tests/test_dashboard_tabs.py tests/test_dashboard_runtime.py` -> `127 passed`
+  redesign shell smoke:
+  `KR/light` -> `exceptions=0`, `tab_count=6`
+  `KR/dark` -> `exceptions=0`, `tab_count=6`
+  `US/light` -> `exceptions=0`, `tab_count=5`
+  `US/dark` -> `exceptions=0`, `tab_count=5`
+# Dashboard Sidebar Navigation Plan - 2026-04-26
+
+## Goal
+- 탭 기반 대시보드 본문을 사이드바 메뉴 기반 화면 전환 구조로 개편한다.
+- 기존 데이터 계산과 화면별 렌더러는 유지하고, 내비게이션/라우팅 표면만 최소 변경한다.
+
+## Checklist
+- [x] 현재 탭 라우팅과 테스트 계약을 확정한다.
+- [x] 사이드바 메뉴 모델과 상태 키를 설계한다.
+- [x] `render_dashboard_tabs()`를 메뉴 기반 라우터로 대체하거나 호환 래퍼로 전환한다.
+- [x] 기존 탭 테스트를 메뉴 라우팅 테스트로 갱신한다.
+- [x] 사이드바 메뉴/컨트롤 구획 스타일을 점검한다.
+- [x] `pytest tests/test_dashboard_tabs.py -q`와 관련 UI 테스트를 실행한다.
+
+## Review
+- Ralplan consensus output: `.omx/plans/dashboard-sidebar-navigation-ralplan.md`
+- Consensus status: Architect APPROVE, Critic APPROVE.
+- Implementation completed.
+- Changed files: `app.py`, `src/dashboard/tabs.py`, `tests/test_dashboard_tabs.py`, `tasks/todo.md`.
+- Verification:
+  `python -m py_compile app.py src\dashboard\tabs.py tests\test_dashboard_tabs.py` -> passed
+  `pytest -q tests\test_dashboard_tabs.py tests\test_dashboard_state.py` -> `35 passed`
+  `python -m py_compile app.py src\dashboard\tabs.py tests\test_dashboard_tabs.py tests\test_dashboard_state.py tests\test_dashboard_runtime.py tests\test_ui_components.py` -> passed
+  `pytest -q tests\test_dashboard_tabs.py tests\test_dashboard_state.py tests\test_dashboard_runtime.py tests\test_ui_components.py` -> `122 passed`
+  Architect verification -> `APPROVE`
+  Deslop pass -> extracted repeated test dummy context / `st.tabs` failure helper in `tests/test_dashboard_tabs.py`
+  Post-deslop regression -> py_compile passed; targeted pytest -> `122 passed`
+  Streamlit health smoke -> `http://localhost:8520/_stcore/health` returned `200 ok`
+- Note: pytest still emitted the known Windows temp cleanup `pytest-current` permission warning after the green test result.
+
+# Visual Ralph: Streamlit Page Navigation Redesign - 2026-04-26
+
+## Goal
+- 기존 sidebar radio 기반 화면 선택을 폐기하고 Streamlit native `st.Page` / `st.navigation` 구조로 전환한다.
+- KR/US 하위에 각각 목적이 분리된 페이지를 구성한다.
+- 페이지별 컨텐츠 경계를 새로 정의해 Overview, Signals, Research, Constituents, Flow, Quality 역할을 분리한다.
+
+## Current Gate
+- [x] 현재 앱 구조와 Streamlit 버전 확인
+- [x] `st.Page` / `st.navigation` 사용 가능 여부 확인
+- [x] Visual Ralph reference artifact 작성
+- [x] 사용자 reference 승인
+- [x] 승인 후 Ralph 구현 시작
+- [x] `st.navigation` 기반 KR/US 페이지 registry 구현
+- [x] custom sidebar 화면 radio 제거
+- [x] 페이지별 컨텐츠 경계 재배치
+- [x] 테스트 갱신 및 회귀 실행
+
+## Reference
+- `.omx/artifacts/visual-ralph/dashboard-page-navigation/reference-20260426T044023Z.md`
+- `.omx/context/dashboard-page-navigation-20260426T044023Z.md`
+
+## Review
+- Implementation completed.
+- Changed files:
+  `app.py`
+  `src/dashboard/tabs.py`
+  `tests/test_dashboard_tabs.py`
+  `tasks/todo.md`
+- Implementation:
+  `app.py` now registers native Streamlit pages with `st.Page` and `st.navigation(..., position="sidebar", expanded=True)`.
+  Navigation sections are grouped under `KR` and `US`.
+  The old custom sidebar page radio was removed; sidebar now only contains runtime controls such as theme, as-of date, data refresh, advanced settings, and KR flow profile.
+  Page IDs were redefined as `overview`, `signals`, `research`, `constituents`, `flow`, and KR-only `quality`.
+  Overview now owns the decision cockpit; Research owns analysis toolbar, stock lookup, and research canvas; Signals/Constituents/Flow/Quality dispatch to their bounded content surfaces.
+- Verification:
+  `python -m py_compile app.py src\dashboard\tabs.py tests\test_dashboard_tabs.py tests\test_dashboard_runtime.py tests\test_ui_components.py` -> passed
+  `pytest -q tests\test_dashboard_tabs.py tests\test_dashboard_runtime.py` -> `44 passed`
+  `pytest -q tests\test_dashboard_tabs.py tests\test_dashboard_state.py tests\test_dashboard_runtime.py tests\test_ui_components.py` -> `122 passed`
+  Architect verification -> `APPROVE`
+  Streamlit health -> `http://localhost:8521/_stcore/health` returned `200 ok`
+  Route checks -> `http://localhost:8521/kr-research` and `http://localhost:8521/us-flow` returned `200`
+- Note:
+  pytest still emitted the known Windows temp cleanup `pytest-current` permission warning after the green test result.
+
+# Visual Ralph: Page Information Exclusivity - 2026-04-26
+
+## Goal
+- 종합 상황판은 의사결정에 필요한 종합 정보를 유지한다.
+- Signals, Research, Constituents, Flow, Quality 페이지는 서로 다른 전용 정보만 렌더한다.
+- 페이지 간 반복되는 요약/차트/필터 중복을 제거한다.
+
+## Checklist
+- [x] 현재 페이지별 렌더링 중복 지점을 확인한다.
+- [x] 페이지 독립성 회귀 테스트를 먼저 갱신한다.
+- [x] `signals` 페이지에서 overview 요약 재렌더링을 제거한다.
+- [x] `research` 페이지에서 신호 진단 차트와 분석 캔버스 중복을 제거한다.
+- [x] Research 페이지의 불필요한 공통 action 필터 렌더링을 제거한다.
+- [x] compile 및 targeted UI/dashboard 테스트를 실행한다.
+
+## Review
+- Scope:
+  후속 UI 정보 구조 정리. 기존 `st.Page` 내비게이션과 데이터 계산은 유지하고, 페이지별 렌더링 책임만 더 배타적으로 나눴다.
+- Changed files:
+  `app.py`
+  `src/dashboard/tabs.py`
+  `tests/test_dashboard_tabs.py`
+  `tasks/todo.md`
+- Simplifications made:
+  `signals` 페이지에서 overview summary 재사용을 제거해 상세 신호 표만 남겼다.
+  `research` 페이지에서 `render_dashboard_tabs()` 경유와 legacy charts 호출을 제거해 분석 캔버스 전용 페이지로 분리했다.
+  Research 페이지는 공통 action filter 대신 자체 analysis toolbar만 사용한다.
+- Verification:
+  `python -m py_compile app.py src\dashboard\tabs.py tests\test_dashboard_tabs.py` -> passed
+  `pytest -q tests\test_dashboard_tabs.py` -> `25 passed`
+  `pytest -q tests\test_ui_theme.py tests\test_ui_contrast.py tests\test_ui_components.py tests\test_ui_copy.py tests\test_dashboard_tabs.py tests\test_dashboard_runtime.py` -> `142 passed`
+  Streamlit health/routes on existing server `:8521` -> `_stcore/health ok`, `/kr-research 200 OK`, `/kr-signals 200 OK`
+- Remaining risks:
+  Browser pixel comparison / `$visual-verdict` screenshot scoring was not run because this pass changed information architecture and routing responsibility, not the approved visual style itself.
+# Visual Ralph: Frontend Aesthetic Refinement - 2026-04-26
+
+## Goal
+- 컬러 팔레트를 더 차분한 finance-grade light theme으로 재조정한다.
+- 반응형 UI에서 컨테이너 도형, 패널 반지름, grid collapse 방식을 재점검한다.
+- `st.navigation` 기반 사이드바의 정보 위계와 컨트롤 미감을 개선한다.
+
+## Current Gate
+- [x] 현재 Streamlit/frontend 스타일 진입점 확인
+- [x] 기존 디자인 계약과 최근 navigation 변경 이력 확인
+- [x] Visual Ralph 기준 레퍼런스 생성
+- [x] 사용자 레퍼런스 승인
+- [x] 승인 후 구현 및 시각 반복
+- [x] compile, targeted pytest, Streamlit smoke 검증
+- [x] 최종 visual verdict / diff evidence 기록
+
+## Review
+- Scope:
+  기존 Streamlit `st.navigation` 구조와 데이터 렌더링은 유지하고, 팔레트/컨테이너 도형/사이드바 미감만 조정했다.
+- Reference:
+  `.omx/artifacts/visual-ralph/frontend-aesthetic-refinement/reference.png`
+- Changed files:
+  `.streamlit/config.toml`
+  `config/theme.py`
+  `src/ui/css.py`
+  `tests/test_ui_theme.py`
+  `tests/test_ui_components.py`
+  `tasks/todo.md`
+  `.omx/artifacts/visual-ralph/frontend-aesthetic-refinement/reference.md`
+  `.omx/state/frontend-aesthetic-refinement-ralph-progress.json`
+- Simplifications made:
+  새 UI 컴포넌트나 새 dependency 없이 기존 theme token과 CSS injection 경계에서만 정리했다.
+  기존 decorative shadow/gradient 성격을 줄이고 flat panel, hairline border, stable responsive grid 쪽으로 옮겼다.
+  Sidebar는 native `st.navigation` selector를 확장해 selected/hover/group hierarchy를 보강했다.
+- Verification:
+  `python -m py_compile config\theme.py src\ui\css.py tests\test_ui_theme.py tests\test_ui_components.py tests\test_ui_contrast.py` -> passed
+  `pytest -q tests\test_ui_theme.py tests\test_ui_contrast.py tests\test_ui_components.py tests\test_dashboard_tabs.py tests\test_dashboard_runtime.py` -> `135 passed`
+  Streamlit health on `:8522` -> `200 ok`
+  Route checks -> `/kr-research 200`, `/us-flow 200`
+- Visual evidence:
+  Initial headless Chrome screenshots remained at Streamlit skeleton state.
+  Follow-up root cause work added `scripts/capture_streamlit_screenshot.py`, which waits for Streamlit hydration through CDP and fails invalid Streamlit navigation routes that render `Page not found`.
+  Hydrated screenshot evidence is now saved at `.omx/artifacts/visual-ralph/frontend-aesthetic-refinement/screenshot-fixed-root-1440x1024.png`.
+- Remaining risks:
+  The capture pipeline is fixed, but the visual score remains below the `>= 90` Visual Ralph threshold because the current UI is a Streamlit-native adaptation rather than a close pixel match to the generated mockup.
+
+# Headless Streamlit Screenshot Root Cause - 2026-04-26
+
+## Goal
+- Headless Chrome 캡처가 Streamlit skeleton에서 멈춘 원인을 파악한다.
+- 재발 방지용 hydrated screenshot 캡처 경로를 만든다.
+- 잘못된 Streamlit route가 HTTP 200만으로 통과하지 않게 한다.
+
+## Checklist
+- [x] 기존 skeleton screenshot 재현
+- [x] Streamlit health와 실제 DOM hydration 상태 분리
+- [x] Chrome CDP target 선택 문제 확인
+- [x] `Page not found` route false positive 확인
+- [x] 재사용 가능한 screenshot script 추가
+- [x] hydrated screenshot 생성 검증
+- [x] invalid route 실패 검증
+
+## Review
+- Root cause:
+  직접 `chrome --screenshot`은 Streamlit websocket hydration을 기다리지 않아 skeleton을 찍었다.
+  이전 CDP retry는 `/json`의 첫 target에 붙었는데, 이 target은 실제 앱 페이지가 아니라 Chrome extension background page일 수 있었다.
+  또한 `/kr-overview`는 HTTP 200을 반환하지만 Streamlit 내부에서는 `Page not found` modal을 렌더했다.
+- Changed files:
+  `scripts/capture_streamlit_screenshot.py`
+  `.omx/artifacts/visual-ralph/frontend-aesthetic-refinement/reference.md`
+  `.omx/state/frontend-aesthetic-refinement-ralph-progress.json`
+  `tasks/lessons.md`
+  `tasks/todo.md`
+- Verification:
+  `python -m py_compile scripts\capture_streamlit_screenshot.py` -> passed
+  `python scripts\capture_streamlit_screenshot.py --reuse-server --port 8524 --debug-port 9227 --url http://127.0.0.1:8524 --output .omx\artifacts\visual-ralph\frontend-aesthetic-refinement\screenshot-fixed-root-1440x1024.png --timeout 90` -> hydrated screenshot captured, `bytes=155610`, `state=notRunning`, `connection=CONNECTED`, `hasSkeleton=false`, `hasPageNotFound=false`
+  `python scripts\capture_streamlit_screenshot.py --reuse-server --port 8524 --debug-port 9228 --url http://127.0.0.1:8524/kr-overview ...` -> expected failure on `Page not found`
+  `python scripts\capture_streamlit_screenshot.py --port 8525 --debug-port 9229 --url http://127.0.0.1:8525 --output .omx\artifacts\visual-ralph\frontend-aesthetic-refinement\screenshot-script-starts-server-1440x1024.png --timeout 90` -> script-started server screenshot captured, `bytes=155609`, `state=notRunning`, `connection=CONNECTED`, `hasSkeleton=false`
+- Cleanup:
+  Diagnostic Streamlit servers on ports `8523` and `8524` were stopped.
+  The script-started server on `8525` exited cleanly; only `TIME_WAIT` sockets remained.
+
+# Visual Ralph Non-Dashboard Page Redesign - 2026-04-26
+
+## Goal
+- 대시보드 외 페이지(`signals`, `research`, `constituents`, `flow`, `quality`)를 기존 Toss Invest-inspired 디자인 계약에 맞춰 재정렬한다.
+- Toss Frontend Fundamentals 원칙을 Streamlit 구조에 맞게 적용한다: 명확한 관심사 분리, 접근 가능한 정보 위계, 예측 가능한 상태, 재사용 가능한 UI 토큰/컴포넌트.
+- 새 dependency 없이 기존 CSS/token/component 경계에서 UX/UI를 개선한다.
+
+## Checklist
+- [x] 현재 라우트와 렌더 함수 식별
+- [x] Toss Frontend Fundamentals 적용 체크리스트 확정
+- [x] 공통 non-dashboard page scaffold와 CSS 클래스 추가
+- [x] `signals`, `research`, `constituents`, `flow`, `quality` 페이지에 scaffold 적용
+- [x] 컴포넌트/라우팅 테스트 갱신
+- [x] py_compile 및 targeted pytest 실행
+- [x] Streamlit hydrated screenshot 또는 smoke evidence 기록
+
+## Review
+- Scope:
+  대시보드(`overview`)의 기존 전용 화면은 건드리지 않고, `signals`, `research`, `constituents`, `flow`, `quality`에 공통 non-dashboard research frame을 추가했다.
+- Toss Frontend Fundamentals mapping:
+  Readability: 페이지별 목적/범위/상태를 같은 구조로 노출해 화면 맥락 전환을 줄였다.
+  Predictability: 모든 non-dashboard 페이지가 같은 `research-page-frame` 구조와 summary item shape을 사용한다.
+  Cohesion: 새 UI 구조는 `src/ui/panels.py`와 `src/ui/css.py`에 모으고, 각 페이지는 데이터 요약만 넘긴다.
+  Coupling: 대시보드 overview 전용 구현과 라우팅 계약은 유지했다.
+- Changed files:
+  `app.py`
+  `src/dashboard/tabs.py`
+  `src/ui/panels.py`
+  `src/ui/css.py`
+  `tests/test_ui_components.py`
+  `tests/test_ui_theme.py`
+  `tasks/todo.md`
+- Simplifications made:
+  새 dependency 없이 기존 Streamlit widget과 CSS token 체계만 확장했다.
+  `use_container_width` deprecation 경고를 현재 Streamlit API인 `width="stretch"`로 정리했다.
+- Verification:
+  `python -m py_compile app.py src\dashboard\tabs.py src\ui\panels.py src\ui\css.py tests\test_ui_components.py tests\test_ui_theme.py` -> passed
+  `pytest -q tests\test_ui_theme.py tests\test_ui_contrast.py tests\test_ui_components.py tests\test_dashboard_tabs.py tests\test_dashboard_runtime.py` -> `136 passed`
+  Hydrated screenshots captured:
+  `.omx/artifacts/visual-ralph/non-dashboard-redesign/screenshot-kr-signals-1440x1024.png`
+  `.omx/artifacts/visual-ralph/non-dashboard-redesign/screenshot-kr-research-1440x1024.png`
+  `.omx/artifacts/visual-ralph/non-dashboard-redesign/screenshot-kr-flow-1440x1024.png`
+  `.omx/artifacts/visual-ralph/non-dashboard-redesign/screenshot-kr-quality-1440x1024.png`
+- Remaining risks:
+  Visual Ralph reference is the existing `DESIGN.md`/Toss Invest contract rather than a newly approved pixel mockup, so this is a consistent Streamlit-native redesign rather than a pixel-match iteration.

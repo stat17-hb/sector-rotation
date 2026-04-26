@@ -38,6 +38,10 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
     "scope_full_universe": {"ko": "전체 유니버스", "en": "Full universe"},
     "analysis_toolbar_eyebrow": {"ko": "리서치 범위", "en": "Research scope"},
     "analysis_toolbar_title": {
+        "ko": "리서치 캔버스 범위 조정",
+        "en": "Adjust research canvas scope",
+    },
+    "analysis_toolbar_description": {
         "ko": "아래 리서치 캔버스와 상세 탭의 분석 범위를 맞춥니다. 상단 보유/신규 대응 보드의 기본 판단 규칙은 바꾸지 않습니다.",
         "en": "Set the analysis scope for the research canvas and detail tabs below. This does not change the base judgment rules of the upper held/new decision boards.",
     },
@@ -50,6 +54,10 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
     "analysis_toolbar_apply": {"ko": "적용", "en": "Apply"},
     "stock_lookup_eyebrow": {"ko": "종목 → 섹터 조회", "en": "Stock -> sector lookup"},
     "stock_lookup_title": {
+        "ko": "현재 적용 섹터 찾기",
+        "en": "Find current sector",
+    },
+    "stock_lookup_description": {
         "ko": "종목명 또는 종목코드로 현재 적용 중인 섹터를 찾습니다. 조회 성공 시 현재 캔버스 섹터 선택만 좁히며, 상단 기본 판단 규칙은 바꾸지 않습니다.",
         "en": "Find the current dashboard sector for a stock by name or ticker/code. On success this narrows only the current canvas sector selection and does not change the upper decision rules.",
     },
@@ -84,13 +92,13 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
     "summary_scope_label": {"ko": "범위", "en": "Scope"},
     "summary_positions_label": {"ko": "포지션", "en": "Positions"},
     "summary_alerts_label": {"ko": "알림", "en": "Alerts"},
-    "decision_context_held": {"ko": "보유 대응", "en": "Held action"},
-    "decision_context_new": {"ko": "신규 대응", "en": "New idea"},
-    "decision_lane_eyebrow": {"ko": "실행 레인", "en": "Execution lane"},
-    "decision_lane_title": {"ko": "지금 대응할 섹터 판단", "en": "What to do now"},
+    "decision_context_held": {"ko": "보유 검토", "en": "Held review"},
+    "decision_context_new": {"ko": "신규 후보", "en": "New candidate"},
+    "decision_lane_eyebrow": {"ko": "의사결정 지원", "en": "Decision support"},
+    "decision_lane_title": {"ko": "규칙 기반 섹터 후보", "en": "Rules-based sector candidates"},
     "decision_lane_description": {
-        "ko": "아래 보유/신규 대응 보드는 현재 규칙 기준의 실전 대응 표면입니다. 하단 리서치 캔버스와 탭은 검증용입니다.",
-        "en": "The held/new decision boards below are the practical action surface under the current rules. The lower research canvas and tabs are for validation.",
+        "ko": "아래 보유/신규 보드는 현재 규칙 기준의 의사결정 지원 표면입니다. 하단 리서치 캔버스와 탭은 검증용입니다.",
+        "en": "The held/new boards below are decision-support surfaces under the current rules. The lower research canvas and tabs are for validation.",
     },
     "decision_card_thesis": {"ko": "핵심 판단", "en": "Core thesis"},
     "decision_card_why": {"ko": "왜", "en": "Why"},
@@ -99,16 +107,16 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
     "decision_card_regime_fit": {"ko": "국면", "en": "Regime"},
     "decision_card_sector_fit": {"ko": "실증 적합도", "en": "Empirical fit"},
     "top_picks_empty_held_missing": {
-        "ko": "포트폴리오 대응 추천을 위해 보유 섹터를 먼저 추가하세요.",
-        "en": "Add held sectors first to enable portfolio action recommendations.",
+        "ko": "보유 섹터 검토 후보를 보려면 보유 섹터를 먼저 추가하세요.",
+        "en": "Add held sectors first to enable held-sector review candidates.",
     },
     "top_picks_empty_held": {
         "ko": "현재 결정 규칙에 부합하는 보유 섹터가 없습니다.",
         "en": "No held sectors match the current decision rules.",
     },
     "top_picks_empty_new": {
-        "ko": "현재 결정 규칙에 부합하는 신규 매수 아이디어가 없습니다.",
-        "en": "No new-buy ideas match the current decision rules.",
+        "ko": "현재 결정 규칙에 부합하는 신규 검토 후보가 없습니다.",
+        "en": "No new review candidates match the current decision rules.",
     },
     "top_picks_empty_all": {
         "ko": "현재 필터 조건에 맞는 섹터가 없습니다.",
@@ -132,7 +140,7 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
     },
     "col_rank": {"ko": "순위", "en": "Rank"},
     "col_sector": {"ko": "섹터", "en": "Sector"},
-    "col_decision": {"ko": "투자 판단", "en": "Decision"},
+    "col_decision": {"ko": "신호 판단", "en": "Signal judgment"},
     "col_reason": {"ko": "사유", "en": "Reason"},
     "col_risk": {"ko": "리스크", "en": "Risk"},
     "col_invalidation": {"ko": "무효화 조건", "en": "Invalidation"},
@@ -142,7 +150,7 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
     "col_macro_context": {"ko": "매크로 참고", "en": "Macro Context"},
     "col_action": {"ko": "대응", "en": "Action"},
     "col_taxonomy": {"ko": "세부 분류", "en": "Taxonomy"},
-    "col_etf": {"ko": "매수 ETF", "en": "ETF"},
+    "col_etf": {"ko": "참고 ETF", "en": "ETF reference"},
     "col_volatility": {"ko": "변동성", "en": "Volatility"},
     "col_mdd_3m": {"ko": "MDD (3개월)", "en": "MDD (3M)"},
     "period_1m": {"ko": "1개월", "en": "1M"},
@@ -174,7 +182,7 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
     "status_yield_curve": {"ko": "수익률 곡선 (Yield curve)", "en": "Yield curve"},
     "status_regime_confirmed": {"ko": "확정", "en": "Confirmed"},
     "status_regime_provisional": {"ko": "잠정", "en": "Provisional"},
-    "status_market_detail": {"ko": "로컬 캐시 / 실시간 가격", "en": "Warehouse / live price path"},
+    "status_market_detail": {"ko": "로컬 캐시 / 가격 경로", "en": "Warehouse / price path"},
     "status_macro_detail": {"ko": "월간 매크로 저장소", "en": "Monthly macro warehouse"},
     "status_yield_inverted": {"ko": "역전", "en": "Inverted"},
     "status_yield_normal": {"ko": "정상", "en": "Normal"},
@@ -207,8 +215,8 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
     "reason_sector_fit_rank": {"ko": "lag0 nowcast 실증 순위 {rank}/{total}", "en": "lag0 nowcast empirical rank {rank}/{total}"},
     "reason_need_confirming_strength": {"ko": "추가 강도 확인 필요", "en": "Need more confirming strength"},
     "judgment_disclaimer_caption": {
-        "ko": "최종 대응은 규칙 기반 판단입니다. 실증 적합도는 lag0 nowcast reference only이며 PIT/action 신호가 아닙니다. 기본 모형(국면 × 모멘텀), 환율(FX) 안전장치, 실험적 수급 보정을 분리해 해석하세요.",
-        "en": "Final action is a rules-based heuristic. Empirical fit is a lag0 nowcast reference only, not a PIT or action-driving signal. Read the base shell (regime x momentum), FX safety filter, and experimental flow overlay separately.",
+        "ko": "최종 표기는 규칙 기반 의사결정 지원 신호입니다. 실증 적합도는 lag0 nowcast reference only이며 PIT/action 신호가 아닙니다. 기본 모형(국면 × 모멘텀), 환율(FX) 안전장치, 실험적 수급 보정을 분리해 해석하세요.",
+        "en": "Final labels are rules-based decision-support signals. Empirical fit is a lag0 nowcast reference only, not a PIT or action-driving signal. Read the base shell (regime x momentum), FX safety filter, and experimental flow overlay separately.",
     },
     "judgment_structure_label": {"ko": "판단 구조", "en": "Judgment stack"},
     "judgment_structure_base": {"ko": "기본 모형", "en": "Base shell"},
@@ -271,8 +279,8 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
     },
     "flow_summary_title": {"ko": "투자자 수급 스냅샷", "en": "Investor-flow snapshot"},
     "flow_summary_description": {
-        "ko": "상단 실행 보드에 덧붙는 실험적 수급 overlay를 요약합니다. reference-only 상태에서는 최종 투자판단을 바꾸지 않습니다.",
-        "en": "Summarize the experimental investor-flow overlay that sits next to the upper execution boards. In reference-only states it does not change the final action.",
+        "ko": "상단 의사결정 지원 보드에 덧붙는 실험적 수급 overlay를 요약합니다. reference-only 상태에서는 최종 신호 판단을 바꾸지 않습니다.",
+        "en": "Summarize the experimental investor-flow overlay next to the upper decision-support boards. In reference-only states it does not change the final signal label.",
     },
     "flow_summary_limit_note": {
         "ko": "강한 수급 신호가 보이는 상위 4개 섹터만 요약합니다.",
@@ -287,16 +295,16 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
         "en": "No investor-flow data is available yet. Run the manual refresh from the sidebar.",
     },
     "flow_reference_only_partial": {
-        "ko": "현재 표시 중인 수급 데이터는 partial preview입니다. reference-only로만 보며, 상단 실행 보드의 최종 투자판단에는 반영되지 않았습니다.",
-        "en": "The visible investor-flow data is a partial preview. Treat it as reference-only; it is not reflected in the final action.",
+        "ko": "현재 표시 중인 수급 데이터는 partial preview입니다. reference-only로만 보며, 상단 의사결정 지원 보드의 최종 신호에는 반영되지 않았습니다.",
+        "en": "The visible investor-flow data is a partial preview. Treat it as reference-only; it is not reflected in the final signal label.",
     },
     "flow_reference_only_transient": {
-        "ko": "현재 표시 중인 수급 데이터는 warehouse 저장 실패 후 임시 preview입니다. 현재 세션의 reference-only 값이며, 상단 실행 보드의 최종 투자판단에는 반영되지 않았습니다.",
-        "en": "The visible investor-flow data is a transient preview after warehouse write failure. It is session-only reference and is not reflected in the final action.",
+        "ko": "현재 표시 중인 수급 데이터는 warehouse 저장 실패 후 임시 preview입니다. 현재 세션의 reference-only 값이며, 상단 의사결정 지원 보드의 최종 신호에는 반영되지 않았습니다.",
+        "en": "The visible investor-flow data is a transient preview after warehouse write failure. It is session-only reference and is not reflected in the final signal label.",
     },
     "flow_reference_only_stale": {
-        "ko": "현재 표시 중인 수급 데이터는 최신 complete 기준이 아닌 cached snapshot입니다. reference-only로만 보며, 상단 실행 보드의 최종 투자판단에는 반영되지 않았습니다.",
-        "en": "The visible investor-flow data is a cached snapshot that is not current to the latest complete cursor. Treat it as reference-only; it is not reflected in the final action.",
+        "ko": "현재 표시 중인 수급 데이터는 최신 complete 기준이 아닌 cached snapshot입니다. reference-only로만 보며, 상단 의사결정 지원 보드의 최종 신호에는 반영되지 않았습니다.",
+        "en": "The visible investor-flow data is a cached snapshot that is not current to the latest complete cursor. Treat it as reference-only; it is not reflected in the final signal label.",
     },
     "flow_reference_only_summary_hint": {
         "ko": "상세 수급 수치는 투자자 수급 탭에서 참고하세요. 현재 값은 reference-only입니다.",
@@ -311,19 +319,19 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
         "en": "In this state, the action-change table is hidden and only the raw snapshot is shown.",
     },
     "summary_tab_role_caption": {
-        "ko": "이 탭은 상단 실행 레인의 요약/감사 레이어입니다. 실전 대응의 기준 표면은 메인 페이지의 보유/신규 대응 보드입니다.",
-        "en": "This tab is an additive recap and audit layer for the upper execution lane. The main held/new decision boards remain the action surface.",
+        "ko": "이 탭은 상단 의사결정 지원 보드의 요약/감사 레이어입니다. 기준 표면은 메인 페이지의 보유/신규 후보 보드입니다.",
+        "en": "This tab is an additive recap and audit layer for the upper decision-support boards. The main held/new boards remain the reference surface.",
     },
     "analysis_canvas_eyebrow": {"ko": "리서치 캔버스", "en": "Research canvas"},
-    "analysis_canvas_title": {"ko": "실행 판단 검증용 섹터 비교", "en": "Sector comparison for validating the action call"},
+    "analysis_canvas_title": {"ko": "신호 판단 검증용 섹터 비교", "en": "Sector comparison for validating the signal context"},
     "analysis_canvas_description": {
-        "ko": "아래 히트맵·사이클·상세 패널은 상단 실전 대응 보드를 검증하고 확신도를 높이는 연구 표면입니다. 직접 대응 신호를 바꾸지는 않습니다.",
-        "en": "The heatmap, cycle, and detail panels below are research surfaces used to validate the upper action boards and build conviction. They do not directly change the action signal.",
+        "ko": "아래 히트맵·사이클·상세 패널은 상단 의사결정 지원 보드를 검증하고 맥락을 넓히는 연구 표면입니다. 직접 신호 판단을 바꾸지는 않습니다.",
+        "en": "The heatmap, cycle, and detail panels below are research surfaces used to validate the upper decision-support boards and add context. They do not directly change the signal label.",
     },
     "flow_col_profile": {"ko": "프로필", "en": "Profile"},
     "flow_col_state": {"ko": "수급 상태", "en": "Flow state"},
     "flow_col_score": {"ko": "수급 σ", "en": "Flow sigma"},
-    "flow_col_adjustment": {"ko": "투자의견 변화", "en": "Action change"},
+    "flow_col_adjustment": {"ko": "신호 변화", "en": "Signal change"},
     "flow_col_foreign": {"ko": "외국인", "en": "Foreign"},
     "flow_col_institutional": {"ko": "기관", "en": "Institutional"},
     "flow_col_retail": {"ko": "개인", "en": "Retail"},
@@ -337,7 +345,7 @@ _GENERAL_TEXT: dict[str, dict[UiLocale, str]] = {
 }
 
 _ACTION_LABELS: dict[str, dict[UiLocale, str]] = {
-    "Strong Buy": {"ko": "[+] 강력 매수 (Strong Buy)", "en": "[+] Strong Buy"},
+    "Strong Buy": {"ko": "[+] 강한 후보 (Strong Buy)", "en": "[+] Strong candidate"},
     "Watch": {"ko": "[~] 관망 (Watch)", "en": "[~] Watch"},
     "Hold": {"ko": "[=] 유지 (Hold)", "en": "[=] Hold"},
     "Avoid": {"ko": "[x] 회피 (Avoid)", "en": "[x] Avoid"},
@@ -346,16 +354,16 @@ _ACTION_LABELS: dict[str, dict[UiLocale, str]] = {
 
 _DECISION_LABELS: dict[str, dict[str, dict[UiLocale, str]]] = {
     "held": {
-        "Strong Buy": {"ko": "추가 매수 후보", "en": "Add candidate"},
+        "Strong Buy": {"ko": "추가 검토 후보", "en": "Add-review candidate"},
         "Watch": {"ko": "유지 / 모니터링", "en": "Hold / monitor"},
         "Hold": {"ko": "비중 축소 / 교체", "en": "Reduce / rotate"},
-        "Avoid": {"ko": "매도 / 청산 검토", "en": "Sell / exit review"},
+        "Avoid": {"ko": "축소 / 이탈 검토", "en": "Reduce / exit review"},
         "N/A": {"ko": "데이터 확인", "en": "Data check"},
     },
     "new": {
-        "Strong Buy": {"ko": "신규 매수 후보", "en": "New buy candidate"},
-        "Watch": {"ko": "관심 종목", "en": "Watchlist"},
-        "Hold": {"ko": "신규 진입 불가", "en": "Not a fresh buy"},
+        "Strong Buy": {"ko": "신규 검토 후보", "en": "New review candidate"},
+        "Watch": {"ko": "관찰 후보", "en": "Watch candidate"},
+        "Hold": {"ko": "신규 검토 보류", "en": "Fresh review deferred"},
         "Avoid": {"ko": "회피", "en": "Avoid"},
         "N/A": {"ko": "데이터 확인", "en": "Data check"},
     },

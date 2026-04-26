@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from types import SimpleNamespace
 
 import pandas as pd
@@ -8,6 +9,18 @@ from src.dashboard import tabs
 import src.data_sources.krx_stock_screening as screening_mod
 from src.signals.flow import summarize_sector_investor_flow
 import src.ui.components as ui_components
+
+
+class _DummyContext:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+def _fail_st_tabs(_labels):
+    raise AssertionError("st.tabs should not be used")
 
 
 def test_render_decision_first_sections_orders_main_canvas(monkeypatch):
@@ -188,26 +201,171 @@ def test_render_decision_first_sections_filter_results_do_not_modify_upper_board
     assert canvas_inputs == [analysis_kwargs]
 
 
-def test_render_dashboard_tabs_uses_market_specific_flow_tab(monkeypatch):
-    tab_labels_seen: list[list[str]] = []
-    flow_calls: list[str] = []
-    shared_maps: list[dict[str, object] | None] = []
+def test_build_dashboard_page_options_returns_kr_pages_in_expected_order():
+    options = tabs.build_dashboard_page_options("KR")
 
+    assert [option.page_id for option in options] == [
+        "overview",
+        "signals",
+        "research",
+        "constituents",
+        "flow",
+        "quality",
+    ]
+    assert [option.label for option in options] == [
+        "대시보드",
+        "섹터 모멘텀",
+        "상대강도 분석",
+        "섹터맵",
+        "섹터 맵(히트맵)",
+        "리서치 노트",
+    ]
+    assert [option.url_path for option in options] == [
+        "kr-overview",
+        "kr-signals",
+        "kr-research",
+        "kr-constituents",
+        "kr-flow",
+        "kr-quality",
+    ]
+
+
+def test_build_dashboard_page_options_returns_us_pages_without_monitoring():
+    options = tabs.build_dashboard_page_options("US")
+
+    assert [option.page_id for option in options] == [
+        "overview",
+        "signals",
+        "research",
+        "constituents",
+        "flow",
+    ]
+    assert [option.label for option in options] == [
+        "대시보드",
+        "섹터 모멘텀",
+        "상대강도 분석",
+        "섹터맵",
+        "섹터 맵(히트맵)",
+    ]
+    assert [option.url_path for option in options] == [
+        "us-overview",
+        "us-signals",
+        "us-research",
+        "us-constituents",
+        "us-flow",
+    ]
+
+
+def test_normalize_dashboard_page_id_falls_back_to_summary_when_page_is_unavailable():
+    assert tabs.normalize_dashboard_page_id("quality", "US") == "overview"
+    assert tabs.normalize_dashboard_page_id("missing", "KR") == "overview"
+    assert tabs.normalize_dashboard_page_id(None, "KR") == "overview"
+    assert tabs.normalize_dashboard_page_id("flow", "US") == "flow"
+
+
+def test_render_sidebar_controls_returns_runtime_controls_without_page_radio(monkeypatch):
     monkeypatch.setattr(
         tabs.st,
-        "tabs",
-        lambda labels: tab_labels_seen.append(list(labels)) or [object() for _ in labels],
+        "session_state",
+        {
+            "epsilon": 0.1,
+            "price_years": 3,
+            "rs_ma_period": 20,
+            "ma_fast": 20,
+            "ma_slow": 60,
+        },
     )
-    monkeypatch.setattr(tabs, "render_summary_tab", lambda **kwargs: None)
-    monkeypatch.setattr(tabs, "render_charts_tab", lambda **kwargs: None)
-    monkeypatch.setattr(tabs, "render_all_signals_tab", lambda **kwargs: None)
-    monkeypatch.setattr(tabs, "render_screening_tab", lambda **kwargs: None)
-    monkeypatch.setattr(
-        tabs,
-        "render_investor_flow_tab",
-        lambda **kwargs: flow_calls.append("flow") or shared_maps.append(kwargs.get("shared_flow_summary_map")),
+
+    monkeypatch.setattr(tabs.st, "radio", _fail_st_tabs)
+    monkeypatch.setattr(tabs.st, "title", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tabs.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tabs.st, "subheader", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tabs.st, "toggle", lambda *_args, value=False, **_kwargs: value)
+    monkeypatch.setattr(tabs.st, "selectbox", lambda _label, *, options, index=0, **_kwargs: list(options)[index])
+    monkeypatch.setattr(tabs.st, "date_input", lambda *_args, value, **_kwargs: value)
+    monkeypatch.setattr(tabs.st, "divider", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tabs.st, "popover", lambda *_args, **_kwargs: _DummyContext())
+    monkeypatch.setattr(tabs.st, "form", lambda *_args, **_kwargs: _DummyContext())
+    monkeypatch.setattr(tabs.st, "columns", lambda *_args, **_kwargs: [_DummyContext(), _DummyContext()])
+    monkeypatch.setattr(tabs.st, "slider", lambda _label, *, value, **_kwargs: value)
+    monkeypatch.setattr(tabs.st, "form_submit_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(tabs.st, "button", lambda *_args, **_kwargs: False)
+
+    result = tabs.render_sidebar_controls(
+        market_id="KR",
+        ui_labels={"market_selector": "시장", "sidebar_title": "Sector Rotation"},
+        theme_mode="dark",
+        analysis_heatmap_palette="classic",
+        probe_price_status="LIVE",
+        probe_macro_status="LIVE",
+        probe_investor_flow_status="LIVE",
+        flow_profile="foreign_lead",
+        momentum_method="legacy_rs_ma_v0",
+        btn_states={"refresh_market": True, "refresh_macro": True, "recompute": True},
+        asof_default=date(2026, 4, 26),
+        ui_locale="ko",
     )
-    monkeypatch.setattr(tabs, "render_monitoring_tab", lambda **kwargs: None)
+
+    assert result == (date(2026, 4, 26), "foreign_lead", False, False, False, False)
+
+
+def test_render_sidebar_controls_hides_kr_flow_profile_for_us(monkeypatch):
+    subheaders: list[str] = []
+    session_state = {
+        "epsilon": 0.1,
+        "price_years": 3,
+        "rs_ma_period": 20,
+        "ma_fast": 20,
+        "ma_slow": 60,
+    }
+    monkeypatch.setattr(tabs.st, "session_state", session_state)
+
+    monkeypatch.setattr(tabs.st, "radio", _fail_st_tabs)
+    monkeypatch.setattr(tabs.st, "title", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tabs.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tabs.st, "subheader", lambda text, **_kwargs: subheaders.append(str(text)))
+    monkeypatch.setattr(tabs.st, "toggle", lambda *_args, value=False, **_kwargs: value)
+    monkeypatch.setattr(tabs.st, "selectbox", lambda _label, *, options, index=0, **_kwargs: list(options)[index])
+    monkeypatch.setattr(tabs.st, "date_input", lambda *_args, value, **_kwargs: value)
+    monkeypatch.setattr(tabs.st, "divider", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tabs.st, "popover", lambda *_args, **_kwargs: _DummyContext())
+    monkeypatch.setattr(tabs.st, "form", lambda *_args, **_kwargs: _DummyContext())
+    monkeypatch.setattr(tabs.st, "columns", lambda *_args, **_kwargs: [_DummyContext(), _DummyContext()])
+    monkeypatch.setattr(tabs.st, "slider", lambda _label, *, value, **_kwargs: value)
+    monkeypatch.setattr(tabs.st, "form_submit_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(tabs.st, "button", lambda *_args, **_kwargs: False)
+
+    result = tabs.render_sidebar_controls(
+        market_id="US",
+        ui_labels={"market_selector": "시장", "sidebar_title": "Sector Rotation"},
+        theme_mode="dark",
+        analysis_heatmap_palette="classic",
+        probe_price_status="LIVE",
+        probe_macro_status="LIVE",
+        probe_investor_flow_status="LIVE",
+        flow_profile="foreign_lead",
+        momentum_method="legacy_rs_ma_v0",
+        btn_states={"refresh_market": True, "refresh_macro": True, "recompute": True},
+        asof_default=date(2026, 4, 26),
+        ui_locale="ko",
+    )
+
+    assert result == (date(2026, 4, 26), "foreign_lead", False, False, False, False)
+    assert tabs.get_ui_text("flow_profile_label", "ko") not in subheaders
+
+
+def test_render_dashboard_tabs_routes_flow_page_for_kr_and_us(monkeypatch):
+    calls: list[dict[str, object]] = []
+    blocked_renderers: list[str] = []
+
+    monkeypatch.setattr(tabs.st, "tabs", _fail_st_tabs)
+    monkeypatch.setattr(tabs.st, "container", lambda: _DummyContext())
+    monkeypatch.setattr(tabs, "render_summary_tab", lambda **_kwargs: blocked_renderers.append("summary"))
+    monkeypatch.setattr(tabs, "render_charts_tab", lambda **_kwargs: blocked_renderers.append("charts"))
+    monkeypatch.setattr(tabs, "render_all_signals_tab", lambda **_kwargs: blocked_renderers.append("all_signals"))
+    monkeypatch.setattr(tabs, "render_screening_tab", lambda **_kwargs: blocked_renderers.append("screening"))
+    monkeypatch.setattr(tabs, "render_monitoring_tab", lambda **_kwargs: blocked_renderers.append("monitoring"))
+    monkeypatch.setattr(tabs, "render_investor_flow_tab", lambda **kwargs: calls.append(kwargs))
     monkeypatch.setattr(
         tabs,
         "render_top_bar_filters",
@@ -228,73 +386,35 @@ def test_render_dashboard_tabs_uses_market_specific_flow_tab(monkeypatch):
         shared_flow_summary_map={"5044": {"dummy": True}},
         sector_map={},
         ui_locale="ko",
+        selected_page_id="flow",
     )
 
     tabs.render_dashboard_tabs(market_id="KR", **common_kwargs)
-    assert "투자자 수급" in tab_labels_seen[0]
-    assert flow_calls == ["flow"]
-    assert shared_maps == [{"5044": {"dummy": True}}]
-
-    tab_labels_seen.clear()
-    flow_calls.clear()
-    shared_maps.clear()
     tabs.render_dashboard_tabs(market_id="US", **common_kwargs)
-    assert "US Flow Proxies" in tab_labels_seen[0]
-    assert flow_calls == ["flow"]
-    assert shared_maps == [{"5044": {"dummy": True}}]
+
+    assert blocked_renderers == []
+    assert [call["market_id"] for call in calls] == ["KR", "US"]
+    assert [call["shared_flow_summary_map"] for call in calls] == [
+        {"5044": {"dummy": True}},
+        {"5044": {"dummy": True}},
+    ]
+    assert all(call["investor_flow_status"] == "CACHED" for call in calls)
+    assert all(call["investor_flow_fresh"] is True for call in calls)
 
 
-def test_render_dashboard_tabs_keeps_summary_tab_additive_and_first(monkeypatch):
-    tab_labels_seen: list[list[str]] = []
-    summary_tabs: list[object] = []
-    charts_tabs: list[object] = []
-    all_signal_tabs: list[object] = []
-    screening_tabs: list[object] = []
-    flow_tabs: list[object] = []
-    monitoring_tabs: list[object] = []
-    monitoring_payloads: list[dict[str, object]] = []
-    stub_tabs = [object() for _ in range(6)]
+def test_render_dashboard_tabs_routes_summary_page_only(monkeypatch):
+    summary_calls: list[dict[str, object]] = []
+    blocked_renderers: list[str] = []
 
-    monkeypatch.setattr(
-        tabs.st,
-        "tabs",
-        lambda labels: tab_labels_seen.append(list(labels)) or stub_tabs[: len(labels)],
-    )
-    monkeypatch.setattr(
-        tabs,
-        "render_summary_tab",
-        lambda **kwargs: summary_tabs.append(kwargs["tab"]),
-    )
-    monkeypatch.setattr(
-        tabs,
-        "render_charts_tab",
-        lambda **kwargs: charts_tabs.append(kwargs["tab"]),
-    )
-    monkeypatch.setattr(
-        tabs,
-        "render_all_signals_tab",
-        lambda **kwargs: all_signal_tabs.append(kwargs["tab"]),
-    )
-    monkeypatch.setattr(
-        tabs,
-        "render_screening_tab",
-        lambda **kwargs: screening_tabs.append(kwargs["tab"]),
-    )
-    monkeypatch.setattr(
-        tabs,
-        "render_investor_flow_tab",
-        lambda **kwargs: flow_tabs.append(kwargs["tab"]),
-    )
-    monkeypatch.setattr(
-        tabs,
-        "render_monitoring_tab",
-        lambda **kwargs: monitoring_tabs.append(kwargs["tab"]) or monitoring_payloads.append(kwargs),
-    )
-    monkeypatch.setattr(
-        tabs,
-        "render_top_bar_filters",
-        lambda **kwargs: ("__ALL__", False, "all", False),
-    )
+    monkeypatch.setattr(tabs.st, "tabs", _fail_st_tabs)
+    monkeypatch.setattr(tabs.st, "container", lambda: _DummyContext())
+    monkeypatch.setattr(tabs, "render_summary_tab", lambda **kwargs: summary_calls.append(kwargs))
+    monkeypatch.setattr(tabs, "render_charts_tab", lambda **_kwargs: blocked_renderers.append("charts"))
+    monkeypatch.setattr(tabs, "render_all_signals_tab", lambda **_kwargs: blocked_renderers.append("all_signals"))
+    monkeypatch.setattr(tabs, "render_screening_tab", lambda **_kwargs: blocked_renderers.append("screening"))
+    monkeypatch.setattr(tabs, "render_investor_flow_tab", lambda **_kwargs: blocked_renderers.append("flow"))
+    monkeypatch.setattr(tabs, "render_monitoring_tab", lambda **_kwargs: blocked_renderers.append("monitoring"))
+    monkeypatch.setattr(tabs, "render_top_bar_filters", lambda **_kwargs: ("__ALL__", False, "all", False))
 
     tabs.render_dashboard_tabs(
         current_regime="Recovery",
@@ -310,87 +430,32 @@ def test_render_dashboard_tabs_keeps_summary_tab_additive_and_first(monkeypatch)
         investor_flow_frame=pd.DataFrame(),
         sector_map={},
         ui_locale="ko",
+        selected_page_id="overview",
     )
 
-    assert tab_labels_seen == [[
-        "대시보드 요약",
-        "모멘텀/차트 분석",
-        "전체 종목 데이터",
-        "종목 스크리닝",
-        "투자자 수급",
-        "데이터 모니터링",
-    ]]
-    assert summary_tabs == [stub_tabs[0]]
-    assert charts_tabs == [stub_tabs[1]]
-    assert all_signal_tabs == [stub_tabs[2]]
-    assert screening_tabs == [stub_tabs[3]]
-    assert flow_tabs == [stub_tabs[4]]
-    assert monitoring_tabs == [stub_tabs[5]]
-    assert len(monitoring_payloads) == 1
-    assert monitoring_payloads[0]["tab"] is stub_tabs[5]
-    assert monitoring_payloads[0]["market_id"] == "KR"
-    assert monitoring_payloads[0]["investor_flow_status"] == "CACHED"
-    assert monitoring_payloads[0]["investor_flow_fresh"] is True
-    assert monitoring_payloads[0]["investor_flow_detail"] is None
-    assert monitoring_payloads[0]["investor_flow_frame"].empty
-    assert monitoring_payloads[0]["ui_locale"] == "ko"
+    assert len(summary_calls) == 1
+    assert summary_calls[0]["theme_mode"] == "dark"
+    assert summary_calls[0]["ui_locale"] == "ko"
+    assert summary_calls[0]["held_sectors"] == []
+    assert blocked_renderers == []
 
 
-def test_render_dashboard_tabs_routes_global_filter_state_only_to_downstream_surfaces(monkeypatch):
-    summary_calls: list[tuple[object, object, object]] = []
-    charts_calls: list[object] = []
-    all_signals_calls: list[dict[str, object]] = []
-    flow_calls: list[object] = []
-    screening_calls: list[object] = []
+def test_render_dashboard_tabs_routes_filter_state_to_selected_pages(monkeypatch):
+    calls: list[tuple[str, dict[str, object]]] = []
 
-    monkeypatch.setattr(
-        tabs.st,
-        "tabs",
-        lambda labels: [object() for _ in labels],
-    )
+    monkeypatch.setattr(tabs.st, "tabs", _fail_st_tabs)
+    monkeypatch.setattr(tabs.st, "container", lambda: _DummyContext())
+    monkeypatch.setattr(tabs, "render_summary_tab", lambda **kwargs: calls.append(("summary", kwargs)))
+    monkeypatch.setattr(tabs, "render_charts_tab", lambda **kwargs: calls.append(("charts", kwargs)))
+    monkeypatch.setattr(tabs, "render_all_signals_tab", lambda **kwargs: calls.append(("all_signals", kwargs)))
+    monkeypatch.setattr(tabs, "render_screening_tab", lambda **kwargs: calls.append(("screening", kwargs)))
+    monkeypatch.setattr(tabs, "render_investor_flow_tab", lambda **kwargs: calls.append(("flow", kwargs)))
+    monkeypatch.setattr(tabs, "render_monitoring_tab", lambda **kwargs: calls.append(("monitoring", kwargs)))
     monkeypatch.setattr(
         tabs,
         "render_top_bar_filters",
         lambda **kwargs: ("Watch", False if kwargs.get("enable_regime_filter") is False else True, "held", True),
     )
-    monkeypatch.setattr(
-        tabs,
-        "render_summary_tab",
-        lambda **kwargs: summary_calls.append(
-            (kwargs["top_pick_signals"], kwargs["signals_filtered"], kwargs["held_sectors"])
-        ),
-    )
-    monkeypatch.setattr(
-        tabs,
-        "render_charts_tab",
-        lambda **kwargs: charts_calls.append(kwargs["signals_filtered"]),
-    )
-    monkeypatch.setattr(
-        tabs,
-        "render_all_signals_tab",
-        lambda **kwargs: all_signals_calls.append(
-            {
-                "signals": kwargs["signals"],
-                "filter_action_global": kwargs["filter_action_global"],
-                "filter_regime_only_global": kwargs["filter_regime_only_global"],
-                "current_regime": kwargs["current_regime"],
-                "held_sectors": kwargs["held_sectors"],
-                "position_mode": kwargs["position_mode"],
-                "show_alerted_only": kwargs["show_alerted_only"],
-            }
-        ),
-    )
-    monkeypatch.setattr(
-        tabs,
-        "render_screening_tab",
-        lambda **kwargs: screening_calls.append(kwargs["signals"]),
-    )
-    monkeypatch.setattr(
-        tabs,
-        "render_investor_flow_tab",
-        lambda **kwargs: flow_calls.append(kwargs["signals"]),
-    )
-    monkeypatch.setattr(tabs, "render_monitoring_tab", lambda **kwargs: None)
 
     held_signal = SimpleNamespace(
         sector_name="Held A",
@@ -407,10 +472,7 @@ def test_render_dashboard_tabs_routes_global_filter_state_only_to_downstream_sur
         momentum_method="legacy_rs_ma_v0",
     )
     signals = [held_signal, new_signal]
-    signals_filtered = [held_signal]
-    top_pick_signals = [held_signal]
-
-    tabs.render_dashboard_tabs(
+    common_kwargs = dict(
         current_regime="Recovery",
         theme_mode="dark",
         signals=signals,
@@ -427,23 +489,59 @@ def test_render_dashboard_tabs_routes_global_filter_state_only_to_downstream_sur
         ui_locale="ko",
     )
 
-    assert summary_calls == [(
-        top_pick_signals,
-        signals_filtered,
-        ["Held A"],
-    )]
-    assert charts_calls == [signals_filtered]
-    assert all_signals_calls == [{
-        "signals": signals,
-        "filter_action_global": "Watch",
-        "filter_regime_only_global": False,
-        "current_regime": "Recovery",
-        "held_sectors": ["Held A"],
-        "position_mode": "held",
-        "show_alerted_only": True,
-    }]
-    assert flow_calls == [signals]
-    assert screening_calls == [signals]
+    for page_id in ["overview", "signals", "constituents", "flow"]:
+        tabs.render_dashboard_tabs(selected_page_id=page_id, **common_kwargs)
+
+    assert [name for name, _kwargs in calls] == ["summary", "all_signals", "screening", "flow"]
+    assert calls[0][1]["top_pick_signals"] == [held_signal]
+    assert calls[0][1]["signals_filtered"] == [held_signal]
+    assert calls[0][1]["held_sectors"] == ["Held A"]
+    assert calls[1][1]["signals"] == signals
+    assert calls[1][1]["filter_action_global"] == "Watch"
+    assert calls[1][1]["filter_regime_only_global"] is False
+    assert calls[1][1]["current_regime"] == "Recovery"
+    assert calls[1][1]["held_sectors"] == ["Held A"]
+    assert calls[1][1]["position_mode"] == "held"
+    assert calls[1][1]["show_alerted_only"] is True
+    assert calls[2][1]["signals"] == signals
+    assert calls[2][1]["benchmark_code"] == "1001"
+    assert calls[2][1]["settings"] == {}
+    assert calls[3][1]["signals"] == signals
+    assert calls[3][1]["shared_flow_summary_map"] == {"5044": {"dummy": True}}
+    assert calls[3][1]["investor_flow_profile"] == "foreign_lead"
+
+
+def test_render_dashboard_tabs_does_not_route_research_canvas_or_duplicate_summary(monkeypatch):
+    calls: list[str] = []
+
+    monkeypatch.setattr(tabs.st, "tabs", _fail_st_tabs)
+    monkeypatch.setattr(tabs.st, "container", lambda: _DummyContext())
+    monkeypatch.setattr(tabs, "render_summary_tab", lambda **_kwargs: calls.append("summary"))
+    monkeypatch.setattr(tabs, "render_charts_tab", lambda **_kwargs: calls.append("charts"))
+    monkeypatch.setattr(tabs, "render_all_signals_tab", lambda **_kwargs: calls.append("all_signals"))
+    monkeypatch.setattr(tabs, "render_screening_tab", lambda **_kwargs: calls.append("screening"))
+    monkeypatch.setattr(tabs, "render_investor_flow_tab", lambda **_kwargs: calls.append("flow"))
+    monkeypatch.setattr(tabs, "render_monitoring_tab", lambda **_kwargs: calls.append("monitoring"))
+    monkeypatch.setattr(tabs, "render_top_bar_filters", lambda **_kwargs: ("__ALL__", False, "all", False))
+
+    tabs.render_dashboard_tabs(
+        current_regime="Recovery",
+        theme_mode="dark",
+        signals=[],
+        held_sectors=[],
+        settings={},
+        is_mobile_client=False,
+        market_id="KR",
+        investor_flow_status="CACHED",
+        investor_flow_fresh=True,
+        investor_flow_profile="foreign_lead",
+        investor_flow_frame=pd.DataFrame(),
+        sector_map={},
+        ui_locale="ko",
+        selected_page_id="research",
+    )
+
+    assert calls == []
 
 
 def test_render_summary_tab_keeps_summary_surfaces_without_hero_status_duplication(monkeypatch):
@@ -586,7 +684,7 @@ def test_render_analysis_canvas_adds_research_context_header(monkeypatch):
     )
 
     assert header_calls
-    assert header_calls[0]["title"] == "실행 판단 검증용 섹터 비교"
+    assert header_calls[0]["title"] == "신호 판단 검증용 섹터 비교"
     assert "연구 표면" in str(header_calls[0]["description"])
 
 
@@ -708,7 +806,7 @@ def test_render_investor_flow_tab_hides_action_change_table_for_reference_only_s
 
     assert any("partial preview" in text or "cached snapshot" in text for text in warnings)
     assert any("reference-only" in text for text in warnings)
-    assert any("최종 투자판단에는 반영되지 않았습니다" in text for text in warnings)
+    assert any("최종 신호에는 반영되지 않았습니다" in text for text in warnings)
     assert any("의견 변화 표를 숨기고 참여 주체 비교표와 raw snapshot만 표시합니다" in text for text in infos)
     assert len(dataframes) == 2
     assert list(dataframes[0].columns) == [
@@ -1087,7 +1185,7 @@ def test_render_monitoring_tab_keeps_warm_status_when_runtime_status_is_omitted(
         ui_locale="ko",
     )
 
-    assert ("상태", "🟢 LIVE") in metrics
+    assert ("상태", "LIVE") in metrics
 
 
 def test_render_monitoring_tab_uses_runtime_flow_snapshot_when_warehouse_history_is_empty(monkeypatch):

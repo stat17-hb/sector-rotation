@@ -1,5 +1,13 @@
 # Lessons Learned
 
+## 2026-04-26
+- Pattern: Chrome `--headless --screenshot` captured only the Streamlit skeleton even though `_stcore/health` returned `ok`.
+- Rule: For Streamlit visual evidence, do not treat HTTP 200 or health `ok` as proof that the app has hydrated. Wait in the browser for `data-test-connection-state="CONNECTED"`, `data-test-script-state` not in `initial/running`, nontrivial body text, and absence of `[data-testid="stAppSkeleton"]`.
+- Pattern: Chrome remote debugging can list extension background pages before the real app page.
+- Rule: CDP screenshot tooling must select a target with `type == "page"` and a URL matching the intended app URL; never attach to the first `/json` target blindly.
+- Pattern: Streamlit can serve the shell with HTTP 200 for an invalid page path while rendering a `Page not found` modal.
+- Rule: Route smoke for Streamlit navigation must inspect rendered DOM/text for `Page not found`, not only HTTP status.
+
 ## 2026-02-22
 - Pattern: User asked to reconstruct a high-level evaluation into actionable execution.
 - Rule: When feedback asks for "restructure", produce a concrete phased checklist with gates, verification commands, and review template in `tasks/todo.md`.
@@ -90,3 +98,10 @@
 - Pattern: KR 섹터 코드를 해석할 때 로컬 `sector_map.yml`의 오래된 이름/코드 조합을 그대로 신뢰해, 사용자가 준 KRX 공식 화면 기준 분류와 어긋난 응답이 나왔다.
 - Rule: KR 지수/섹터 코드 의미를 다룰 때는 먼저 KRX 공식 목록(`주가지수 > KRX`, `finder_equidx` 또는 동등 공식 소스)으로 코드↔이름을 검증하고, 로컬 설정값은 보조 메타데이터(예: export flag, ETF 매핑)로만 취급한다.
 - Rule: 공식 소스와 로컬 설정이 충돌하면 비벤치마크 KR 지수명은 공식 소스를 우선하고, 로컬 설정으로 공식 이름을 덮어쓰지 않는다.
+
+## 2026-04-23
+- Pattern: `DESIGN.md` 기준으로 프론트엔드를 이식했지만, 실제 한글 UI에서는 라틴 기준 디스플레이 스케일과 letter-spacing이 그대로 남아 폰트가 커 보이고 밀도가 어색했다.
+- Rule: 디자인 레퍼런스가 영문 중심이어도 한글 UI는 별도로 검증한다. `display/body/caption/button` 스케일과 global letter-spacing을 함께 점검하고, 한글이 많은 카드/패널/캡션은 한 단계 더 보수적으로 줄인다.
+- Rule: 토큰 마이그레이션이 끝난 뒤에도 `버튼 radius`, `탭 radius`, `메트릭/카드 제목 크기`처럼 실제 체감 계층을 만드는 CSS 값을 다시 확인한다. 토큰만 맞추고 체감 비례를 방치하지 않는다.
+- Pattern: 설명성 문구를 `analysis-toolbar__title` 같은 제목 계층에 직접 넣어, 한글 긴 문장이 패널 타이틀급으로 읽혔다.
+- Rule: 긴 안내 문장은 제목과 분리한다. 제목은 짧게 두고, 정책/범위 설명은 별도 description/caption 계층으로 내려서 body-small 이하로 렌더한다.

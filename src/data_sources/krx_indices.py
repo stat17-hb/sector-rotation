@@ -1062,66 +1062,6 @@ def _filter_sector_price_result(
     return filtered
 
 
-def _is_warehouse_write_lock_error(exc: RuntimeError) -> bool:
-    """Return True when a warehouse write failed because another process holds the lock."""
-    lowered = str(exc).lower()
-    return (
-        "cannot acquire write lock on warehouse.duckdb" in lowered
-        or "file is already open" in lowered
-    )
-
-
-def _try_import_raw_cache_to_warehouse(
-    validated: pd.DataFrame,
-    *,
-    start: str,
-    end: str,
-) -> bool:
-    """Best-effort write-back for raw-cache imports used by interactive reads."""
-    try:
-        _sync_index_dimension(sorted(validated["index_code"].astype(str).unique().tolist()))
-        upsert_market_prices(validated, provider="WAREHOUSE_MIGRATION")
-        if not (CURATED_DIR / "sector_prices.parquet").exists():
-            _persist_curated_sector_prices(validated)
-        export_market_parquet()
-        update_ingest_watermark(
-            dataset="market_prices",
-            watermark_key=end,
-            status="CACHED",
-            coverage_complete=True,
-            provider="WAREHOUSE_MIGRATION",
-            details={"reason": "raw_cache_import"},
-        )
-        record_ingest_run(
-            dataset="market_prices",
-            reason="raw_cache_import",
-            provider="WAREHOUSE_MIGRATION",
-            requested_start=start,
-            requested_end=end,
-            status="CACHED",
-            coverage_complete=True,
-            failed_days=[],
-            failed_codes={},
-            delta_keys=[],
-            row_count=int(len(validated)),
-            summary={
-                "status": "CACHED",
-                "coverage_complete": True,
-                "rows": int(len(validated)),
-                "reason": "raw_cache_import",
-            },
-        )
-    except RuntimeError as exc:
-        if not _is_warehouse_write_lock_error(exc):
-            raise
-        logger.warning(
-            "Serving raw-cache-backed market data without warehouse write-back because the warehouse is locked: %s",
-            exc,
-        )
-        return False
-    return True
-
-
 def _collect_raw_cache_state(
     index_codes: list[str],
     start: str,
@@ -1794,17 +1734,10 @@ def load_sector_prices(
         cached_result = _build_result_from_raw_frames(raw_frames, live_codes, start, end)
         if not cached_result.empty:
             validated = _validate_sector_prices(cached_result)
-            imported = _try_import_raw_cache_to_warehouse(validated, start=start, end=end)
-            if imported:
-                logger.info(
-                    "Loaded %d codes from raw cache and imported them into DuckDB",
-                    len(live_codes),
-                )
-            else:
-                logger.info(
-                    "Loaded %d codes from raw cache without warehouse write-back",
-                    len(live_codes),
-                )
+            logger.info(
+                "Loaded %d codes from raw cache via read-only fast path",
+                len(live_codes),
+            )
             return ("CACHED", validated)
 
     if provider_mode == "OPENAPI" and not get_krx_openapi_key():
