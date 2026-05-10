@@ -92,6 +92,202 @@ def test_get_dataset_artifact_key_survives_external_read_only_connection():
     assert artifact_key[2:] == ("20240131", "LIVE", "20240131")
 
 
+def test_read_collection_run_history_returns_market_macro_and_flow_runs():
+    warehouse.ensure_warehouse_schema()
+    seed_runs = [
+        ("market_prices", "OPENAPI", datetime(2026, 5, 5, 1, 0, tzinfo=timezone.utc)),
+        ("macro_data", "ECOS", datetime(2026, 5, 5, 2, 0, tzinfo=timezone.utc)),
+        ("investor_flow", "KRX_UNOFFICIAL", datetime(2026, 5, 5, 3, 0, tzinfo=timezone.utc)),
+    ]
+    for dataset, provider, created_at in seed_runs:
+        warehouse.record_ingest_run(
+            dataset=dataset,
+            reason="manual_refresh",
+            provider=provider,
+            requested_start="20260501",
+            requested_end="20260505",
+            status="LIVE",
+            coverage_complete=True,
+            failed_days=["20260502"] if dataset == "market_prices" else [],
+            failed_codes={"1001": "empty close"} if dataset == "market_prices" else {},
+            delta_keys=[],
+            row_count=10,
+            predicted_requests=4,
+            processed_requests=3,
+            created_at=created_at,
+        )
+
+    history = warehouse.read_collection_run_history(market="KR", limit=15)
+
+    assert history["dataset"].tolist() == ["investor_flow", "macro_data", "market_prices"]
+    assert history["provider"].tolist() == ["KRX_UNOFFICIAL", "ECOS", "OPENAPI"]
+    assert history["completion_pct"].tolist() == [75.0, 75.0, 75.0]
+    market_row = history[history["dataset"].eq("market_prices")].iloc[0]
+    assert market_row["failed_days"] == ["20260502"]
+    assert market_row["failed_codes"] == {"1001": "empty close"}
+
+    flow_history = warehouse.read_investor_flow_run_history(market="KR", limit=15)
+    assert flow_history["reason"].tolist() == ["manual_refresh"]
+    assert "dataset" not in flow_history.columns
+
+
+def test_read_collection_run_history_uses_macro_alias_completion_rate():
+    warehouse.ensure_warehouse_schema()
+    warehouse.upsert_macro_dimension(
+        [
+            {
+                "series_alias": "complete_alias",
+                "provider": "ECOS",
+                "provider_series_id": "COMPLETE",
+                "enabled": True,
+            },
+            {
+                "series_alias": "partial_alias",
+                "provider": "ECOS",
+                "provider_series_id": "PARTIAL",
+                "enabled": True,
+            },
+        ]
+    )
+    fetched_at = pd.Timestamp("2026-05-10T00:00:00Z")
+    complete_frame = pd.DataFrame(
+        {
+            "value": [1.0, 2.0, 3.0],
+            "source": ["ECOS"] * 3,
+            "fetched_at": [fetched_at] * 3,
+            "is_provisional": [False] * 3,
+        },
+        index=pd.period_range("2026-01", "2026-03", freq="M"),
+    )
+    partial_frame = complete_frame.iloc[:2].copy()
+    warehouse.upsert_macro_series_frame(
+        series_alias="complete_alias",
+        provider="ECOS",
+        provider_series_id="COMPLETE",
+        frame=complete_frame,
+    )
+    warehouse.upsert_macro_series_frame(
+        series_alias="partial_alias",
+        provider="ECOS",
+        provider_series_id="PARTIAL",
+        frame=partial_frame,
+    )
+    warehouse.record_ingest_run(
+        dataset="macro_data",
+        reason="manual_refresh",
+        provider="ECOS",
+        requested_start="202601",
+        requested_end="202603",
+        status="LIVE",
+        coverage_complete=False,
+        failed_days=[],
+        failed_codes={},
+        delta_keys=["complete_alias", "partial_alias"],
+        row_count=5,
+        created_at=datetime(2026, 5, 10, 1, 0, tzinfo=timezone.utc),
+    )
+
+    history = warehouse.read_collection_run_history(market="KR", limit=15)
+
+    assert history["dataset"].tolist() == ["macro_data"]
+    assert history["completion_pct"].tolist() == [50.0]
+
+
+def test_read_collection_run_history_filters_reasons_before_sampling():
+    warehouse.ensure_warehouse_schema()
+    for reason, created_at in (
+        ("manual_refresh", datetime(2026, 5, 10, 1, 0, tzinfo=timezone.utc)),
+        ("load_ecos_macro", datetime(2026, 5, 10, 2, 0, tzinfo=timezone.utc)),
+    ):
+        warehouse.record_ingest_run(
+            dataset="macro_data",
+            reason=reason,
+            provider="ECOS",
+            requested_start="202601",
+            requested_end="202603",
+            status="LIVE",
+            coverage_complete=True,
+            failed_days=[],
+            failed_codes={},
+            delta_keys=[],
+            row_count=10,
+            predicted_requests=1,
+            processed_requests=1,
+            created_at=created_at,
+        )
+
+    history = warehouse.read_collection_run_history(
+        market="KR",
+        reasons=("manual_refresh",),
+        sample_per_dataset=True,
+        sample_size=10,
+    )
+
+    assert history["reason"].tolist() == ["manual_refresh"]
+
+
+def test_read_collection_run_history_can_sample_latest_ten_per_dataset():
+    warehouse.ensure_warehouse_schema()
+    con = warehouse._connect()
+    try:
+        for dataset in ("market_prices", "macro_data", "investor_flow"):
+            for idx in range(12):
+                warehouse.record_ingest_run(
+                    dataset=dataset,
+                    reason="manual_refresh",
+                    provider="TEST",
+                    requested_start="20260501",
+                    requested_end="20260505",
+                    status="LIVE",
+                    coverage_complete=True,
+                    failed_days=[],
+                    failed_codes={},
+                    delta_keys=[],
+                    row_count=idx,
+                    predicted_requests=1,
+                    processed_requests=1,
+                    created_at=datetime(2026, 5, 5, idx, 0, tzinfo=timezone.utc),
+                    connection=con,
+                )
+    finally:
+        con.close()
+
+    history = warehouse.read_collection_run_history(
+        market="KR",
+        sample_per_dataset=True,
+        sample_size=10,
+    )
+
+    market_rows = history[history["dataset"].eq("market_prices")]
+    assert len(market_rows) == 10
+    assert market_rows["row_count"].tolist() == [11, 10, 9, 8, 7, 6, 5, 4, 3, 2]
+    assert market_rows["sample_bucket"].tolist() == ["latest"] * 10
+
+
+def test_read_collection_run_history_respects_explicit_empty_dataset_selection():
+    warehouse.ensure_warehouse_schema()
+    warehouse.record_ingest_run(
+        dataset="market_prices",
+        reason="manual_refresh",
+        provider="OPENAPI",
+        requested_start="20260501",
+        requested_end="20260505",
+        status="LIVE",
+        coverage_complete=True,
+        failed_days=[],
+        failed_codes={},
+        delta_keys=[],
+        row_count=1,
+        predicted_requests=1,
+        processed_requests=1,
+        created_at=datetime(2026, 5, 5, 1, 0, tzinfo=timezone.utc),
+    )
+
+    history = warehouse.read_collection_run_history(market="KR", datasets=[])
+
+    assert history.empty
+
+
 def test_ensure_warehouse_schema_normalizes_connection_conflict():
     bootstrap = duckdb.connect(str(warehouse.WAREHOUSE_PATH))
     bootstrap.close()

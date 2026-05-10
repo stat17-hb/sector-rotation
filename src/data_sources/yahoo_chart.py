@@ -10,6 +10,7 @@ from datetime import date, datetime, time, timedelta, timezone
 import logging
 import time as time_module
 from typing import Any
+from urllib.parse import quote
 
 import pandas as pd
 import requests
@@ -144,7 +145,7 @@ def fetch_yahoo_chart_history(
             time_module.sleep(delay_sec)
         try:
             response = http.get(
-                YAHOO_CHART_URL.format(ticker=normalized_ticker),
+                YAHOO_CHART_URL.format(ticker=quote(normalized_ticker, safe="")),
                 params=request_params,
                 timeout=(REQUEST_CONNECT_TIMEOUT_SEC, REQUEST_TIMEOUT_SEC),
                 headers=REQUEST_HEADERS,

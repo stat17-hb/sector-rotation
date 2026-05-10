@@ -32,6 +32,7 @@ from src.data_sources.pykrx_compat import (
     ensure_pykrx_transport_compat,
     resolve_ohlcv_close_column,
 )
+from src.data_sources.krx_sector_authority import canonicalize_kr_sector_universe_rows
 from src.data_sources.warehouse import (
     export_market_parquet,
     get_dataset_artifact_key,
@@ -58,9 +59,12 @@ RAW_DIR = Path("data/raw/krx")
 CURATED_DIR = Path("data/curated")
 WARM_STATUS_FILE = "_warm_status.json"
 STALE_CACHE_TOLERANCE_BUSINESS_DAYS = 1
+STALE_WAREHOUSE_START_LAG_BUSINESS_DAYS = 5
+STALE_WAREHOUSE_MAX_LAG_BUSINESS_DAYS = 15
 BACKGROUND_WARM_KEY = "default"
 RAW_CACHE_CONTAMINATION_WINDOW = 60
 INTERACTIVE_OPENAPI_REQUEST_LIMIT = 60
+MAX_CONSECUTIVE_PYKRX_ENDPOINT_FAILURES = 3
 
 # Retry policy (R11)
 REQUEST_TIMEOUT = 10
@@ -145,6 +149,18 @@ def _is_deterministic_pykrx_failure(exc: Exception) -> bool:
         "line 1 column 1 (char 0)" in message
         or "logout" in message
         or "지수명" in message
+    )
+
+
+def _is_pykrx_endpoint_payload_failure(exc: Exception) -> bool:
+    """Return True when pykrx failed because KRX returned unusable endpoint payload."""
+    message = str(exc).lower()
+    return (
+        "line 1 column 1 (char 0)" in message
+        or "expecting value" in message
+        or "non-json" in message
+        or "logout" in message
+        or "지수명" in str(exc)
     )
 
 
@@ -323,21 +339,50 @@ def _frame_is_usable_stale_warehouse_cache(
     start: str,
     reference_code: str = "",
 ) -> bool:
-    """Return True when warehouse cache covers the requested start and stays date-aligned."""
-    if not _frame_has_aligned_code_dates(frame, index_codes, reference_code=reference_code):
+    """Return True when warehouse cache is complete enough to avoid an oversized refresh.
+
+    Full coverage still requires exact date alignment. This fallback is deliberately
+    looser: if every requested code covers the requested start and no code is far
+    behind the freshest cached series, the dashboard should serve cache instead of
+    attempting a large interactive OpenAPI backfill.
+    """
+    if frame.empty or "index_code" not in frame.columns:
         return False
 
-    expected_dates = _reference_dates_for_frame(
-        frame,
-        index_codes,
-        reference_code=reference_code,
-    )
-    if expected_dates.empty:
+    requested_codes = [str(code).strip() for code in index_codes if str(code).strip()]
+    if not requested_codes:
         return False
 
     requested_start = pd.Timestamp(start).normalize()
-    earliest_date = pd.Timestamp(expected_dates.min()).normalize()
-    return earliest_date <= requested_start
+    max_dates: list[pd.Timestamp] = []
+    reference_max: pd.Timestamp | None = None
+
+    for code in requested_codes:
+        code_dates = pd.Index(
+            frame[frame["index_code"].astype(str) == code].index.unique()
+        ).sort_values()
+        if code_dates.empty:
+            return False
+
+        earliest_date = pd.Timestamp(code_dates.min()).normalize()
+        if (
+            earliest_date > requested_start
+            and _business_gap_days(requested_start, earliest_date)
+            > STALE_WAREHOUSE_START_LAG_BUSINESS_DAYS
+        ):
+            return False
+
+        latest_date = pd.Timestamp(code_dates.max()).normalize()
+        max_dates.append(latest_date)
+        if code == reference_code:
+            reference_max = latest_date
+
+    freshest_date = reference_max or max(max_dates)
+    return all(
+        _business_gap_days(latest_date, freshest_date)
+        <= STALE_WAREHOUSE_MAX_LAG_BUSINESS_DAYS
+        for latest_date in max_dates
+    )
 
 
 def _warehouse_coverage_complete(index_codes: list[str], start: str, end: str) -> bool:
@@ -696,6 +741,40 @@ def repair_stale_kr_index_dimension_names(benchmark_code: str) -> pd.DataFrame:
     return read_active_index_dimension(market="KR")
 
 
+def get_active_kr_index_universe_codes(benchmark_code: str = "1001") -> list[str]:
+    """Return the canonical active KR index universe used for app price loading."""
+    resolved_benchmark = str(benchmark_code or _configured_benchmark_code()).strip() or "1001"
+    universe_rows = read_active_index_dimension(market="KR")
+    if universe_rows.empty:
+        universe_rows = seed_kr_index_dimension_if_empty(resolved_benchmark)
+    elif is_legacy_kr_index_subset(market="KR"):
+        repaired_rows = repair_legacy_kr_index_dimension(resolved_benchmark)
+        if not repaired_rows.empty:
+            universe_rows = repaired_rows
+    else:
+        repaired_rows = repair_stale_kr_index_dimension_names(resolved_benchmark)
+        if not repaired_rows.empty:
+            universe_rows = repaired_rows
+
+    canonical_rows = canonicalize_kr_sector_universe_rows(
+        universe_rows.to_dict("records"),
+        benchmark_code=resolved_benchmark,
+        include_benchmark=True,
+    )
+    codes = [
+        str(row.get("index_code", "")).strip()
+        for row in canonical_rows
+        if str(row.get("index_code", "")).strip()
+    ]
+    if codes:
+        return list(dict.fromkeys(codes))
+
+    fallback_codes = list(_configured_index_metadata().keys())
+    if resolved_benchmark and resolved_benchmark not in fallback_codes:
+        fallback_codes.append(resolved_benchmark)
+    return list(dict.fromkeys(fallback_codes))
+
+
 def _filter_supported_codes(index_codes: list[str]) -> tuple[list[str], list[str]]:
     """Return (supported, skipped) based on pykrx universe.
 
@@ -890,6 +969,69 @@ def _slice_raw_cache(frame: pd.DataFrame, start: str, end: str) -> pd.DataFrame:
     return sliced
 
 
+def _raw_close_candidate_columns(frame: pd.DataFrame) -> list[str]:
+    """Return raw-cache columns that can contain close values."""
+    candidates: list[str] = []
+    for col in frame.columns:
+        col_text = str(col).strip()
+        if col_text in {"close", "Close", "CLOSE", "종가"} or "종가" in col_text:
+            candidates.append(str(col))
+    return candidates
+
+
+def _raw_close_candidate_rank(column: str) -> int:
+    """Rank close candidates so OpenAPI's normalized close wins per row."""
+    col_text = str(column).strip()
+    if col_text in {"close", "Close", "CLOSE"}:
+        return 0
+    if col_text == "종가" or "종가" in col_text:
+        return 1
+    return 2
+
+
+def _coalesced_raw_close_series(frame: pd.DataFrame) -> pd.Series:
+    """Return a row-wise close series across mixed raw-cache close columns."""
+    if frame.empty:
+        return pd.Series(dtype="float64", index=frame.index)
+
+    candidates = _raw_close_candidate_columns(frame)
+    if not candidates:
+        try:
+            candidates = [resolve_ohlcv_close_column(frame)]
+        except Exception:
+            return pd.Series(dtype="float64", index=frame.index)
+
+    close = pd.Series(index=frame.index, dtype="float64")
+    for col in sorted(dict.fromkeys(candidates), key=_raw_close_candidate_rank):
+        close = close.combine_first(pd.to_numeric(frame[col], errors="coerce"))
+    return close.astype("float64")
+
+
+def _resolve_raw_close_column(frame: pd.DataFrame) -> str:
+    """Resolve a close column for compatibility with single-column callers."""
+    candidates = _raw_close_candidate_columns(frame)
+    if candidates:
+        return max(
+            candidates,
+            key=lambda col: pd.to_numeric(frame[col], errors="coerce").notna().sum(),
+        )
+    return resolve_ohlcv_close_column(frame)
+
+
+def _valid_close_raw_cache(frame: pd.DataFrame) -> pd.DataFrame:
+    """Return raw-cache rows that contain a usable close value."""
+    if frame.empty:
+        return pd.DataFrame()
+    close = _coalesced_raw_close_series(frame)
+    valid = frame.copy()
+    valid["close"] = close
+    valid = valid[valid["close"].notna()].copy()
+    if valid.empty:
+        return pd.DataFrame()
+    valid.index = pd.DatetimeIndex(valid.index)
+    return valid.sort_index()
+
+
 def _load_from_raw_cache(code: str, start: str, end: str) -> pd.DataFrame:
     """Load the latest raw frame filtered to [start, end]."""
     return _slice_raw_cache(_load_latest_raw_cache(code), start, end)
@@ -914,7 +1056,15 @@ def _save_raw_cache(code: str, frame: pd.DataFrame, end: str) -> None:
     """Persist raw frame to per-code parquet cache."""
     raw_path = RAW_DIR / code
     raw_path.mkdir(parents=True, exist_ok=True)
-    raw_file = raw_path / f"{end}.parquet"
+    save_label = str(end)
+    latest_file = _latest_raw_cache_file(code)
+    if latest_file is not None:
+        latest_label = "".join(ch for ch in latest_file.stem if ch.isdigit())[:8]
+        end_label = "".join(ch for ch in str(end) if ch.isdigit())[:8]
+        if len(latest_label) == 8 and len(end_label) == 8 and latest_label > end_label:
+            save_label = latest_label
+            frame = _merge_price_frames(_load_latest_raw_cache(code), frame)
+    raw_file = raw_path / f"{save_label}.parquet"
     frame.to_parquet(raw_file)
 
 
@@ -930,6 +1080,7 @@ def _compute_missing_ranges(frame: pd.DataFrame, start: str, end: str) -> list[t
     """Return missing [start, end] subranges relative to one cached frame."""
     start_ts = pd.Timestamp(start)
     end_ts = pd.Timestamp(end)
+    frame = _valid_close_raw_cache(frame)
     if frame.empty:
         return [(start_ts.strftime("%Y%m%d"), end_ts.strftime("%Y%m%d"))]
 
@@ -947,18 +1098,37 @@ def _compute_missing_ranges(frame: pd.DataFrame, start: str, end: str) -> list[t
         newer_start = latest + timedelta(days=1)
         ranges.append((newer_start.strftime("%Y%m%d"), end_ts.strftime("%Y%m%d")))
 
-    return [
-        (range_start, range_end)
-        for range_start, range_end in ranges
-        if pd.Timestamp(range_start) <= pd.Timestamp(range_end)
+    valid_dates = {pd.Timestamp(idx).normalize() for idx in frame.index}
+    internal_missing_dates = [
+        trade_date
+        for trade_date in _business_days_in_range(start, end)
+        if earliest <= trade_date.normalize() <= latest and trade_date.normalize() not in valid_dates
     ]
+    if internal_missing_dates:
+        range_start = internal_missing_dates[0]
+        previous = internal_missing_dates[0]
+        for trade_date in internal_missing_dates[1:]:
+            if _business_gap_days(previous, trade_date) == 1:
+                previous = trade_date
+                continue
+            ranges.append((range_start.strftime("%Y%m%d"), previous.strftime("%Y%m%d")))
+            range_start = trade_date
+            previous = trade_date
+        ranges.append((range_start.strftime("%Y%m%d"), previous.strftime("%Y%m%d")))
+
+    return sorted(
+        [
+            (range_start, range_end)
+            for range_start, range_end in ranges
+            if pd.Timestamp(range_start) <= pd.Timestamp(range_end)
+        ]
+    )
 
 
 def _build_sector_frame(code: str, frame: pd.DataFrame) -> pd.DataFrame:
     """Normalize a close-history frame into the sector_prices contract shape."""
-    close_col = resolve_ohlcv_close_column(frame)
-    result = frame[[close_col]].copy()
-    result.columns = pd.Index(["close"])
+    result = pd.DataFrame({"close": _coalesced_raw_close_series(frame)}, index=frame.index)
+    result = result[result["close"].notna()].copy()
     result["index_code"] = code
     result["index_name"] = get_index_display_name(code)
     result["index_code"] = result["index_code"].astype("object")
@@ -1013,8 +1183,7 @@ def _raw_cache_signature(
     sliced = _slice_raw_cache(frame, start, end)
     if sliced.empty:
         return ()
-    close_col = resolve_ohlcv_close_column(sliced)
-    close = sliced[close_col].astype("float64").dropna().sort_index().tail(window)
+    close = _coalesced_raw_close_series(sliced).dropna().sort_index().tail(window)
     if len(close) < window:
         return ()
     return tuple((ts.strftime("%Y%m%d"), float(value)) for ts, value in close.items())
@@ -1075,17 +1244,19 @@ def _collect_raw_cache_state(
     for code in index_codes:
         raw_full = _load_latest_raw_cache(code)
         raw_slice = _slice_raw_cache(raw_full, start, end)
+        valid_raw_slice = _valid_close_raw_cache(raw_slice)
         latest = pd.Timestamp(raw_full.index.max()).normalize() if not raw_full.empty else None
         earliest = pd.Timestamp(raw_full.index.min()).normalize() if not raw_full.empty else None
         missing_ranges = _compute_missing_ranges(raw_full, start, end)
         newer_gap_days = _business_gap_days(latest, end_ts) if latest is not None else 9999
         has_older_gap = bool(missing_ranges and missing_ranges[0][0] == pd.Timestamp(start).strftime("%Y%m%d"))
 
-        if not raw_slice.empty:
-            frames[code] = raw_slice
+        if not valid_raw_slice.empty:
+            frames[code] = valid_raw_slice
         state[code] = {
             "has_cache": not raw_full.empty,
-            "has_slice": not raw_slice.empty,
+            "has_slice": not valid_raw_slice.empty,
+            "has_valid_close": not valid_raw_slice.empty,
             "latest": latest,
             "earliest": earliest,
             "missing_ranges": missing_ranges,
@@ -1138,6 +1309,36 @@ def _build_result_from_raw_frames(
     if not frames:
         return pd.DataFrame()
     return pd.concat(frames)
+
+
+def _is_openapi_no_data_failure(detail: str) -> bool:
+    """Return True for OpenAPI's normal empty-snapshot detail."""
+    return "returned no data rows" in str(detail or "").lower()
+
+
+def _raw_cache_surrounds_empty_openapi_range(
+    frame: pd.DataFrame,
+    full_start: str,
+    full_end: str,
+    range_start: str,
+    range_end: str,
+) -> bool:
+    """Return True when existing raw cache makes an empty OpenAPI range look non-trading."""
+    valid = _valid_close_raw_cache(_slice_raw_cache(frame, full_start, full_end))
+    if valid.empty:
+        return False
+
+    gap_start = pd.Timestamp(range_start).normalize()
+    gap_end = pd.Timestamp(range_end).normalize()
+    valid_dates = pd.Index(pd.Timestamp(idx).normalize() for idx in valid.index)
+    has_before = any(date < gap_start for date in valid_dates)
+    has_after = any(date > gap_end for date in valid_dates)
+
+    if gap_start <= pd.Timestamp(full_start).normalize():
+        return has_after
+    if gap_end >= pd.Timestamp(full_end).normalize():
+        return has_before
+    return has_before and has_after
 
 
 def _refresh_openapi_raw_cache(
@@ -1225,7 +1426,19 @@ def _refresh_openapi_raw_cache(
         for code in codes:
             frame = fetched_frames.get(code, pd.DataFrame())
             if frame.empty:
-                failures[code] = batch_failures.get(code, "empty response")
+                detail = batch_failures.get(code, "empty response")
+                existing = frames_by_code.get(code, pd.DataFrame())
+                if _is_openapi_no_data_failure(
+                    detail
+                ) and _raw_cache_surrounds_empty_openapi_range(
+                    existing,
+                    start,
+                    end,
+                    range_start,
+                    range_end,
+                ):
+                    continue
+                failures[code] = detail
                 continue
             merged = _merge_price_frames(frames_by_code.get(code, pd.DataFrame()), frame)
             frames_by_code[code] = merged
@@ -1285,8 +1498,13 @@ def _refresh_pykrx_raw_cache(
     failures: dict[str, str] = {}
     cache_hits = sum(1 for frame in frames_by_code.values() if not frame.empty)
     refreshed_codes: list[str] = []
+    consecutive_endpoint_failures = 0
+    aborted = False
+    abort_reason = ""
 
     for code in index_codes:
+        if aborted:
+            break
         missing_ranges = (
             [(start, end)]
             if force or code in forced
@@ -1297,13 +1515,28 @@ def _refresh_pykrx_raw_cache(
                 frame = fetch_index_ohlcv(code, range_start, range_end)
                 if frame.empty:
                     failures[code] = "empty response"
+                    consecutive_endpoint_failures += 1
+                    if consecutive_endpoint_failures >= MAX_CONSECUTIVE_PYKRX_ENDPOINT_FAILURES:
+                        aborted = True
+                        abort_reason = "PYKRX_ENDPOINT_EMPTY"
+                        break
                     continue
                 merged = _merge_price_frames(frames_by_code.get(code, pd.DataFrame()), frame)
                 frames_by_code[code] = merged
                 _save_raw_cache(code, merged, end)
                 refreshed_codes.append(code)
+                consecutive_endpoint_failures = 0
             except Exception as exc:
-                failures[code] = str(exc)
+                detail = str(exc)
+                failures[code] = detail
+                if _is_pykrx_endpoint_payload_failure(exc):
+                    consecutive_endpoint_failures += 1
+                    if consecutive_endpoint_failures >= MAX_CONSECUTIVE_PYKRX_ENDPOINT_FAILURES:
+                        aborted = True
+                        abort_reason = "PYKRX_ENDPOINT_UNUSABLE_PAYLOAD"
+                        break
+                else:
+                    consecutive_endpoint_failures = 0
 
     summary = {
         "provider": "PYKRX",
@@ -1313,8 +1546,8 @@ def _refresh_pykrx_raw_cache(
         "ranges": [],
         "predicted_requests": 0,
         "processed_requests": 0,
-        "aborted": False,
-        "abort_reason": "",
+        "aborted": aborted,
+        "abort_reason": abort_reason,
     }
     return frames_by_code, failures, summary
 
@@ -1762,8 +1995,8 @@ def load_sector_prices(
         predicted_requests = _predict_openapi_requests(live_codes, start, end)
         if predicted_requests > INTERACTIVE_OPENAPI_REQUEST_LIMIT:
             if usable_stale_warehouse:
-                logger.warning(
-                    "Interactive OpenAPI request budget exceeded (%d > %d); serving aligned warehouse cache instead.",
+                logger.info(
+                    "Interactive OpenAPI range skipped for app load (%d estimated snapshots > %d limit); serving usable stale warehouse cache.",
                     predicted_requests,
                     INTERACTIVE_OPENAPI_REQUEST_LIMIT,
                 )

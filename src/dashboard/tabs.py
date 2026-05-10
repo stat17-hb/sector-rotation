@@ -6,26 +6,22 @@ from datetime import date
 from typing import Any
 
 import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 
 from config.theme import set_theme_mode
 from src.dashboard.analysis import _extract_heatmap_selection, top_pick_sort_key
-from src.ui.copy import format_flow_cue_label
 from src.ui.components import (
     ALL_ACTION_KEY,
     DEFAULT_UI_LOCALE,
     FLOW_PROFILE_IDS,
     HEATMAP_PALETTE_OPTIONS,
     build_sector_strength_heatmap,
-    build_investor_flow_glance_rows,
-    build_investor_flow_snapshot_rows,
     describe_signal_decision,
     get_action_filter_label,
     format_cycle_phase_label,
     get_flow_profile_label,
-    get_flow_reference_only_note,
-    get_flow_sigma_subject_label,
-    get_flow_state_label,
     filter_signals_for_display,
     format_heatmap_palette_label,
     format_position_mode_label,
@@ -58,6 +54,257 @@ class DashboardPageOption:
 
 
 DEFAULT_DASHBOARD_PAGE_ID = "overview"
+KR_FLOW_INVESTOR_COLUMNS = {
+    "외국인": "외국인",
+    "기관합계": "기관",
+    "개인": "개인",
+}
+KR_FLOW_INVESTOR_COLORS = {
+    "외국인": "#2563eb",
+    "기관합계": "#059669",
+    "개인": "#dc2626",
+}
+
+
+def _format_collection_dataset_label(dataset: object) -> str:
+    labels = {
+        "market_prices": "시장데이터",
+        "macro_data": "매크로데이터",
+        "investor_flow": "수급데이터",
+    }
+    normalized = str(dataset or "").strip()
+    return labels.get(normalized, normalized or "—")
+
+
+def _summarize_collection_errors(row: pd.Series) -> str:
+    failed_days = row.get("failed_days", [])
+    failed_codes = row.get("failed_codes", {})
+    if not isinstance(failed_days, list):
+        failed_days = []
+    if not isinstance(failed_codes, dict):
+        failed_codes = {}
+
+    parts: list[str] = []
+    abort_reason = str(row.get("abort_reason", "") or "").strip()
+    if bool(row.get("aborted", False)) and abort_reason:
+        parts.append(f"중단: {abort_reason}")
+    if failed_days:
+        preview = ", ".join(str(day) for day in failed_days[:3])
+        suffix = f" 외 {len(failed_days) - 3}건" if len(failed_days) > 3 else ""
+        parts.append(f"미수집일 {len(failed_days)}건 ({preview}{suffix})")
+    if failed_codes:
+        key, value = next(iter(failed_codes.items()))
+        parts.append(f"오류 {len(failed_codes)}건: {key} {value}")
+    return " · ".join(parts) if parts else "없음"
+
+
+def _format_krw_flow_amount(value: object) -> str:
+    numeric = pd.to_numeric(pd.Series([value]), errors="coerce").iloc[0]
+    if pd.isna(numeric):
+        return "—"
+    amount = float(numeric)
+    sign = "+" if amount > 0 else "-" if amount < 0 else ""
+    abs_amount = abs(amount)
+    if abs_amount >= 1_000_000_000_000:
+        return f"{sign}{abs_amount / 1_000_000_000_000:.2f}조"
+    if abs_amount >= 100_000_000:
+        return f"{sign}{abs_amount / 100_000_000:.0f}억"
+    return f"{sign}{abs_amount:,.0f}원"
+
+
+def _build_kr_latest_sector_flow_amounts(investor_flow_frame: pd.DataFrame) -> pd.DataFrame:
+    columns = ["Sector", "외국인", "기관", "개인", "합계"]
+    if investor_flow_frame.empty:
+        return pd.DataFrame(columns=columns)
+
+    latest_date = investor_flow_frame.index.max()
+    latest_snapshot = investor_flow_frame.loc[investor_flow_frame.index == latest_date].copy()
+    if latest_snapshot.empty:
+        return pd.DataFrame(columns=columns)
+
+    latest_snapshot["net_buy_amount"] = pd.to_numeric(latest_snapshot["net_buy_amount"], errors="coerce").fillna(0.0)
+    grouped = (
+        latest_snapshot.groupby(["sector_name", "investor_type"], dropna=False)["net_buy_amount"]
+        .sum()
+        .unstack(fill_value=0.0)
+    )
+    for investor_label in KR_FLOW_INVESTOR_COLUMNS:
+        if investor_label not in grouped.columns:
+            grouped[investor_label] = 0.0
+    grouped = grouped[list(KR_FLOW_INVESTOR_COLUMNS)]
+    grouped["합계"] = grouped.sum(axis=1)
+    grouped = grouped.reindex(grouped["합계"].abs().sort_values(ascending=False).index)
+
+    display = pd.DataFrame({"Sector": grouped.index.astype(str)})
+    for raw_label, display_label in KR_FLOW_INVESTOR_COLUMNS.items():
+        display[display_label] = grouped[raw_label].map(_format_krw_flow_amount).to_list()
+    display["합계"] = grouped["합계"].map(_format_krw_flow_amount).to_list()
+    return display.reset_index(drop=True)
+
+
+def _get_kr_flow_sector_options(investor_flow_frame: pd.DataFrame) -> list[str]:
+    if investor_flow_frame.empty or "sector_name" not in investor_flow_frame.columns:
+        return []
+
+    source = investor_flow_frame.copy()
+    source["flow_date"] = pd.to_datetime(investor_flow_frame.index)
+    source["net_buy_amount"] = pd.to_numeric(source["net_buy_amount"], errors="coerce").fillna(0.0)
+    latest_date = source["flow_date"].max()
+    latest_totals = (
+        source.loc[source["flow_date"].eq(latest_date)]
+        .groupby("sector_name", dropna=False)["net_buy_amount"]
+        .sum()
+        .abs()
+        .sort_values(ascending=False)
+    )
+    return [str(sector) for sector in latest_totals.index]
+
+
+def _build_kr_sector_flow_trend_figure(investor_flow_frame: pd.DataFrame) -> go.Figure:
+    if investor_flow_frame.empty:
+        fig = go.Figure()
+        fig.update_layout(title="기간별 섹터 수급 추이")
+        return fig
+
+    trend_source = investor_flow_frame.copy()
+    trend_source["flow_date"] = pd.to_datetime(investor_flow_frame.index)
+    trend_source["net_buy_amount"] = pd.to_numeric(trend_source["net_buy_amount"], errors="coerce").fillna(0.0)
+    sector_options = _get_kr_flow_sector_options(trend_source)
+    if not sector_options:
+        fig = go.Figure()
+        fig.update_layout(title="섹터별 투자자 수급 추이")
+        return fig
+
+    trend = (
+        trend_source.groupby(["flow_date", "sector_name", "investor_type"], dropna=False)["net_buy_amount"]
+        .sum()
+        .reset_index()
+        .sort_values(["sector_name", "investor_type", "flow_date"])
+    )
+    if trend.empty:
+        fig = go.Figure()
+        fig.update_layout(title="섹터별 투자자 수급 추이")
+        return fig
+
+    fig = make_subplots(
+        rows=len(sector_options),
+        cols=1,
+        shared_xaxes=True,
+        subplot_titles=sector_options,
+        vertical_spacing=min(0.04, 0.22 / max(len(sector_options), 1)),
+    )
+    shown_legend_groups: set[str] = set()
+    for row_index, sector in enumerate(sector_options, start=1):
+        sector_rows = trend.loc[trend["sector_name"].astype(str).eq(sector)]
+        for raw_label, display_label in KR_FLOW_INVESTOR_COLUMNS.items():
+            investor_rows = sector_rows.loc[sector_rows["investor_type"].astype(str).eq(raw_label)]
+            if investor_rows.empty:
+                continue
+            show_legend = display_label not in shown_legend_groups
+            shown_legend_groups.add(display_label)
+            fig.add_trace(
+                go.Scatter(
+                    x=investor_rows["flow_date"],
+                    y=investor_rows["net_buy_amount"],
+                    mode="lines+markers",
+                    name=display_label,
+                    legendgroup=display_label,
+                    showlegend=show_legend,
+                    line=dict(color=KR_FLOW_INVESTOR_COLORS[raw_label], width=2),
+                    marker=dict(size=5, color=KR_FLOW_INVESTOR_COLORS[raw_label]),
+                    text=[_format_krw_flow_amount(value) for value in investor_rows["net_buy_amount"]],
+                    hovertemplate=f"{sector}<br>%{{x|%Y-%m-%d}}<br>{display_label} 순매수: %{{text}}<extra></extra>",
+                ),
+                row=row_index,
+                col=1,
+            )
+        fig.add_hline(y=0, line_width=1, line_dash="dot", line_color="#8a8f98", row=row_index, col=1)
+
+    fig.update_layout(
+        title="섹터별 투자자 수급 추이",
+        height=max(560, len(sector_options) * 128 + 120),
+        margin=dict(l=48, r=24, t=76, b=48),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+    fig.update_xaxes(title_text="기간", row=len(sector_options), col=1)
+    fig.update_yaxes(title_text="순매수", showticklabels=True)
+    return fig
+
+
+def _format_collection_history_sample(history: pd.DataFrame, dataset: str) -> pd.DataFrame:
+    if history.empty or "dataset" not in history.columns:
+        return pd.DataFrame()
+
+    selected = history[history["dataset"].astype(str).eq(dataset)].copy()
+    if selected.empty:
+        return pd.DataFrame()
+
+    selected["_created_sort"] = pd.to_datetime(selected["created_at"], errors="coerce", utc=True)
+    selected = selected.sort_values("_created_sort", ascending=False, na_position="last").reset_index(drop=True)
+    display = pd.DataFrame(
+        {
+            "수집일시": selected["created_at"],
+            "요청범위": selected["requested_start"].fillna("").astype(str)
+            + " ~ "
+            + selected["requested_end"].fillna("").astype(str),
+            "상태": selected["status"].fillna("").astype(str),
+            "커버리지": selected["coverage_complete"].map(lambda value: "완료" if bool(value) else "확인 필요"),
+            "중단": selected["aborted"].map(lambda value: "예" if bool(value) else "아니오"),
+            "오류요약": selected.apply(_summarize_collection_errors, axis=1),
+            "완료율(%)": selected["completion_pct"],
+            "provider": selected.get("provider", pd.Series([""] * len(selected))).fillna("").astype(str),
+            "저장행수": selected["row_count"],
+        }
+    )
+    return display
+
+
+def _format_dataset_status_rows(statuses: dict[str, dict[str, Any]], dataset_order: list[str]) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for dataset in dataset_order:
+        status = dict(statuses.get(dataset) or {})
+        predicted = int(status.get("predicted_requests", 0) or 0)
+        processed = int(status.get("processed_requests", 0) or 0)
+        completion = round(processed / predicted * 100, 1) if predicted > 0 else None
+        failed_days = status.get("failed_days") if isinstance(status.get("failed_days"), list) else []
+        failed_codes = status.get("failed_codes") if isinstance(status.get("failed_codes"), dict) else {}
+        rows.append(
+            {
+                "데이터": _format_collection_dataset_label(dataset),
+                "상태": str(status.get("status", "") or "—"),
+                "provider": str(status.get("provider", "") or "—"),
+                "워터마크": str(status.get("watermark_key", status.get("end", "")) or "—"),
+                "커버리지": "완료" if bool(status.get("coverage_complete", False)) else "확인 필요",
+                "최근 완료율(%)": completion,
+                "미수집일": len(failed_days),
+                "오류항목": len(failed_codes),
+                "중단": "예" if bool(status.get("aborted", False)) else "아니오",
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _format_dataset_error_rows(statuses: dict[str, dict[str, Any]], dataset_order: list[str]) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for dataset in dataset_order:
+        label = _format_collection_dataset_label(dataset)
+        status = dict(statuses.get(dataset) or {})
+        if bool(status.get("aborted", False)):
+            rows.append(
+                {
+                    "데이터": label,
+                    "구분": "중단",
+                    "항목": "abort_reason",
+                    "오류": str(status.get("abort_reason", "") or "수집 중단"),
+                }
+            )
+        failed_days = status.get("failed_days") if isinstance(status.get("failed_days"), list) else []
+        for day in failed_days[:10]:
+            rows.append({"데이터": label, "구분": "미수집일", "항목": str(day), "오류": "미수집"})
+        failed_codes = status.get("failed_codes") if isinstance(status.get("failed_codes"), dict) else {}
+        for key, value in list(failed_codes.items())[:10]:
+            rows.append({"데이터": label, "구분": "오류항목", "항목": str(key), "오류": str(value)})
+    return pd.DataFrame(rows, columns=["데이터", "구분", "항목", "오류"])
 
 
 def build_dashboard_page_options(market_id: str) -> list[DashboardPageOption]:
@@ -87,6 +334,15 @@ def normalize_dashboard_page_id(page_id: object, market_id: str) -> str:
     if normalized in available_page_ids:
         return normalized
     return DEFAULT_DASHBOARD_PAGE_ID
+
+
+def resolve_dashboard_page_title(page_id: object, market_id: str) -> str:
+    normalized_market = str(market_id).strip().upper() or "KR"
+    normalized_page_id = normalize_dashboard_page_id(page_id, normalized_market)
+    for option in build_dashboard_page_options(normalized_market):
+        if option.page_id == normalized_page_id:
+            return f"{normalized_market} {option.label}"
+    return f"{normalized_market} 대시보드"
 
 
 def render_sidebar_controls(
@@ -231,15 +487,8 @@ def render_sidebar_controls(
             get_ui_text("flow_refresh_button", ui_locale),
             width="stretch",
         )
-    recompute = st.button(
-        "전체 재계산",
-        disabled=not btn_states["recompute"],
-        width="stretch",
-        help="SAMPLE 데이터에서는 비활성화됩니다." if not btn_states["recompute"] else "",
-    )
-
     st.caption(ui_labels.get("sidebar_title", "섹터 로테이션"))
-    return asof_date, selected_flow_profile, refresh_market, refresh_macro, refresh_flow, recompute
+    return asof_date, selected_flow_profile, refresh_market, refresh_macro, refresh_flow
 
 
 def render_analysis_canvas(
@@ -864,6 +1113,7 @@ def render_screening_tab(
                 benchmark_code=benchmark_code,
                 settings=settings,
                 force_refresh=force_refresh,
+                allow_live_fetch=force_refresh,
             )
 
         if status == "UNAVAILABLE" or not rows:
@@ -947,6 +1197,7 @@ def render_screening_tab(
                 etf_map=etf_map,
                 settings=settings,
                 force_refresh=force_refresh,
+                allow_live_fetch=force_refresh,
             )
 
         render_panel_header(
@@ -1220,133 +1471,38 @@ def render_investor_flow_tab(
                 st.caption(f"추가 컨텍스트 일부 로드 실패: {preview}")
             return
 
-        render_panel_header(
-            eyebrow=get_ui_text("flow_status_label", ui_locale),
-            title=get_ui_text("flow_summary_title", ui_locale),
-            description=get_ui_text("flow_summary_description", ui_locale),
-            badge=f"{investor_flow_status} · {get_flow_profile_label(investor_flow_profile, ui_locale)}",
-        )
-        with st.expander(get_ui_text("flow_sigma_explainer_toggle", ui_locale), expanded=False):
-            st.markdown(
-                get_ui_text(
-                    "flow_sigma_explainer_body",
-                    ui_locale,
-                    short_window=int(flow_short_window),
-                    long_window=int(flow_long_window),
-                )
-            )
-        st.warning(get_ui_text("flow_tab_warning", ui_locale))
-        reference_only_note = get_flow_reference_only_note(
-            investor_flow_status,
-            investor_flow_fresh,
-            investor_flow_detail,
-            ui_locale,
-        )
-        reference_only_mode = bool(reference_only_note)
-        if reference_only_mode:
-            st.warning(reference_only_note)
-
         if investor_flow_frame.empty:
             st.info(get_ui_text("flow_tab_empty", ui_locale))
             return
 
-        signal_glance_rows = build_investor_flow_glance_rows(
-            signals,
-            locale=ui_locale,
-        )
-        snapshot_glance_rows = build_investor_flow_snapshot_rows(
-            investor_flow_frame,
-            shared_flow_summary_map=shared_flow_summary_map,
-            locale=ui_locale,
-        )
-        glance_rows = signal_glance_rows or snapshot_glance_rows
-        use_signal_glance = bool(signal_glance_rows)
-        if glance_rows:
-            if reference_only_mode:
-                st.info(get_ui_text("flow_reference_only_action_hidden", ui_locale))
-
-            latest_df = pd.DataFrame(
-                [
-                    {
-                        "Sector": str(row["sector"]),
-                        "Flow state": str(row["flow_state"]) if use_signal_glance else "참고용 raw snapshot",
-                        "Flow sigma": float(row["flow_score"]),
-                        "Foreign": str(row["foreign"]),
-                        "Institutional": str(row["institutional"]),
-                        "Retail": str(row["retail"]),
-                        "Foreign σ": str(row.get("foreign_cue", "")),
-                        "Institutional σ": str(row.get("institutional_cue", "")),
-                        "Retail σ": str(row.get("retail_cue", "")),
-                        **(
-                            {}
-                            if reference_only_mode or not use_signal_glance
-                            else {"Action change": str(row["action_change"])}
-                        ),
-                    }
-                    for row in glance_rows
-                ]
-            )
-            st.dataframe(
-                latest_df,
-                width="stretch",
-                hide_index=True,
-                column_config={
-                    "Sector": st.column_config.TextColumn(get_ui_text("col_sector", ui_locale), width="medium"),
-                    "Flow state": st.column_config.TextColumn(get_ui_text("flow_col_state", ui_locale), width="small"),
-                    "Flow sigma": st.column_config.NumberColumn(get_ui_text("flow_col_score", ui_locale), format="%.2f"),
-                    "Foreign": st.column_config.TextColumn(get_ui_text("flow_col_foreign", ui_locale), width="small"),
-                    "Institutional": st.column_config.TextColumn(get_ui_text("flow_col_institutional", ui_locale), width="small"),
-                    "Retail": st.column_config.TextColumn(get_ui_text("flow_col_retail", ui_locale), width="small"),
-                    "Foreign σ": st.column_config.TextColumn(f"{get_ui_text('flow_col_foreign', ui_locale)} σ", width="small"),
-                    "Institutional σ": st.column_config.TextColumn(f"{get_ui_text('flow_col_institutional', ui_locale)} σ", width="small"),
-                    "Retail σ": st.column_config.TextColumn(f"{get_ui_text('flow_col_retail', ui_locale)} σ", width="small"),
-                    "Action change": st.column_config.TextColumn(get_ui_text("flow_col_adjustment", ui_locale), width="medium"),
-                },
-            )
-        elif reference_only_mode:
-            st.info(get_ui_text("flow_reference_only_action_hidden_raw_only", ui_locale))
-
         latest_date = investor_flow_frame.index.max()
-        latest_snapshot = investor_flow_frame.loc[investor_flow_frame.index == latest_date].copy()
-        if not latest_snapshot.empty:
-            from src.signals.flow import INVESTOR_LABEL_TO_GROUP
-            summary_map = dict(shared_flow_summary_map or {})
+        latest_amounts = _build_kr_latest_sector_flow_amounts(investor_flow_frame)
+        render_panel_header(
+            eyebrow="Latest snapshot",
+            title="섹터별 수급 금액",
+            description="최근 기준일의 외국인, 기관, 개인 순매수 금액입니다. 큰 값은 조/억 단위로 표시합니다.",
+            badge=str(investor_flow_status),
+        )
+        st.dataframe(
+            latest_amounts,
+            width="stretch",
+            hide_index=True,
+            column_config={
+                "Sector": st.column_config.TextColumn(get_ui_text("col_sector", ui_locale), width="medium"),
+                "외국인": st.column_config.TextColumn("외국인", width="small"),
+                "기관": st.column_config.TextColumn("기관", width="small"),
+                "개인": st.column_config.TextColumn("개인", width="small"),
+                "합계": st.column_config.TextColumn("합계", width="small"),
+            },
+        )
 
-            def _participant_cue(row: pd.Series) -> str:
-                sector_code = str(row.get("sector_code", "") or "").strip()
-                summary = summary_map.get(sector_code)
-                if summary is None:
-                    return get_flow_state_label("unavailable", ui_locale)
-                group_key = INVESTOR_LABEL_TO_GROUP.get(str(row.get("investor_type", "") or "").strip())
-                if not group_key:
-                    return get_flow_state_label("unavailable", ui_locale)
-                component = getattr(summary, group_key, None)
-                state = str(getattr(component, "state", "unavailable") or "unavailable")
-                zscore = getattr(component, "zscore", None)
-                return format_flow_cue_label(state, zscore, ui_locale)
+        render_panel_header(
+            eyebrow="Trend",
+            title="기간별 수급 추이",
+            description="전체 섹터를 한 번에 놓고 외국인, 기관, 개인 순매수 금액 변화를 비교합니다.",
+        )
+        st.plotly_chart(_build_kr_sector_flow_trend_figure(investor_flow_frame), width="stretch")
 
-            latest_snapshot["Flow state"] = latest_snapshot.apply(_participant_cue, axis=1)
-            latest_snapshot = latest_snapshot.rename(
-                columns={
-                    "sector_name": "Sector",
-                    "investor_type": "Investor",
-                    "net_flow_ratio": "Latest ratio",
-                }
-            )
-            st.dataframe(
-                latest_snapshot[["Sector", "Investor", "Latest ratio", "net_buy_amount", "Flow state"]].reset_index(drop=True),
-                width="stretch",
-                hide_index=True,
-                column_config={
-                    "Sector": st.column_config.TextColumn(get_ui_text("col_sector", ui_locale), width="medium"),
-                    "Investor": st.column_config.TextColumn(get_ui_text("flow_status_label", ui_locale), width="small"),
-                    "Latest ratio": st.column_config.NumberColumn(get_ui_text("flow_col_latest", ui_locale), format="%.4f"),
-                    "net_buy_amount": st.column_config.NumberColumn("Net", format="%d"),
-                    "Flow state": st.column_config.TextColumn(get_ui_text("flow_col_state", ui_locale), width="medium"),
-                },
-            )
-
-        # Data reference date and freshness caption
         try:
             ref_date_str = pd.Timestamp(latest_date).strftime("%Y-%m-%d")
         except Exception:
@@ -1375,16 +1531,29 @@ def _build_etf_map(sector_map: dict | None) -> dict[str, list]:
 
 @st.cache_data(ttl=60, show_spinner=False)
 def _cached_monitoring_data(market_id: str) -> dict:
-    """Load investor flow monitoring data with a 60-second TTL cache."""
-    from src.data_sources.krx_investor_flow import read_warm_status
+    """Load dataset collection monitoring data with a 60-second TTL cache."""
     from src.data_sources.warehouse import (
-        read_investor_flow_raw_date_bounds,
-        read_investor_flow_run_history,
+        COLLECTION_HISTORY_DATASETS,
+        read_dataset_status,
+        read_collection_run_history,
     )
-    warm = read_warm_status()
-    bounds = read_investor_flow_raw_date_bounds(market=market_id)
-    history = read_investor_flow_run_history(market=market_id, limit=15)
-    return {"warm": warm, "bounds": bounds, "history": history}
+    dataset_order = list(COLLECTION_HISTORY_DATASETS)
+    statuses = {
+        dataset: read_dataset_status(dataset, market=market_id)
+        for dataset in dataset_order
+    }
+    history = read_collection_run_history(
+        market=market_id,
+        reasons=("manual_refresh",),
+        sample_per_dataset=True,
+        sample_size=10,
+    )
+    return {"statuses": statuses, "history": history, "dataset_order": dataset_order}
+
+
+def clear_monitoring_data_cache() -> None:
+    """Clear cached warehouse monitoring data after manual collection actions."""
+    _cached_monitoring_data.clear()
 
 
 def render_monitoring_tab(
@@ -1397,49 +1566,60 @@ def render_monitoring_tab(
     investor_flow_frame: pd.DataFrame | None = None,
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
-    """Render the '데이터 모니터링' tab for investor-flow ingestion health."""
+    """Render the dataset collection history and health page."""
     with tab:
         render_research_page_frame(
             page_key="quality",
             eyebrow="Data Quality",
-            title="리서치 노트와 수집 상태",
-            description="데이터 freshness, coverage, 오류 이력을 운영 상태와 분리해 점검합니다.",
+            title="데이터 수집 이력 관리",
+            description="시장, 매크로, 수급 데이터의 수집 상태와 오류 이력을 같은 기준으로 점검합니다.",
             summary_items=[
                 {"label": "시장", "value": market_id},
-                {"label": "runtime 상태", "value": investor_flow_status or "warehouse"},
-                {"label": "coverage", "value": "완전" if investor_flow_fresh else "확인 필요"},
-                {"label": "snapshot", "value": f"{len(investor_flow_frame) if isinstance(investor_flow_frame, pd.DataFrame) else 0:,}건"},
+                {"label": "데이터셋", "value": "3개"},
+                {"label": "샘플", "value": "최신 10건"},
+                {"label": "기준", "value": "warehouse"},
             ],
         )
         render_panel_header(
             eyebrow="운영 현황",
-            title="투자자 수급 데이터 수집 모니터링",
-            description="KRX 투자자 수급 데이터의 수집 상태, 커버리지, 오류 이력을 확인합니다.",
+            title="데이터셋별 수집 상태",
+            description="시장데이터, 매크로데이터, 수급데이터의 최신 실행 상태를 같은 열 구조로 비교합니다.",
             badge=market_id,
         )
 
         data = _cached_monitoring_data(str(market_id).strip().upper())
-        warm: dict = dict(data["warm"] or {})
+        dataset_order: list[str] = list(data.get("dataset_order") or [])
+        statuses: dict[str, dict[str, Any]] = {
+            str(key): dict(value or {})
+            for key, value in dict(data.get("statuses") or {}).items()
+        }
+        if not statuses and isinstance(data.get("warm"), dict):
+            statuses["investor_flow"] = dict(data.get("warm") or {})
         runtime_detail = dict(investor_flow_detail or {})
         runtime_detail_status = str(runtime_detail.pop("status", "") or "").strip()
         runtime_detail_coverage = runtime_detail.pop("coverage_complete", None)
+        flow_status = dict(statuses.get("investor_flow") or {})
         if runtime_detail:
-            warm.update(runtime_detail)
+            flow_status.update(runtime_detail)
         if str(investor_flow_status or "").strip():
-            warm["status"] = str(investor_flow_status)
-        elif not str(warm.get("status", "")).strip() and runtime_detail_status:
-            warm["status"] = runtime_detail_status
+            flow_status["status"] = str(investor_flow_status)
+        elif not str(flow_status.get("status", "")).strip() and runtime_detail_status:
+            flow_status["status"] = runtime_detail_status
         if investor_flow_fresh is not None:
-            warm["coverage_complete"] = bool(investor_flow_fresh)
-        elif "coverage_complete" not in warm and runtime_detail_coverage is not None:
-            warm["coverage_complete"] = bool(runtime_detail_coverage)
-
-        bounds: dict = dict(data["bounds"] or {})
-        runtime_frame = investor_flow_frame if isinstance(investor_flow_frame, pd.DataFrame) else pd.DataFrame()
+            flow_status["coverage_complete"] = bool(investor_flow_fresh)
+        elif "coverage_complete" not in flow_status and runtime_detail_coverage is not None:
+            flow_status["coverage_complete"] = bool(runtime_detail_coverage)
+        statuses["investor_flow"] = flow_status
+        if not dataset_order:
+            dataset_order = list(dict.fromkeys([*statuses.keys(), "market_prices", "macro_data", "investor_flow"]))
 
         history: pd.DataFrame = data["history"]
         used_runtime_history_fallback = False
-        if history.empty and runtime_detail:
+        has_flow_history = (
+            "dataset" in history.columns
+            and history["dataset"].astype(str).eq("investor_flow").any()
+        )
+        if (history.empty or not has_flow_history) and runtime_detail:
             requested_start = str(runtime_detail.get("anchor_start", "") or "").strip()
             requested_end = str(
                 runtime_detail.get("end", runtime_detail.get("watermark_key", ""))
@@ -1458,176 +1638,94 @@ def render_monitoring_tab(
                 [
                     {
                         "created_at": pd.Timestamp.utcnow(),
+                        "dataset": "investor_flow",
                         "reason": str(runtime_detail.get("reason", "runtime_snapshot") or "runtime_snapshot"),
                         "requested_start": requested_start,
                         "requested_end": requested_end,
                         "status": str(investor_flow_status or runtime_detail.get("status", "SAMPLE")),
                         "coverage_complete": coverage_complete,
                         "aborted": bool(runtime_detail.get("aborted", False)),
+                        "abort_reason": str(runtime_detail.get("abort_reason", "") or ""),
+                        "failed_days": list(runtime_detail.get("failed_days", []) or []),
+                        "failed_codes": dict(runtime_detail.get("failed_codes", {}) or {}),
+                        "provider": str(runtime_detail.get("provider", "runtime") or "runtime"),
                         "predicted_requests": predicted,
                         "processed_requests": processed,
                         "row_count": row_count_value,
                         "completion_pct": completion_pct,
+                        "sample_bucket": "latest",
                     }
                 ]
             )
+            if not data["history"].empty:
+                history = pd.concat([history, data["history"]], ignore_index=True)
             used_runtime_history_fallback = True
 
-        # ── 섹션 1: 수집 상태 요약 ──────────────────────────────────────────
-        st.subheader("수집 상태 요약")
-        status_val = str(warm.get("status", "")).upper() or "UNKNOWN"
-        watermark = str(warm.get("watermark_key", warm.get("end", "")) or "")
-        coverage_ok = bool(warm.get("coverage_complete", False))
-        predicted = int(warm.get("predicted_requests", 0) or 0)
-        processed = int(warm.get("processed_requests", 0) or 0)
-        completion_pct = round(processed / predicted * 100, 1) if predicted > 0 else 0.0
-
-        status_label = {"LIVE": "LIVE", "CACHED": "CACHED", "SAMPLE": "SAMPLE"}.get(
-            status_val, status_val
+        status_rows = _format_dataset_status_rows(statuses, dataset_order)
+        st.dataframe(
+            status_rows,
+            hide_index=True,
+            width="stretch",
+            column_config={
+                "최근 완료율(%)": st.column_config.NumberColumn("최근 완료율(%)", format="%.1f"),
+            },
         )
-        coverage_label = "✅ 완료" if coverage_ok else "❌ 미완료"
-        watermark_label = watermark if watermark else "—"
-        completion_label = f"{completion_pct}%" if predicted > 0 else "—"
 
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("상태", status_label)
-        col2.metric("워터마크 (마지막 성공일)", watermark_label)
-        col3.metric("커버리지", coverage_label)
-        col4.metric("최근 수집 완료율", completion_label)
-
-        # ── 섹션 2: 데이터 커버리지 범위 ────────────────────────────────────
-        st.subheader("데이터 커버리지 범위")
-        min_date = str(bounds.get("min_trade_date", "") or "")
-        max_date = str(bounds.get("max_trade_date", "") or "")
-        if min_date and max_date:
-            try:
-                min_dt = pd.Timestamp(min_date)
-                max_dt = pd.Timestamp(max_date)
-                days = (max_dt - min_dt).days
-                st.info(
-                    f"수집 시작: **{min_dt.strftime('%Y-%m-%d')}** · "
-                    f"수집 최신: **{max_dt.strftime('%Y-%m-%d')}** · "
-                    f"보유 기간: **{days}일**"
-                )
-            except Exception:
-                st.info(f"수집 범위: {min_date} ~ {max_date}")
+        render_panel_header(
+            eyebrow="오류 점검",
+            title="데이터셋별 최신 오류",
+            description="각 데이터셋의 마지막 수집 실행에서 보존된 미수집일, 오류 항목, 중단 사유만 표시합니다.",
+        )
+        error_rows = _format_dataset_error_rows(statuses, dataset_order)
+        if error_rows.empty:
+            st.success("최근 수집 실행에서 보존된 오류 없음")
         else:
-            st.info("warehouse에 저장된 원시 데이터가 없습니다.")
-            if not runtime_frame.empty:
-                try:
-                    idx = pd.DatetimeIndex(runtime_frame.index)
-                    runtime_min = idx.min().strftime("%Y-%m-%d")
-                    runtime_max = idx.max().strftime("%Y-%m-%d")
-                    st.info(
-                        "현재 세션 runtime snapshot 범위: "
-                        f"**{runtime_min}** ~ **{runtime_max}**"
-                    )
-                except Exception:
-                    st.info("현재 세션 runtime snapshot은 존재하지만 날짜 범위를 해석하지 못했습니다.")
+            st.dataframe(error_rows, hide_index=True, width="stretch")
 
-        # ── 섹션 3: 미수집 날짜 / 오류 종목 ────────────────────────────────
-        st.subheader("미수집 현황")
-        failed_days: list = warm.get("failed_days") or []
-        failed_codes: dict = warm.get("failed_codes") or {}
-        failed_ticker_family_counts: dict = warm.get("failed_ticker_family_counts") or {}
-        failed_sector_codes: dict = warm.get("failed_sector_codes") or {
-            key: value for key, value in failed_codes.items() if str(key).startswith("sector:")
-        }
-        failed_ticker_codes: dict = warm.get("failed_ticker_codes") or {
-            key: value
-            for key, value in failed_codes.items()
-            if key not in failed_sector_codes and key not in {"refresh", "warehouse"}
-        }
-        failed_other_codes: dict = {
-            key: value
-            for key, value in failed_codes.items()
-            if key not in failed_sector_codes and key not in failed_ticker_codes
-        }
-        aborted = bool(warm.get("aborted", False))
-        abort_reason = str(warm.get("abort_reason", "") or "")
-
-        if aborted and abort_reason:
-            st.error(f"마지막 수집 중단됨: {abort_reason}")
-
-        if failed_days:
-            preview = ", ".join(failed_days[:10])
-            suffix = f" 외 {len(failed_days) - 10}건" if len(failed_days) > 10 else ""
-            st.warning(f"미수집 날짜 {len(failed_days)}건: {preview}{suffix}")
-        if failed_sector_codes:
-            err_df = pd.DataFrame(
-                [{"섹터코드": k, "오류": v} for k, v in failed_sector_codes.items()]
-            )
-            st.warning(f"오류 섹터 {len(failed_sector_codes)}건")
-            st.dataframe(err_df, hide_index=True, width="stretch")
-        if failed_ticker_codes:
-            st.info("오류 종목 수는 현재 probe 결과가 아니라 마지막 incomplete manual_refresh 저장 결과입니다.")
-            if failed_ticker_family_counts:
-                family_preview = ", ".join(
-                    f"{str(k).replace('_', ' ')} {int(v)}건"
-                    for k, v in list(failed_ticker_family_counts.items())[:4]
-                )
-                st.info(f"실패 유형 요약: {family_preview}")
-            err_df = pd.DataFrame(
-                [{"종목코드": k, "오류": v} for k, v in failed_ticker_codes.items()]
-            )
-            st.warning(f"오류 종목 {len(failed_ticker_codes)}건")
-            st.dataframe(err_df, hide_index=True, width="stretch")
-        if failed_other_codes:
-            err_df = pd.DataFrame(
-                [{"항목": k, "오류": v} for k, v in failed_other_codes.items()]
-            )
-            st.warning(f"기타 수집 오류 {len(failed_other_codes)}건")
-            st.dataframe(err_df, hide_index=True, width="stretch")
-        if not failed_days and not failed_sector_codes and not failed_ticker_codes and not failed_other_codes and not aborted:
-            st.success("최근 수집 실행에서 미수집 항목 없음")
-
-        # ── 섹션 4: 수집 이력 테이블 ────────────────────────────────────────
-        st.subheader("수집 이력 (최근 15건)")
+        render_panel_header(
+            eyebrow="이력",
+            title="데이터 수집 이력 샘플",
+            description="수집일시 내림차순 기준으로 데이터셋별 최신 10건만 확인합니다.",
+        )
         if history.empty:
             st.info("수집 이력이 없습니다.")
         else:
             if used_runtime_history_fallback:
-                st.info("warehouse 수집 이력이 비어 있어 현재 세션 runtime snapshot 메타데이터를 대신 표시합니다.")
-            display = history.copy()
-            display["요청범위"] = display["requested_start"].fillna("") + " ~ " + display["requested_end"].fillna("")
-            display = display.rename(
-                columns={
-                    "created_at": "수집일시",
-                    "reason": "이유",
-                    "status": "상태",
-                    "coverage_complete": "커버리지완료",
-                    "aborted": "중단",
-                    "predicted_requests": "예상요청",
-                    "processed_requests": "처리요청",
-                    "row_count": "저장행수",
-                    "completion_pct": "완료율(%)",
-                }
-            )
-            cols_ordered = [
-                "수집일시", "이유", "요청범위", "상태",
-                "커버리지완료", "중단", "완료율(%)", "예상요청", "처리요청", "저장행수",
-            ]
-            st.dataframe(
-                display[cols_ordered].reset_index(drop=True),
-                hide_index=True,
-                width="stretch",
-                column_config={
-                    "수집일시": st.column_config.DatetimeColumn("수집일시", format="YYYY-MM-DD HH:mm:ss"),
-                    "이유": st.column_config.TextColumn("이유", width="small"),
-                    "요청범위": st.column_config.TextColumn("요청범위", width="medium"),
-                    "상태": st.column_config.TextColumn("상태", width="small"),
-                    "커버리지완료": st.column_config.CheckboxColumn("커버리지완료"),
-                    "중단": st.column_config.CheckboxColumn("중단"),
-                    "완료율(%)": st.column_config.NumberColumn("완료율(%)", format="%.1f"),
-                    "예상요청": st.column_config.NumberColumn("예상요청", format="%d"),
-                    "처리요청": st.column_config.NumberColumn("처리요청", format="%d"),
-                    "저장행수": st.column_config.NumberColumn("저장행수", format="%d"),
-                },
-            )
+                st.info("warehouse 수급 수집 이력이 비어 있어 현재 세션 runtime snapshot 메타데이터를 함께 표시합니다.")
+            if "dataset" not in history.columns:
+                history["dataset"] = "investor_flow"
+            dataset_order = data.get("dataset_order") or list(dict.fromkeys(history["dataset"].astype(str).tolist()))
+            for dataset in dataset_order:
+                dataset_history = history[history["dataset"].astype(str).eq(dataset)]
+                sample = _format_collection_history_sample(history, dataset)
+                label = _format_collection_dataset_label(dataset)
+                render_panel_header(
+                    eyebrow="샘플",
+                    title=f"{label}",
+                    description="수집일시 내림차순 최신 10건입니다.",
+                    badge=f"{len(dataset_history):,}건",
+                )
+                if sample.empty:
+                    st.info(f"{label} 수집 이력이 없습니다.")
+                    continue
+                st.dataframe(
+                    sample.reset_index(drop=True),
+                    hide_index=True,
+                    width="stretch",
+                    column_config={
+                        "수집일시": st.column_config.DatetimeColumn("수집일시", format="YYYY-MM-DD HH:mm:ss"),
+                        "요청범위": st.column_config.TextColumn("요청범위", width="medium"),
+                        "상태": st.column_config.TextColumn("상태", width="small"),
+                        "커버리지": st.column_config.TextColumn("커버리지", width="small"),
+                        "중단": st.column_config.TextColumn("중단", width="small"),
+                        "오류요약": st.column_config.TextColumn("오류요약", width="large"),
+                        "완료율(%)": st.column_config.NumberColumn("완료율(%)", format="%.1f"),
+                        "provider": st.column_config.TextColumn("provider", width="small"),
+                        "저장행수": st.column_config.NumberColumn("저장행수", format="%d"),
+                    },
+                )
 
-        if warm:
-            provider = str(warm.get("provider", "") or "")
-            st.caption(f"데이터 소스: {provider or '—'} · 60초 캐시")
+        st.caption("데이터 소스: warehouse ingest_runs / ingest_watermarks · 60초 캐시")
 
 
 def render_dashboard_tabs(
@@ -1655,35 +1753,34 @@ def render_dashboard_tabs(
     if selected_page_id == "research":
         return
 
-    filter_action_global, filter_regime_only_global, position_mode, show_alerted_only = render_top_bar_filters(
-        current_regime=current_regime,
-        action_options=[ALL_ACTION_KEY, "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
-        enable_regime_filter=normalized_market != "KR",
-        is_mobile=is_mobile_client,
-        locale=ui_locale,
-    )
-    signals_filtered = filter_signals_for_display(
-        list(signals),
-        filter_action=filter_action_global,
-        filter_regime_only=filter_regime_only_global,
-        current_regime=current_regime,
-        held_sectors=held_sectors,
-        position_mode=position_mode,
-        show_alerted_only=show_alerted_only,
-    )
-    if str(market_id).strip().upper() == "KR" and any(
-        str(getattr(signal, "momentum_method", "")) == "hybrid_return_rank_v1"
-        for signal in signals_filtered
-    ):
-        top_pick_signals = sorted(signals_filtered, key=top_pick_sort_key)
-    else:
-        top_pick_signals = sorted(
-            signals_filtered,
-            key=lambda signal: signal_display_sort_key(signal, held_sectors),
-        )
-
     page_container = st.container()
     if selected_page_id == "overview":
+        filter_action_global, filter_regime_only_global, position_mode, show_alerted_only = render_top_bar_filters(
+            current_regime=current_regime,
+            action_options=[ALL_ACTION_KEY, "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
+            enable_regime_filter=normalized_market != "KR",
+            is_mobile=is_mobile_client,
+            locale=ui_locale,
+        )
+        signals_filtered = filter_signals_for_display(
+            list(signals),
+            filter_action=filter_action_global,
+            filter_regime_only=filter_regime_only_global,
+            current_regime=current_regime,
+            held_sectors=held_sectors,
+            position_mode=position_mode,
+            show_alerted_only=show_alerted_only,
+        )
+        if normalized_market == "KR" and any(
+            str(getattr(signal, "momentum_method", "")) == "hybrid_return_rank_v1"
+            for signal in signals_filtered
+        ):
+            top_pick_signals = sorted(signals_filtered, key=top_pick_sort_key)
+        else:
+            top_pick_signals = sorted(
+                signals_filtered,
+                key=lambda signal: signal_display_sort_key(signal, held_sectors),
+            )
         render_summary_tab(
             tab=page_container,
             theme_mode=theme_mode,
@@ -1693,6 +1790,13 @@ def render_dashboard_tabs(
             ui_locale=ui_locale,
         )
     elif selected_page_id == "signals":
+        filter_action_global, filter_regime_only_global, position_mode, show_alerted_only = render_top_bar_filters(
+            current_regime=current_regime,
+            action_options=[ALL_ACTION_KEY, "Strong Buy", "Watch", "Hold", "Avoid", "N/A"],
+            enable_regime_filter=normalized_market != "KR",
+            is_mobile=is_mobile_client,
+            locale=ui_locale,
+        )
         render_all_signals_tab(
             tab=page_container,
             signals=signals,

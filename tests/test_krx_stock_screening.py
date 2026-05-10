@@ -55,6 +55,84 @@ def test_get_constituents_returns_lookup_helper_result(monkeypatch):
     assert tickers == ["035420", "005930"]
 
 
+def test_load_screened_stocks_cache_only_skips_live_fetch_on_cache_miss(monkeypatch, tmp_path):
+    monkeypatch.setattr(screening, "CACHE_PATH", tmp_path / "missing_screening_cache.pkl")
+    monkeypatch.setattr(
+        screening,
+        "_fetch_and_score",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("live fetch should not run")),
+    )
+
+    status, rows = screening.load_screened_stocks(
+        strong_buy_sectors=[{"code": "5044", "name": "KRX 반도체"}],
+        allow_live_fetch=False,
+    )
+
+    assert status == "UNAVAILABLE"
+    assert rows == []
+
+
+def test_load_screened_stocks_cache_only_returns_cached_rows(monkeypatch, tmp_path):
+    cache_path = tmp_path / "screening_cache.pkl"
+    monkeypatch.setattr(screening, "CACHE_PATH", cache_path)
+    cached_rows = [{"ticker": "005930", "name": "삼성전자"}]
+    screening._write_cache([{"code": "5044", "name": "KRX 반도체"}], cached_rows)
+    monkeypatch.setattr(
+        screening,
+        "_fetch_and_score",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("live fetch should not run")),
+    )
+
+    status, rows = screening.load_screened_stocks(
+        strong_buy_sectors=[{"code": "5044", "name": "KRX 반도체"}],
+        allow_live_fetch=False,
+    )
+
+    assert status == "CACHED"
+    assert rows == cached_rows
+
+
+def test_load_representative_etf_context_cache_only_skips_live_fetch_on_cache_miss(monkeypatch, tmp_path):
+    monkeypatch.setattr(screening, "ETF_CONTEXT_CACHE_PATH", tmp_path / "missing_etf_cache.pkl")
+    monkeypatch.setattr(
+        screening,
+        "_fetch_representative_etf_context",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("live ETF fetch should not run")),
+    )
+
+    status, rows = screening.load_representative_etf_context(
+        strong_buy_sectors=[{"code": "5044", "name": "KRX 반도체"}],
+        etf_map={"5044": [{"code": "396500", "name": "TIGER 반도체TOP10"}]},
+        allow_live_fetch=False,
+    )
+
+    assert status == "UNAVAILABLE"
+    assert rows == []
+
+
+def test_load_representative_etf_context_cache_only_returns_cached_rows(monkeypatch, tmp_path):
+    cache_path = tmp_path / "etf_context_cache.pkl"
+    monkeypatch.setattr(screening, "ETF_CONTEXT_CACHE_PATH", cache_path)
+    sectors = [{"code": "5044", "name": "KRX 반도체"}]
+    etf_map = {"5044": [{"code": "396500", "name": "TIGER 반도체TOP10"}]}
+    cached_rows = [{"sector_code": "5044", "etf_code": "396500"}]
+    screening._write_etf_context_cache(sectors, etf_map, cached_rows)
+    monkeypatch.setattr(
+        screening,
+        "_fetch_representative_etf_context",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("live ETF fetch should not run")),
+    )
+
+    status, rows = screening.load_representative_etf_context(
+        strong_buy_sectors=sectors,
+        etf_map=etf_map,
+        allow_live_fetch=False,
+    )
+
+    assert status == "CACHED"
+    assert rows == cached_rows
+
+
 def test_build_sector_etf_context_row_selects_highest_recent_trade_value(monkeypatch):
     snapshot = pd.DataFrame(
         {

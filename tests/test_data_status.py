@@ -18,17 +18,15 @@ class TestDataStatus:
         """is_sample_mode returns False when no source is SAMPLE."""
         assert is_sample_mode({"price": "LIVE", "ecos": "CACHED"}) is False
 
-    def test_get_button_states_recompute_disabled_in_sample(self):
-        """recompute button is disabled when any source is SAMPLE."""
+    def test_get_button_states_refresh_actions_stay_enabled_in_sample(self):
+        """Manual refresh buttons stay available when a source is SAMPLE."""
         states = get_button_states({"price": "SAMPLE"})
-        assert states["recompute"] is False
+        assert states == {"refresh_market": True, "refresh_macro": True}
 
-    def test_get_button_states_recompute_enabled_in_live(self):
-        """recompute button is enabled when no source is SAMPLE."""
+    def test_get_button_states_refresh_actions_enabled_in_live(self):
+        """Manual refresh buttons are enabled when no source is SAMPLE."""
         states = get_button_states({"price": "LIVE"})
-        assert states["recompute"] is True
-        assert states["refresh_market"] is True
-        assert states["refresh_macro"] is True
+        assert states == {"refresh_market": True, "refresh_macro": True}
 
     def test_resolve_price_cache_banner_case_fresh_openapi_cache(self):
         """A current successful warm should be presented as fresh cache, not failure."""

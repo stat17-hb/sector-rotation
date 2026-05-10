@@ -288,6 +288,7 @@ def test_load_dashboard_runtime_data_emits_progress_and_returns_flow_payload(mon
     assert events[-1]["pct"] == 100
     assert events[-1]["status"] == "complete"
     assert payload["signals"] == ["signal-a"]
+    assert payload["market_data_reference_date"] == "2024-01-31"
     assert payload["investor_flow_status"] == "CACHED"
     assert payload["investor_flow_frame"].equals(flow_frame)
     assert "5044" in payload["shared_flow_summary_map"]
@@ -356,6 +357,41 @@ def test_kr_active_index_name_lookup_falls_back_to_official_discovery_for_placeh
     assert lookup["1013"] == "전기전자"
 
 
+def test_kr_active_index_name_lookup_logs_official_discovery_failure_once(monkeypatch, caplog):
+    dashboard_data._KR_OFFICIAL_NAME_LOOKUP_WARNING_KEYS.clear()
+    monkeypatch.setattr(
+        dashboard_data,
+        "read_active_index_dimension",
+        lambda market="KR": pd.DataFrame(
+            [
+                {"index_code": "1002", "index_name": "1002", "taxonomy_label": "1002"},
+            ]
+        ),
+    )
+    monkeypatch.setattr(dashboard_data, "settings", {"benchmark_code": "1001"})
+
+    import src.data_sources.krx_indices as krx_indices
+
+    monkeypatch.setattr(
+        krx_indices,
+        "discover_kr_index_rows",
+        lambda benchmark_code=None: (_ for _ in ()).throw(ValueError("KRX official index finder failed")),
+    )
+    caplog.set_level("WARNING", logger="src.dashboard.data")
+
+    first = dashboard_data._kr_active_index_name_lookup()
+    second = dashboard_data._kr_active_index_name_lookup()
+
+    assert first == {}
+    assert second == {}
+    warnings = [
+        rec
+        for rec in caplog.records
+        if "KR official name lookup fallback failed" in rec.getMessage()
+    ]
+    assert len(warnings) == 1
+
+
 def test_normalize_kr_sector_universe_rows_replaces_placeholder_taxonomy_via_official_fallback(monkeypatch):
     monkeypatch.setattr(
         dashboard_data,
@@ -412,26 +448,74 @@ def test_canonicalize_kr_sector_universe_rows_keeps_only_plain_krx_sector_family
 
 
 def test_get_market_index_universe_codes_returns_canonical_kr_family_plus_benchmark(monkeypatch):
-    monkeypatch.setattr(
-        dashboard_data,
-        "read_active_index_dimension",
-        lambda market="KR": pd.DataFrame(
-            [
-                {"index_code": "1001", "index_name": "코스피", "family": "kospi_dd_trd", "taxonomy_label": "코스피"},
-                {"index_code": "5042", "index_name": "KRX 100", "family": "krx_dd_trd", "taxonomy_label": "KRX 100"},
-                {"index_code": "5044", "index_name": "KRX 반도체", "family": "krx_dd_trd", "taxonomy_label": "반도체"},
-                {"index_code": "5064", "index_name": "KRX 정보기술", "family": "krx_dd_trd", "taxonomy_label": "정보기술"},
-                {"index_code": "5351", "index_name": "KRX 300 정보기술", "family": "krx_dd_trd", "taxonomy_label": "KRX 300 정보기술"},
-                {"index_code": "1155", "index_name": "코스피 200 정보기술", "family": "kospi_dd_trd", "taxonomy_label": "정보기술"},
-            ]
-        ),
-    )
-    monkeypatch.setattr(dashboard_data, "is_legacy_kr_index_subset", lambda market="KR": False)
-
     import src.data_sources.krx_indices as krx_indices
 
-    monkeypatch.setattr(krx_indices, "repair_stale_kr_index_dimension_names", lambda benchmark_code: pd.DataFrame())
+    monkeypatch.setattr(
+        krx_indices,
+        "get_active_kr_index_universe_codes",
+        lambda benchmark_code: ["1001", "5044", "5064"],
+    )
 
     codes = dashboard_data.get_market_index_universe_codes("1001", "KR")
 
     assert codes == ["1001", "5044", "5064"]
+
+
+def test_get_market_index_universe_codes_includes_us_reference_indexes(monkeypatch):
+    monkeypatch.setattr(
+        dashboard_data,
+        "sector_map",
+        {
+            "regimes": {
+                "Recovery": {
+                    "sectors": [
+                        {"code": "XLK", "name": "Technology"},
+                        {"code": "XLE", "name": "Energy"},
+                    ]
+                }
+            }
+        },
+    )
+    monkeypatch.setattr(
+        dashboard_data,
+        "settings",
+        {"reference_index_codes": ["^IXIC"]},
+    )
+
+    codes = dashboard_data.get_market_index_universe_codes("^GSPC", "US")
+
+    assert codes == ["XLK", "XLE", "^GSPC", "^IXIC"]
+
+
+def test_cached_sector_prices_prefers_transient_market_preview(monkeypatch):
+    dashboard_data.cached_sector_prices.clear()
+    frame = pd.DataFrame(
+        {
+            "index_code": ["SPY"],
+            "index_name": ["S&P 500"],
+            "close": [500.0],
+        },
+        index=pd.to_datetime(["2026-04-07"]),
+    )
+    monkeypatch.setattr(dashboard_data, "get_market_index_universe_codes", lambda benchmark_code, market_id_arg: ["SPY"])
+    monkeypatch.setattr(
+        dashboard_data,
+        "_load_market_price_transient_override",
+        lambda **kwargs: ("LIVE", frame),
+    )
+    monkeypatch.setattr(
+        "src.data_sources.yfinance_sectors.load_sector_prices",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("warehouse path should not run")),
+    )
+
+    status, loaded = dashboard_data.cached_sector_prices(
+        "US",
+        "20260407",
+        "^GSPC",
+        3,
+        "price-token",
+        ("artifact",),
+    )
+
+    assert status == "LIVE"
+    assert loaded.equals(frame)

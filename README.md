@@ -158,7 +158,6 @@ KOSIS API (통계청) ────────┘
 |------|-----------|--------|
 | 시장데이터 갱신 | `curated/sector_prices.parquet` | pykrx (실시간) |
 | 매크로데이터 갱신 | `curated/macro_monthly.parquet` | ECOS + KOSIS API |
-| 전체 재계산 | `features/*.parquet` | API 미호출, 기존 curated 재계산 |
 
 ---
 

@@ -25,7 +25,6 @@ from src.macro.series_utils import (
     to_plotly_time_index,
 )
 from src.data_sources.warehouse import (
-    is_legacy_kr_index_subset,
     read_active_index_dimension,
     read_market_prices,
 )
@@ -37,6 +36,8 @@ from src.ui.components import render_status_strip
 
 logger = logging.getLogger(__name__)
 
+_KR_OFFICIAL_NAME_LOOKUP_WARNING_KEYS: set[str] = set()
+
 settings: dict[str, Any] = {}
 sector_map: dict[str, Any] = {}
 macro_series_cfg: dict[str, Any] = {}
@@ -44,6 +45,7 @@ market_id = "KR"
 market_profile: Any | None = None
 CACHE_TTL = 21600
 CURATED_SECTOR_PRICES_PATH = Path("data/curated/sector_prices.parquet")
+MARKET_PRICE_TRANSIENT_OVERRIDE_KEY = "_market_price_transient_override"
 INVESTOR_FLOW_TRANSIENT_OVERRIDE_KEY = "_investor_flow_transient_override"
 DashboardProgressCallback = Callable[[dict[str, Any]], None]
 
@@ -99,6 +101,72 @@ def configure_dashboard_env(
     market_profile = market_profile_obj
     CACHE_TTL = int(cache_ttl)
     CURATED_SECTOR_PRICES_PATH = Path(curated_sector_prices_path)
+
+
+def clear_market_price_transient_override() -> None:
+    try:
+        st.session_state.pop(MARKET_PRICE_TRANSIENT_OVERRIDE_KEY, None)
+    except Exception:
+        pass
+
+
+def set_market_price_transient_override(
+    *,
+    market_id_arg: str,
+    requested_end: str,
+    status: str,
+    summary: dict[str, Any],
+    frame: pd.DataFrame,
+) -> None:
+    try:
+        st.session_state[MARKET_PRICE_TRANSIENT_OVERRIDE_KEY] = {
+            "market": str(market_id_arg or market_id).strip().upper() or market_id,
+            "requested_end": str(requested_end or "").strip(),
+            "status": str(status or "LIVE").strip().upper() or "LIVE",
+            "summary": dict(summary),
+            "frame": frame.copy(),
+        }
+    except Exception:
+        pass
+
+
+def _load_market_price_transient_override(
+    *,
+    market_id_arg: str,
+    start_str: str,
+    end_str: str,
+    index_codes: list[str],
+) -> tuple[str, pd.DataFrame] | None:
+    try:
+        payload = st.session_state.get(MARKET_PRICE_TRANSIENT_OVERRIDE_KEY)
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    normalized_market = str(market_id_arg or market_id).strip().upper() or market_id
+    if str(payload.get("market", "")).strip().upper() != normalized_market:
+        return None
+
+    requested_end = "".join(ch for ch in str(payload.get("requested_end", "")) if ch.isdigit())[:8]
+    if requested_end != str(end_str):
+        return None
+
+    frame = payload.get("frame")
+    if not isinstance(frame, pd.DataFrame) or frame.empty:
+        return None
+
+    filtered = _filter_cached_sector_prices(
+        frame,
+        index_codes=index_codes,
+        end_date_str=end_str,
+    )
+    if filtered.empty:
+        return None
+    filtered = filtered.loc[pd.DatetimeIndex(filtered.index) >= pd.Timestamp(start_str)].copy()
+    if filtered.empty:
+        return None
+    return str(payload.get("status", "LIVE")).strip().upper() or "LIVE", filtered
 
 
 def clear_investor_flow_transient_override() -> None:
@@ -383,7 +451,10 @@ def _kr_active_index_metadata_lookup() -> dict[str, dict[str, str]]:
             if str(row.get("index_code", "")).strip()
         }
     except Exception as exc:
-        logger.warning("KR official name lookup fallback failed: %s", exc)
+        warning_key = " ".join(str(exc).split())[:500]
+        if warning_key not in _KR_OFFICIAL_NAME_LOOKUP_WARNING_KEYS:
+            _KR_OFFICIAL_NAME_LOOKUP_WARNING_KEYS.add(warning_key)
+            logger.warning("KR official name lookup fallback failed: %s", exc)
         return lookup
 
     for code in missing_codes:
@@ -485,6 +556,10 @@ def _all_sector_codes(benchmark_code: str) -> list[str]:
                 all_codes.append(code)
     if benchmark_code and str(benchmark_code) not in all_codes:
         all_codes.append(str(benchmark_code))
+    for code in settings.get("reference_index_codes", []) or []:
+        normalized = str(code).strip()
+        if normalized and normalized not in all_codes:
+            all_codes.append(normalized)
     return all_codes
 
 
@@ -494,44 +569,13 @@ def get_market_index_universe_codes(benchmark_code: str, market_id_arg: str) -> 
     if normalized_market != "KR":
         return _all_sector_codes(benchmark_code)
 
-    from src.data_sources.krx_indices import (
-        repair_stale_kr_index_dimension_names,
-        repair_legacy_kr_index_dimension,
-        seed_kr_index_dimension_if_empty,
-    )
+    try:
+        from src.data_sources.krx_indices import get_active_kr_index_universe_codes
 
-    universe_rows = read_active_index_dimension(market=normalized_market)
-    if universe_rows.empty:
-        try:
-            universe_rows = seed_kr_index_dimension_if_empty(str(benchmark_code))
-        except Exception as exc:
-            logger.warning("KR dim_index bootstrap failed: %s", exc)
-    elif is_legacy_kr_index_subset(market=normalized_market):
-        try:
-            repaired_rows = repair_legacy_kr_index_dimension(str(benchmark_code))
-        except Exception as exc:
-            logger.warning("KR dim_index legacy repair failed: %s", exc)
-        else:
-            if not repaired_rows.empty:
-                universe_rows = repaired_rows
-    else:
-        try:
-            repaired_rows = repair_stale_kr_index_dimension_names(str(benchmark_code))
-        except Exception as exc:
-            logger.warning("KR dim_index stale-name repair failed: %s", exc)
-        else:
-            if not repaired_rows.empty:
-                universe_rows = repaired_rows
-
-    universe_codes = [
-        str(row.get("index_code", "")).strip()
-        for row in _canonicalize_kr_sector_universe_rows(
-            universe_rows.to_dict("records"),
-            benchmark_code=str(benchmark_code),
-            include_benchmark=True,
-        )
-        if str(row.get("index_code", "")).strip()
-    ]
+        universe_codes = get_active_kr_index_universe_codes(str(benchmark_code))
+    except Exception as exc:
+        logger.warning("KR dim_index universe resolution failed: %s", exc)
+        universe_codes = []
     if universe_codes:
         return list(dict.fromkeys(universe_codes))
 
@@ -617,6 +661,13 @@ def _build_market_refresh_notice(summary: dict[str, object]) -> tuple[str, str]:
     failed_codes = dict(summary.get("failed_codes") or {})
     provider_label = str(summary.get("provider", _krx_provider_effective()) or "").strip() or "provider"
 
+    if bool(summary.get("warehouse_write_skipped")) and status == "LIVE":
+        rows = int(summary.get("rows", 0) or 0)
+        return (
+            "warning",
+            f"Market data refresh fetched live data via {provider_label}, but warehouse write lock blocked persistence. "
+            f"Showing temporary preview ({rows} rows); close duplicate app sessions and refresh again to save it.",
+        )
     if status == "LIVE" and delta_codes:
         return (
             "success",
@@ -625,10 +676,16 @@ def _build_market_refresh_notice(summary: dict[str, object]) -> tuple[str, str]:
     if coverage_complete and not delta_codes:
         return ("info", "Market data already current; the latest local cache is in use.")
     if failed_days or failed_codes:
+        detail = ""
+        if failed_codes:
+            first_code, first_reason = next(iter(failed_codes.items()))
+            detail = f" First failure: {first_code}={first_reason}"
+        elif failed_days:
+            detail = f" Failed day: {failed_days[0]}"
         return (
             "warning",
             "Market data refresh fell back to cache after an incomplete live refresh. "
-            "Retry later or continue with cache.",
+            f"Retry later or continue with cache.{detail}",
         )
     if status == "CACHED":
         return ("warning", "Market data refresh fell back to cache.")
@@ -663,6 +720,11 @@ def _build_investor_flow_refresh_notice(summary: dict[str, object]) -> tuple[str
     sector_fail_count = sum(1 for k in failed_codes if k.startswith("sector:"))
     ticker_fail_count = sum(1 for k in failed_codes if not k.startswith("sector:"))
     auth_fail_count = sum(1 for v in failed_codes.values() if str(v).startswith("AUTH_REQUIRED:"))
+    access_denied_count = sum(
+        1
+        for v in failed_codes.values()
+        if str(v).startswith("ACCESS_DENIED:") or "access denied" in str(v).lower()
+    )
     mode = str(window.get("mode", "")).strip()
     anchor_start = _format_yyyymmdd(str(window.get("anchor_start", "")))
     anchor_reason = str(window.get("anchor_reason", "")).strip()
@@ -702,6 +764,12 @@ def _build_investor_flow_refresh_notice(summary: dict[str, object]) -> tuple[str
                 "error",
                 "투자자수급 갱신 실패: KRX 데이터마켓 로그인 세션이 필요합니다. "
                 "환경변수 또는 Streamlit secrets에 KRX_ID / KRX_PW를 설정한 뒤 다시 시도하세요.",
+            )
+        if access_denied_count:
+            return (
+                "error",
+                "투자자수급 갱신 실패: KRX가 수급 trading-value endpoint 접근을 차단했습니다. "
+                "KRX_ID / KRX_PW를 설정한 인증 세션으로 다시 시도하세요. 인증 후에도 동일하면 KRX 정책상 비공식 endpoint가 차단된 상태입니다.",
             )
         if bootstrap_partial_preview:
             return ("warning", f"실시간 투자자수급 갱신은 완료되지 않았지만, bootstrap partial preview 데이터를 표시합니다.{window_detail}")
@@ -767,14 +835,10 @@ def _show_notice_toast(notice: tuple[str, str] | None) -> None:
 
 
 def _render_dashboard_status_banner(banner: dict[str, object] | None) -> None:
-    """Render blocking errors prominently and lower-priority states compactly."""
+    """Render top-of-page system status in the shared compact strip."""
     if not banner:
         return
 
-    level = str(banner.get("level", "info")).strip().lower()
-    if level == "error":
-        _legacy_render_dashboard_status_banner(banner)
-        return
     render_status_strip(banner)
 
 
@@ -860,6 +924,15 @@ def _cached_sector_prices(
 
     all_codes = get_market_index_universe_codes(benchmark_code, market_id_arg)
     start_str, end_str = _market_range_strings(end_date_str, price_years)
+
+    transient = _load_market_price_transient_override(
+        market_id_arg=market_id_arg,
+        start_str=start_str,
+        end_str=end_str,
+        index_codes=all_codes,
+    )
+    if transient is not None:
+        return transient
 
     status, df = load_sector_prices(all_codes, start_str, end_str)
     return status, df
@@ -1071,7 +1144,7 @@ def _load_price_stage(
     price_status, sector_prices = _cached_sector_prices(
         normalized_market,
         market_end_date_str,
-        str(settings.get("benchmark_code", "SPY")),
+        str(settings.get("benchmark_code", "^GSPC")),
         price_years,
         price_cache_token,
         price_artifact_key,
@@ -1134,6 +1207,34 @@ def _compute_fx_change_pct(*, macro_df: pd.DataFrame) -> float:
     return float((curr_fx / prev_fx - 1) * 100)
 
 
+def _resolve_price_reference_date(
+    sector_prices: pd.DataFrame,
+    *,
+    benchmark_code: str,
+) -> str:
+    """Return the latest actual price date loaded for the benchmark or frame."""
+    if not isinstance(sector_prices, pd.DataFrame) or sector_prices.empty:
+        return ""
+
+    frame = sector_prices.copy()
+    try:
+        frame.index = pd.DatetimeIndex(frame.index)
+    except Exception:
+        return ""
+
+    if "index_code" in frame.columns:
+        benchmark_rows = frame[frame["index_code"].astype(str) == str(benchmark_code)]
+        if not benchmark_rows.empty:
+            latest = pd.DatetimeIndex(benchmark_rows.index).max()
+            if pd.notna(latest):
+                return pd.Timestamp(latest).strftime("%Y-%m-%d")
+
+    latest = pd.DatetimeIndex(frame.index).max()
+    if pd.isna(latest):
+        return ""
+    return pd.Timestamp(latest).strftime("%Y-%m-%d")
+
+
 def _build_signal_payload(
     *,
     normalized_market: str,
@@ -1166,9 +1267,16 @@ def _build_signal_payload(
     )
 
     bench_code = str(settings.get("benchmark_code", "1001"))
+    bench_label = str(settings.get("benchmark_label", "")).strip()
     if not sector_prices.empty and "index_code" in sector_prices.columns:
         bench_mask = sector_prices["index_code"].astype(str) == bench_code
-        bench_series = sector_prices[bench_mask]["close"] if bench_mask.any() else pd.Series(dtype=float)
+        if bench_mask.any():
+            bench_series = sector_prices[bench_mask]["close"]
+        elif normalized_market == "US" and bench_label and "index_name" in sector_prices.columns:
+            label_mask = sector_prices["index_name"].astype(str) == bench_label
+            bench_series = sector_prices[label_mask]["close"] if label_mask.any() else pd.Series(dtype=float)
+        else:
+            bench_series = pd.Series(dtype=float)
     else:
         bench_series = pd.Series(dtype=float)
 
@@ -1442,6 +1550,10 @@ def load_dashboard_runtime_data(
             "signals": signals,
             "macro_result": macro_result,
             "macro_df": macro_df,
+            "market_data_reference_date": _resolve_price_reference_date(
+                sector_prices,
+                benchmark_code=str(settings.get("benchmark_code", "1001" if normalized_market == "KR" else "^GSPC")),
+            ),
             "price_status": price_status,
             "macro_status": macro_status,
             "market_blocking_error": market_blocking_error,
@@ -1518,6 +1630,7 @@ __all__ = [
     "cached_sector_prices",
     "cached_signals",
     "clear_investor_flow_transient_override",
+    "clear_market_price_transient_override",
     "compute_shared_flow_summary_map",
     "configure_dashboard_env",
     "get_all_sector_codes",
@@ -1545,5 +1658,6 @@ __all__ = [
     "render_dashboard_status_banner",
     "resolve_market_end_date",
     "set_investor_flow_transient_override",
+    "set_market_price_transient_override",
     "show_notice_toast",
 ]

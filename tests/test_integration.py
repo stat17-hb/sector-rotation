@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import sys
 import types
@@ -464,6 +465,180 @@ class TestIntegration:
         assert len(result) == 6
         assert summary["delta_codes"] == ["1001"]
 
+    def test_warm_sector_price_cache_refetches_raw_cache_with_empty_close_rows(self, tmp_path, monkeypatch):
+        """Raw cache rows with NaN closes must not count as complete coverage."""
+        import src.data_sources.krx_indices as krx_mod
+
+        curated = tmp_path / "curated"
+        raw_dir = tmp_path / "raw"
+        monkeypatch.setattr(krx_mod, "CURATED_DIR", curated)
+        monkeypatch.setattr(krx_mod, "RAW_DIR", raw_dir)
+        monkeypatch.setattr(krx_mod, "get_krx_provider", lambda: "OPENAPI")
+        monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "OPENAPI_KEY")
+
+        idx = pd.date_range("2024-01-01", periods=3, freq="B")
+        bad_raw = pd.DataFrame({"close": [float("nan"), float("nan"), float("nan")]}, index=idx)
+        code_dir = raw_dir / "1001"
+        code_dir.mkdir(parents=True)
+        bad_raw.to_parquet(code_dir / "20240105.parquet")
+
+        calls: list[tuple[list[str], str, str]] = []
+
+        def _fake_openapi(index_codes, start, end, force=False):
+            calls.append((list(index_codes), start, end))
+            return (
+                {"1001": pd.DataFrame({"close": [100.0, 101.0, 102.0]}, index=idx)},
+                {},
+                {"failed_days": [], "snapshot_failures": {}},
+            )
+
+        monkeypatch.setattr(krx_mod, "fetch_index_ohlcv_openapi_batch_detailed", _fake_openapi)
+
+        (status, result), summary = krx_mod.warm_sector_price_cache(
+            ["1001"],
+            "20240101",
+            "20240103",
+            reason="test_nan_raw_cache",
+        )
+
+        assert status == "LIVE"
+        assert calls == [(["1001"], "20240101", "20240103")]
+        assert result["close"].tolist() == [100.0, 101.0, 102.0]
+        assert summary["coverage_complete"] is True
+        frames, state = krx_mod._collect_raw_cache_state(["1001"], "20240101", "20240103")
+        assert state["1001"]["has_valid_close"] is True
+        assert frames["1001"]["close"].dropna().tolist() == [100.0, 101.0, 102.0]
+
+    def test_warm_sector_price_cache_refetches_internal_empty_close_rows(self, tmp_path, monkeypatch):
+        """A middle NaN close must trigger a targeted live refill, not forward-fill cache."""
+        import src.data_sources.krx_indices as krx_mod
+
+        curated = tmp_path / "curated"
+        raw_dir = tmp_path / "raw"
+        monkeypatch.setattr(krx_mod, "CURATED_DIR", curated)
+        monkeypatch.setattr(krx_mod, "RAW_DIR", raw_dir)
+        monkeypatch.setattr(krx_mod, "get_krx_provider", lambda: "OPENAPI")
+        monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "OPENAPI_KEY")
+
+        idx = pd.date_range("2024-01-01", periods=3, freq="B")
+        mixed_raw = pd.DataFrame({"close": [100.0, float("nan"), 102.0]}, index=idx)
+        code_dir = raw_dir / "1001"
+        code_dir.mkdir(parents=True)
+        mixed_raw.to_parquet(code_dir / "20240103.parquet")
+
+        calls: list[tuple[list[str], str, str]] = []
+
+        def _fake_openapi(index_codes, start, end, force=False):
+            calls.append((list(index_codes), start, end))
+            return (
+                {"1001": pd.DataFrame({"close": [101.0]}, index=pd.DatetimeIndex(["2024-01-02"]))},
+                {},
+                {"failed_days": [], "snapshot_failures": {}},
+            )
+
+        monkeypatch.setattr(krx_mod, "fetch_index_ohlcv_openapi_batch_detailed", _fake_openapi)
+
+        (status, result), summary = krx_mod.warm_sector_price_cache(
+            ["1001"],
+            "20240101",
+            "20240103",
+            reason="test_internal_nan_raw_cache",
+        )
+
+        assert status == "LIVE"
+        assert calls == [(["1001"], "20240102", "20240102")]
+        assert result["close"].tolist() == [100.0, 101.0, 102.0]
+        assert summary["coverage_complete"] is True
+
+    def test_build_sector_frame_prefers_valid_close_over_empty_korean_close(self):
+        """Merged OpenAPI caches may contain an empty Korean close column plus valid close."""
+        import src.data_sources.krx_indices as krx_mod
+
+        frame = pd.DataFrame(
+            {
+                "종가": [float("nan"), float("nan")],
+                "close": [100.0, 101.0],
+            },
+            index=pd.DatetimeIndex(["2024-01-02", "2024-01-03"]),
+        )
+
+        result = krx_mod._build_sector_frame("1001", frame)
+
+        assert result["close"].tolist() == [100.0, 101.0]
+
+    def test_raw_cache_coalesces_recent_close_over_historical_korean_close(self):
+        """Long raw windows must keep recent OpenAPI close values row by row."""
+        import src.data_sources.krx_indices as krx_mod
+
+        old_idx = pd.date_range("2023-05-05", "2026-04-17", freq="B")
+        recent_idx = pd.date_range("2026-04-20", "2026-05-04", freq="B")
+        idx = old_idx.append(recent_idx)
+        latest_close = 2000.0 + len(recent_idx) - 1
+        frame = pd.DataFrame(
+            {
+                "종가": [1000.0 + i for i in range(len(old_idx))]
+                + [float("nan")] * len(recent_idx),
+                "close": [float("nan")] * len(old_idx)
+                + [2000.0 + i for i in range(len(recent_idx))],
+            },
+            index=idx,
+        )
+
+        result = krx_mod._build_sector_frame("1001", frame)
+        valid = krx_mod._valid_close_raw_cache(frame)
+        missing_ranges = krx_mod._compute_missing_ranges(frame, "20230505", "20260504")
+
+        assert result.loc[pd.Timestamp("2026-05-04"), "close"] == latest_close
+        assert valid.index.max() == pd.Timestamp("2026-05-04")
+        assert ("20260420", "20260504") not in missing_ranges
+
+    def test_openapi_empty_holiday_gap_does_not_mark_cached_code_failed(self, tmp_path, monkeypatch):
+        """A normal 0-row holiday snapshot should not poison an otherwise usable raw cache."""
+        import src.data_sources.krx_indices as krx_mod
+
+        raw_dir = tmp_path / "raw"
+        monkeypatch.setattr(krx_mod, "RAW_DIR", raw_dir)
+        monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "OPENAPI_KEY")
+        monkeypatch.setattr(krx_mod, "resolve_openapi_api_id", lambda code: "kospi_dd_trd")
+        monkeypatch.setattr(krx_mod, "_predict_openapi_requests", lambda *a, **kw: 1)
+
+        _seed_raw_cache(
+            raw_dir,
+            "1001",
+            pd.DataFrame(
+                {"close": [100.0, 101.0]},
+                index=pd.DatetimeIndex(["2024-01-02", "2024-01-03"]),
+            ),
+        )
+
+        monkeypatch.setattr(
+            krx_mod,
+            "fetch_index_ohlcv_openapi_batch_detailed",
+            lambda *a, **kw: (
+                {},
+                {"1001": "KRX OpenAPI returned no data rows"},
+                {
+                    "failed_days": [],
+                    "snapshot_failures": {},
+                    "request_count": 1,
+                    "processed_requests": 1,
+                    "aborted": False,
+                    "abort_reason": "",
+                },
+            ),
+        )
+
+        frames, failures, summary = krx_mod._refresh_openapi_raw_cache(
+            ["1001"],
+            "20240101",
+            "20240103",
+        )
+
+        assert failures == {}
+        assert summary["processed_requests"] == 1
+        built = krx_mod._build_sector_frame("1001", frames["1001"])
+        assert built["close"].tolist() == [100.0, 101.0]
+
     def test_warm_sector_price_cache_uses_benchmark_dates_for_coverage(self, tmp_path, monkeypatch):
         """Coverage should be based on stored benchmark trade dates, not raw calendar boundaries."""
         import src.data_sources.krx_indices as krx_mod
@@ -638,6 +813,96 @@ class TestIntegration:
         assert not result.empty
         assert set(result["index_code"].astype(str).unique()) == {"1001", "5044"}
 
+    def test_load_sector_prices_uses_recent_uneven_warehouse_cache_for_oversized_openapi_range(
+        self, tmp_path, monkeypatch, caplog
+    ):
+        """Recent per-code warehouse lag should not force oversized interactive refreshes."""
+        import numpy as np
+        import src.data_sources.krx_indices as krx_mod
+
+        monkeypatch.setattr(krx_mod, "CURATED_DIR", tmp_path / "curated")
+        monkeypatch.setattr(krx_mod, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(krx_mod, "get_krx_provider", lambda: "OPENAPI")
+        monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "OPENAPI_KEY")
+
+        frames = []
+        for code, end_date in {"1001": "2024-04-30", "5044": "2024-04-24"}.items():
+            idx = pd.date_range("2024-01-02", end_date, freq="B")
+            frames.append(
+                pd.DataFrame(
+                    {
+                        "index_code": code,
+                        "index_name": f"Sector {code}",
+                        "close": np.linspace(1000.0, 1100.0, len(idx)),
+                    },
+                    index=idx,
+                )
+            )
+        uneven_stale = pd.concat(frames)
+
+        monkeypatch.setattr(krx_mod, "read_market_prices", lambda *args, **kwargs: uneven_stale)
+        monkeypatch.setattr(krx_mod, "is_market_coverage_complete", lambda *args, **kwargs: False)
+        monkeypatch.setattr(
+            krx_mod,
+            "_collect_raw_cache_state",
+            lambda *args, **kwargs: (
+                {},
+                {
+                    "1001": {"has_slice": False, "has_older_gap": False},
+                    "5044": {"has_slice": False, "has_older_gap": False},
+                },
+            ),
+        )
+        monkeypatch.setattr(
+            krx_mod,
+            "warm_sector_price_cache",
+            lambda *a, **kw: (_ for _ in ()).throw(AssertionError("warm should not run")),
+        )
+
+        with caplog.at_level(logging.INFO, logger=krx_mod.logger.name):
+            status, result = krx_mod.load_sector_prices(["1001", "5044"], "20240101", "20240430")
+
+        assert status == "CACHED"
+        assert set(result["index_code"].astype(str).unique()) == {"1001", "5044"}
+        assert result[result["index_code"].astype(str) == "5044"].index.max() == pd.Timestamp("2024-04-24")
+        assert "serving usable stale warehouse cache" in caplog.text
+        assert not any(record.levelno >= logging.WARNING for record in caplog.records)
+
+    def test_warm_krx_cache_uses_active_kr_universe_before_legacy_config(self, monkeypatch):
+        """The warm CLI should cover the same active KR universe used by app loads."""
+        import scripts.warm_krx_cache as warm_cli
+
+        monkeypatch.setattr(
+            warm_cli,
+            "get_active_kr_index_universe_codes",
+            lambda benchmark_code="1001": ["1001", "5043", "5044", "5065"],
+        )
+
+        assert warm_cli._load_sector_codes() == ["1001", "5043", "5044", "5065"]
+
+    def test_active_kr_index_universe_codes_canonicalizes_dim_index(self, monkeypatch):
+        """The shared KR universe resolver should filter broad/non-KRX rows."""
+        import src.data_sources.krx_indices as krx_mod
+
+        monkeypatch.setattr(
+            krx_mod,
+            "read_active_index_dimension",
+            lambda market="KR": pd.DataFrame(
+                [
+                    {"index_code": "1001", "index_name": "코스피", "family": "kospi_dd_trd"},
+                    {"index_code": "5042", "index_name": "KRX 100", "family": "krx_dd_trd"},
+                    {"index_code": "5044", "index_name": "KRX 반도체", "family": "krx_dd_trd"},
+                    {"index_code": "5064", "index_name": "KRX 정보기술", "family": "krx_dd_trd"},
+                    {"index_code": "5351", "index_name": "KRX 300 정보기술", "family": "krx_dd_trd"},
+                    {"index_code": "1155", "index_name": "코스피 200 정보기술", "family": "kospi_dd_trd"},
+                ]
+            ),
+        )
+        monkeypatch.setattr(krx_mod, "is_legacy_kr_index_subset", lambda market="KR": False)
+        monkeypatch.setattr(krx_mod, "repair_stale_kr_index_dimension_names", lambda benchmark_code: pd.DataFrame())
+
+        assert krx_mod.get_active_kr_index_universe_codes("1001") == ["1001", "5044", "5064"]
+
     def test_load_sector_prices_raises_access_denied_instead_of_cached_fallback(self, tmp_path, monkeypatch):
         """Interactive OpenAPI access denial should surface as a blocking error."""
         import src.data_sources.krx_indices as krx_mod
@@ -763,6 +1028,38 @@ class TestIntegration:
         assert not result.empty
         assert set(result["index_code"].unique()) == {"5044"}
         assert not (curated / "sector_prices.parquet").exists()
+
+    def test_pykrx_refresh_circuit_breaks_repeated_empty_json_failures(self, tmp_path, monkeypatch):
+        """PYKRX path should stop early when KRX returns the same unusable payload repeatedly."""
+        import src.data_sources.krx_indices as krx_mod
+
+        monkeypatch.setattr(krx_mod, "RAW_DIR", tmp_path / "raw")
+        monkeypatch.setattr(krx_mod, "get_krx_provider", lambda: "PYKRX")
+        monkeypatch.setattr(krx_mod, "get_krx_openapi_key", lambda: "")
+        monkeypatch.setattr(
+            krx_mod,
+            "_get_index_universe",
+            lambda: frozenset({"1001", "5042", "5044", "5045", "5046"}),
+        )
+
+        calls: list[str] = []
+
+        def _broken_fetch(index_code, start, end, chunk_years=2):
+            calls.append(str(index_code))
+            raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+        monkeypatch.setattr(krx_mod, "fetch_index_ohlcv", _broken_fetch)
+
+        _frames, failures, summary = krx_mod._refresh_pykrx_raw_cache(
+            ["1001", "5042", "5044", "5045", "5046"],
+            "20240101",
+            "20240105",
+        )
+
+        assert calls == ["1001", "5042", "5044"]
+        assert set(failures) == {"1001", "5042", "5044"}
+        assert summary["aborted"] is True
+        assert summary["abort_reason"] == "PYKRX_ENDPOINT_UNUSABLE_PAYLOAD"
 
     def test_partial_sector_failure_skips_gracefully(self):
         """build_signal_table returns N/A for sectors with missing data, valid signals for rest."""

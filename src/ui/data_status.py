@@ -57,7 +57,6 @@ def get_button_states(data_status: Mapping[str, str]) -> dict[str, bool]:
     return {
         "refresh_market": True,
         "refresh_macro": True,
-        "recompute": not sample,
     }
 
 

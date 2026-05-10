@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import socket
 import pandas as pd
+import pytest
 
 from src.data_sources.krx_constituents import ConstituentLookupResult
 import src.data_sources.krx_investor_flow as flow_source
@@ -18,6 +20,18 @@ _SECTOR_MAP = {
         }
     }
 }
+
+
+@pytest.fixture(autouse=True)
+def _reset_investor_flow_access_denied_cooldown(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        flow_source,
+        "ACCESS_DENIED_COOLDOWN_STATE_PATH",
+        tmp_path / "krx_investor_flow_access_denied_cooldown.json",
+    )
+    flow_source._reset_access_denied_cooldown()
+    yield
+    flow_source._reset_access_denied_cooldown()
 
 
 def _single_day_raw_frame(day: str) -> pd.DataFrame:
@@ -112,6 +126,160 @@ def test_collect_sector_investor_flow_aggregates_current_constituents(monkeypatc
     assert set(raw_frame["investor_type"]) == {"개인", "외국인", "기관합계"}
     assert constituent_calls
     assert constituent_calls[0] == ("5044", "20260408", False)
+
+
+def test_collect_sector_investor_flow_short_circuits_during_access_denied_cooldown(monkeypatch):
+    now = datetime(2026, 5, 6, 10, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(flow_source, "_utc_now", lambda: now)
+    flow_source._activate_access_denied_cooldown("ACCESS_DENIED: previous KRX block", now=now)
+    monkeypatch.setattr(
+        flow_source,
+        "ensure_pykrx_transport_compat",
+        lambda: (_ for _ in ()).throw(AssertionError("pykrx transport must not warm during cooldown")),
+    )
+
+    with pytest.raises(flow_source.KRXInvestorFlowEndpointUnavailable, match="cooling down"):
+        flow_source.collect_sector_investor_flow(
+            sector_map=_SECTOR_MAP,
+            start="20260407",
+            end="20260408",
+        )
+
+
+def test_access_denied_cooldown_persists_to_runtime_file(monkeypatch):
+    now = datetime(2026, 5, 6, 10, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(flow_source, "_utc_now", lambda: now)
+
+    cooldown = flow_source._activate_access_denied_cooldown("ACCESS_DENIED: previous KRX block", now=now)
+
+    state_path = flow_source.ACCESS_DENIED_COOLDOWN_STATE_PATH
+    assert state_path.exists()
+    payload = __import__("json").loads(state_path.read_text(encoding="utf-8"))
+    assert payload["active"] is True
+    assert payload["until"] == cooldown["until"]
+    assert payload["detail"] == "ACCESS_DENIED: previous KRX block"
+
+
+def test_access_denied_cooldown_clears_expired_runtime_file(monkeypatch):
+    now = datetime(2026, 5, 6, 10, 0, tzinfo=timezone.utc)
+    expired = datetime(2026, 5, 6, 9, 0, tzinfo=timezone.utc)
+    state_path = flow_source.ACCESS_DENIED_COOLDOWN_STATE_PATH
+    state_path.write_text(
+        __import__("json").dumps(
+            {
+                "active": True,
+                "until": expired.isoformat(),
+                "detail": "ACCESS_DENIED: old block",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow_source, "_utc_now", lambda: now)
+
+    assert flow_source._get_access_denied_cooldown() is None
+    assert not state_path.exists()
+
+
+def test_access_denied_cooldown_ignores_corrupt_runtime_file():
+    state_path = flow_source.ACCESS_DENIED_COOLDOWN_STATE_PATH
+    state_path.write_text("{not-json", encoding="utf-8")
+
+    assert flow_source._get_access_denied_cooldown() is None
+    assert not state_path.exists()
+
+
+def test_access_denied_cooldown_ignores_inactive_runtime_file():
+    state_path = flow_source.ACCESS_DENIED_COOLDOWN_STATE_PATH
+    state_path.write_text(
+        __import__("json").dumps(
+            {
+                "active": False,
+                "until": "2026-05-06T16:00:00+00:00",
+                "detail": "ACCESS_DENIED: stale inactive state",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert flow_source._get_access_denied_cooldown(
+        now=datetime(2026, 5, 6, 10, 0, tzinfo=timezone.utc)
+    ) is None
+    assert not state_path.exists()
+
+
+def test_access_denied_cooldown_prefers_newer_runtime_file_over_stale_memory(monkeypatch):
+    stale_now = datetime(2026, 5, 6, 9, 0, tzinfo=timezone.utc)
+    current_now = datetime(2026, 5, 6, 11, 0, tzinfo=timezone.utc)
+    fresh_until = datetime(2026, 5, 6, 16, 0, tzinfo=timezone.utc)
+    flow_source._activate_access_denied_cooldown("ACCESS_DENIED: stale memory", now=stale_now)
+    state_path = flow_source.ACCESS_DENIED_COOLDOWN_STATE_PATH
+    state_path.write_text(
+        __import__("json").dumps(
+            {
+                "active": True,
+                "until": fresh_until.isoformat(),
+                "detail": "ACCESS_DENIED: newer process block",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(flow_source, "_utc_now", lambda: current_now)
+
+    cooldown = flow_source._get_access_denied_cooldown()
+
+    assert cooldown is not None
+    assert cooldown["until"] == fresh_until.isoformat()
+    assert cooldown["detail"] == "ACCESS_DENIED: newer process block"
+    assert state_path.exists()
+
+
+def test_access_denied_cooldown_survives_memory_reset_for_manual_refresh(monkeypatch):
+    now = datetime(2026, 5, 6, 10, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(flow_source, "_utc_now", lambda: now)
+    flow_source._activate_access_denied_cooldown("ACCESS_DENIED: previous KRX block", now=now)
+    flow_source._reset_access_denied_cooldown_memory_only()
+    monkeypatch.setattr(
+        flow_source,
+        "resolve_investor_flow_refresh_window",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("window resolver must not run during persisted cooldown")),
+    )
+    monkeypatch.setattr(
+        flow_source,
+        "collect_sector_investor_flow",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("live KRX collection must not run during persisted cooldown")),
+    )
+    monkeypatch.setattr(
+        flow_source,
+        "read_investor_flow_operational_complete_cursor",
+        lambda **kwargs: "20260405",
+    )
+    monkeypatch.setattr(flow_source, "load_sector_investor_flow", lambda **kwargs: ("CACHED", pd.DataFrame()))
+
+    _, summary = flow_source.run_manual_investor_flow_refresh(
+        sector_map={"regimes": {"Recovery": {"sectors": [{"code": "5044", "name": "KRX 반도체"}]}}},
+        end_date_str="20260408",
+    )
+
+    assert summary["status"] == "CACHED"
+    assert summary["window"]["mode"] == "access_denied_cooldown"
+    assert summary["failed_codes"]["refresh"].startswith("ACCESS_DENIED:")
+    assert summary["cooldown"]["detail"] == "ACCESS_DENIED: previous KRX block"
+
+
+def test_requested_trading_days_uses_weekday_fallback_during_access_denied_cooldown(monkeypatch):
+    now = datetime(2026, 5, 6, 10, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(flow_source, "_utc_now", lambda: now)
+    flow_source._activate_access_denied_cooldown("ACCESS_DENIED: previous KRX block", now=now)
+    monkeypatch.setattr(
+        flow_source,
+        "ensure_pykrx_transport_compat",
+        lambda: (_ for _ in ()).throw(AssertionError("pykrx transport must not warm during cooldown")),
+    )
+
+    days, source = flow_source._requested_trading_days_with_source("20260406", "20260408")
+
+    assert days == ["20260406", "20260407", "20260408"]
+    assert source == "access_denied_cooldown_weekday_fallback"
 
 
 def test_collect_sector_investor_flow_uses_trading_day_calendar_for_failed_days(monkeypatch):
@@ -904,6 +1072,188 @@ def test_run_manual_investor_flow_refresh_surfaces_auth_required(monkeypatch):
     )
 
     assert "AUTH_REQUIRED" in summary["failed_codes"]["refresh"]
+
+
+def test_run_manual_investor_flow_refresh_classifies_access_denied(monkeypatch):
+    monkeypatch.setattr(
+        flow_source,
+        "collect_sector_investor_flow",
+        lambda **kwargs: (_ for _ in ()).throw(
+            flow_source.KRXInvestorFlowEndpointUnavailable(
+                "KRX investor-flow trading-value endpoint returned an empty or non-JSON response. "
+                "Last builder=raw_general, detail=KRXAccessDeniedError: "
+                "KRX JSON endpoint returned access denied HTML (status=403)"
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        flow_source,
+        "load_sector_investor_flow",
+        lambda **kwargs: ("CACHED", pd.DataFrame()),
+    )
+    recorded: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        flow_source,
+        "record_investor_flow_run_failure",
+        lambda **kwargs: recorded.append(kwargs),
+    )
+
+    _, summary = flow_source.run_manual_investor_flow_refresh(
+        sector_map={"regimes": {"Recovery": {"sectors": [{"code": "5044", "name": "KRX 반도체"}]}}},
+        end_date_str="20260408",
+    )
+
+    assert summary["status"] == "CACHED"
+    assert summary["failed_codes"]["refresh"].startswith("ACCESS_DENIED:")
+    assert "status=403" in summary["failed_codes"]["refresh"]
+    assert recorded[0]["summary"]["failed_codes"]["refresh"].startswith("ACCESS_DENIED:")
+
+
+def test_run_manual_investor_flow_refresh_logs_expected_access_denied_without_stacktrace(monkeypatch):
+    monkeypatch.setattr(
+        flow_source,
+        "collect_sector_investor_flow",
+        lambda **kwargs: (_ for _ in ()).throw(
+            flow_source.KRXInvestorFlowEndpointUnavailable(
+                "KRX investor-flow trading-value endpoint returned an empty or non-JSON response. "
+                "Last builder=raw_general, detail=KRXAccessDeniedError: "
+                "KRX JSON endpoint returned access denied HTML (status=403)"
+            )
+        ),
+    )
+    monkeypatch.setattr(flow_source, "load_sector_investor_flow", lambda **kwargs: ("CACHED", pd.DataFrame()))
+    monkeypatch.setattr(flow_source, "record_investor_flow_run_failure", lambda **kwargs: None)
+
+    warnings: list[str] = []
+    exceptions: list[str] = []
+    monkeypatch.setattr(flow_source.logger, "warning", lambda message, *args, **kwargs: warnings.append(message % args))
+    monkeypatch.setattr(flow_source.logger, "exception", lambda message, *args, **kwargs: exceptions.append(message))
+
+    _, summary = flow_source.run_manual_investor_flow_refresh(
+        sector_map={"regimes": {"Recovery": {"sectors": [{"code": "5044", "name": "KRX 반도체"}]}}},
+        end_date_str="20260408",
+    )
+
+    assert summary["status"] == "CACHED"
+    assert summary["failed_codes"]["refresh"].startswith("ACCESS_DENIED:")
+    assert exceptions == []
+    assert len(warnings) == 1
+    assert "expected KRX endpoint failure" in warnings[0]
+
+
+def test_run_manual_investor_flow_refresh_activates_access_denied_cooldown(monkeypatch):
+    now = datetime(2026, 5, 6, 10, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(flow_source, "_utc_now", lambda: now)
+    monkeypatch.setattr(
+        flow_source,
+        "collect_sector_investor_flow",
+        lambda **kwargs: (_ for _ in ()).throw(
+            flow_source.KRXInvestorFlowEndpointUnavailable(
+                "KRX investor-flow trading-value endpoint returned an empty or non-JSON response. "
+                "Last builder=raw_general, detail=KRXAccessDeniedError: "
+                "KRX JSON endpoint returned access denied HTML (status=403)"
+            )
+        ),
+    )
+    monkeypatch.setattr(flow_source, "load_sector_investor_flow", lambda **kwargs: ("CACHED", pd.DataFrame()))
+    monkeypatch.setattr(flow_source, "record_investor_flow_run_failure", lambda **kwargs: None)
+
+    _, summary = flow_source.run_manual_investor_flow_refresh(
+        sector_map={"regimes": {"Recovery": {"sectors": [{"code": "5044", "name": "KRX 반도체"}]}}},
+        start_date_str="20260401",
+        end_date_str="20260408",
+    )
+
+    cooldown = flow_source._get_access_denied_cooldown(now=now)
+    assert summary["status"] == "CACHED"
+    assert summary["failed_codes"]["refresh"].startswith("ACCESS_DENIED:")
+    assert summary["cooldown"]["active"] is True
+    assert cooldown is not None
+    assert cooldown["detail"].startswith("ACCESS_DENIED:")
+
+
+def test_run_manual_investor_flow_refresh_short_circuits_during_access_denied_cooldown(monkeypatch):
+    now = datetime(2026, 5, 6, 10, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(flow_source, "_utc_now", lambda: now)
+    flow_source._activate_access_denied_cooldown("ACCESS_DENIED: previous KRX block", now=now)
+    monkeypatch.setattr(
+        flow_source,
+        "collect_sector_investor_flow",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("live KRX collection must not run during cooldown")),
+    )
+    monkeypatch.setattr(flow_source, "load_sector_investor_flow", lambda **kwargs: ("CACHED", pd.DataFrame()))
+
+    _, summary = flow_source.run_manual_investor_flow_refresh(
+        sector_map={"regimes": {"Recovery": {"sectors": [{"code": "5044", "name": "KRX 반도체"}]}}},
+        start_date_str="20260401",
+        end_date_str="20260408",
+    )
+
+    assert summary["status"] == "CACHED"
+    assert summary["processed_requests"] == 0
+    assert summary["failed_codes"]["refresh"].startswith("ACCESS_DENIED:")
+    assert "cooling down" in summary["failed_codes"]["refresh"]
+    assert summary["cooldown"]["active"] is True
+
+
+def test_run_manual_investor_flow_refresh_short_circuits_default_window_during_cooldown(monkeypatch):
+    now = datetime(2026, 5, 6, 10, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(flow_source, "_utc_now", lambda: now)
+    flow_source._activate_access_denied_cooldown("ACCESS_DENIED: previous KRX block", now=now)
+    monkeypatch.setattr(
+        flow_source,
+        "resolve_investor_flow_refresh_window",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("window resolver must not run during cooldown")),
+    )
+    monkeypatch.setattr(
+        flow_source,
+        "collect_sector_investor_flow",
+        lambda **kwargs: (_ for _ in ()).throw(AssertionError("live KRX collection must not run during cooldown")),
+    )
+    monkeypatch.setattr(
+        flow_source,
+        "read_investor_flow_operational_complete_cursor",
+        lambda **kwargs: "20260405",
+    )
+    monkeypatch.setattr(flow_source, "load_sector_investor_flow", lambda **kwargs: ("CACHED", pd.DataFrame()))
+
+    _, summary = flow_source.run_manual_investor_flow_refresh(
+        sector_map={"regimes": {"Recovery": {"sectors": [{"code": "5044", "name": "KRX 반도체"}]}}},
+        end_date_str="20260408",
+    )
+
+    assert summary["status"] == "CACHED"
+    assert summary["window"]["mode"] == "access_denied_cooldown"
+    assert summary["window"]["complete_cursor"] == "20260405"
+    assert summary["processed_requests"] == 0
+    assert summary["failed_codes"]["refresh"].startswith("ACCESS_DENIED:")
+
+
+def test_run_manual_investor_flow_refresh_does_not_cooldown_non_access_denied_failure(monkeypatch):
+    now = datetime(2026, 5, 6, 10, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(flow_source, "_utc_now", lambda: now)
+    monkeypatch.setattr(
+        flow_source,
+        "collect_sector_investor_flow",
+        lambda **kwargs: (_ for _ in ()).throw(
+            flow_source.KRXInvestorFlowEndpointUnavailable(
+                "KRX investor-flow trading-value endpoint returned empty frames for "
+                "3 consecutive tickers. Stopping early to avoid repeated pykrx wrapper failures."
+            )
+        ),
+    )
+    monkeypatch.setattr(flow_source, "load_sector_investor_flow", lambda **kwargs: ("CACHED", pd.DataFrame()))
+    monkeypatch.setattr(flow_source, "record_investor_flow_run_failure", lambda **kwargs: None)
+
+    _, summary = flow_source.run_manual_investor_flow_refresh(
+        sector_map={"regimes": {"Recovery": {"sectors": [{"code": "5044", "name": "KRX 반도체"}]}}},
+        start_date_str="20260401",
+        end_date_str="20260408",
+    )
+
+    assert summary["status"] == "CACHED"
+    assert "cooldown" not in summary
+    assert flow_source._get_access_denied_cooldown(now=now) is None
 
 
 def test_resolve_investor_flow_refresh_window_bootstraps_without_cursor():
@@ -1709,6 +2059,106 @@ def test_collect_sector_investor_flow_preserves_exception_backed_failure_provena
     assert detail["family"] == "exception_backed_empty"
     assert detail["error_legs"] == ["buy"]
     assert any(attempt["status"] == "error" for attempt in detail["legs"]["buy"]["attempts"])
+
+
+def test_collect_sector_investor_flow_fails_fast_on_krx_empty_json_without_wrapper_spam(monkeypatch):
+    monkeypatch.setattr(flow_source, "ensure_pykrx_transport_compat", lambda: None)
+    monkeypatch.setattr(flow_source, "_check_socket_stack", lambda: None)
+    monkeypatch.setattr(
+        flow_source,
+        "_resolve_frozen_trading_day_truth",
+        lambda *args, **kwargs: (["20260407"], "warehouse_market_prices", True),
+    )
+    monkeypatch.setattr(
+        flow_source,
+        "_build_sector_universe",
+        lambda *args, **kwargs: flow_source.SectorUniverse(
+            sector_codes=["5044"],
+            sector_names={"5044": "KRX 반도체"},
+            ticker_to_sector_codes={"005930": ["5044"], "000660": ["5044"]},
+        ),
+    )
+
+    import pykrx.stock as stock
+
+    wrapper_calls: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(stock, "get_market_ticker_name", lambda ticker: "Name")
+
+    def _wrapper(*args, **kwargs):
+        wrapper_calls.append((args, kwargs))
+        return pd.DataFrame()
+
+    def _raw_frame(*, ticker: str, start: str, end: str, on: str, detail: bool) -> pd.DataFrame:
+        raise flow_source.KRXInvalidPayloadError(
+            "KRX JSON endpoint returned non-JSON payload "
+            "(status=200, content_type=unknown, snippet='')"
+        )
+
+    monkeypatch.setattr(stock, "get_market_trading_value_by_date", _wrapper)
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_raw", _raw_frame)
+
+    try:
+        flow_source.collect_sector_investor_flow(
+            sector_map=_SECTOR_MAP,
+            start="20260407",
+            end="20260407",
+        )
+    except flow_source.KRXInvestorFlowEndpointUnavailable as exc:
+        assert "empty or non-JSON response" in str(exc)
+    else:
+        raise AssertionError("Expected KRXInvestorFlowEndpointUnavailable")
+
+    assert wrapper_calls == []
+
+
+def test_collect_sector_investor_flow_circuit_breaks_repeated_empty_wrapper_results(monkeypatch):
+    monkeypatch.setattr(flow_source, "ensure_pykrx_transport_compat", lambda: None)
+    monkeypatch.setattr(flow_source, "_check_socket_stack", lambda: None)
+    monkeypatch.setattr(
+        flow_source,
+        "_resolve_frozen_trading_day_truth",
+        lambda *args, **kwargs: (["20260407"], "warehouse_market_prices", True),
+    )
+    monkeypatch.setattr(
+        flow_source,
+        "_build_sector_universe",
+        lambda *args, **kwargs: flow_source.SectorUniverse(
+            sector_codes=["5044"],
+            sector_names={"5044": "KRX 반도체"},
+            ticker_to_sector_codes={
+                "005930": ["5044"],
+                "000660": ["5044"],
+                "035420": ["5044"],
+                "051910": ["5044"],
+            },
+        ),
+    )
+
+    import pykrx.stock as stock
+
+    wrapper_calls: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(stock, "get_market_ticker_name", lambda ticker: "Name")
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_raw", lambda **kwargs: pd.DataFrame())
+
+    def _wrapper(*args, **kwargs):
+        wrapper_calls.append((args, kwargs))
+        return pd.DataFrame()
+
+    monkeypatch.setattr(stock, "get_market_trading_value_by_date", _wrapper)
+    monkeypatch.setattr(flow_source, "_fetch_ticker_trading_value_frame_detailed", lambda *args, **kwargs: pd.DataFrame())
+
+    try:
+        flow_source.collect_sector_investor_flow(
+            sector_map=_SECTOR_MAP,
+            start="20260407",
+            end="20260407",
+        )
+    except flow_source.KRXInvestorFlowEndpointUnavailable as exc:
+        assert "3 consecutive tickers" in str(exc)
+    else:
+        raise AssertionError("Expected KRXInvestorFlowEndpointUnavailable")
+
+    assert len(wrapper_calls) == flow_source.MAX_CONSECUTIVE_EMPTY_TRADING_VALUE_TICKERS * 3
 
 
 def test_read_warm_status_exposes_sector_and_ticker_failure_buckets():

@@ -44,6 +44,16 @@ class _RetrySession:
         return item
 
 
+class _CaptureUrlSession:
+    def __init__(self, payload):
+        self.payload = payload
+        self.url = ""
+
+    def get(self, url, *args, **kwargs):
+        self.url = str(url)
+        return _Response(self.payload)
+
+
 def _payload(
     symbol: str,
     closes: list[float],
@@ -90,6 +100,15 @@ def test_fetch_yahoo_chart_history_parses_daily_rows():
     assert list(frame["ticker"]) == ["SPY", "SPY"]
     assert list(frame["close"]) == [100.0, 101.0]
     assert frame.index.tolist() == [pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-03")]
+
+
+def test_fetch_yahoo_chart_history_url_encodes_index_ticker():
+    session = _CaptureUrlSession(_payload("^GSPC", [7000.0, 7010.0], [1000, 1100]))
+
+    frame = yahoo_chart.fetch_yahoo_chart_history("^GSPC", "20240102", "20240103", session=session)
+
+    assert session.url.endswith("/%5EGSPC")
+    assert list(frame["ticker"]) == ["^GSPC", "^GSPC"]
 
 
 def test_fetch_yahoo_chart_history_batch_collects_multiple_tickers():

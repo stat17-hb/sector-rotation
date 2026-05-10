@@ -7,6 +7,8 @@
 - Rule: CDP screenshot tooling must select a target with `type == "page"` and a URL matching the intended app URL; never attach to the first `/json` target blindly.
 - Pattern: Streamlit can serve the shell with HTTP 200 for an invalid page path while rendering a `Page not found` modal.
 - Rule: Route smoke for Streamlit navigation must inspect rendered DOM/text for `Page not found`, not only HTTP status.
+- Pattern: Dashboard showed a calendar/provider target date as the data 기준일 while cached market prices were older than that target.
+- Rule: For market-data freshness UI, compute the displayed 기준일 from the actual loaded price frame, preferably the benchmark row's max trade date; show target/query dates separately when they differ.
 
 ## 2026-02-22
 - Pattern: User asked to reconstruct a high-level evaluation into actionable execution.
@@ -105,3 +107,13 @@
 - Rule: 토큰 마이그레이션이 끝난 뒤에도 `버튼 radius`, `탭 radius`, `메트릭/카드 제목 크기`처럼 실제 체감 계층을 만드는 CSS 값을 다시 확인한다. 토큰만 맞추고 체감 비례를 방치하지 않는다.
 - Pattern: 설명성 문구를 `analysis-toolbar__title` 같은 제목 계층에 직접 넣어, 한글 긴 문장이 패널 타이틀급으로 읽혔다.
 - Rule: 긴 안내 문장은 제목과 분리한다. 제목은 짧게 두고, 정책/범위 설명은 별도 description/caption 계층으로 내려서 body-small 이하로 렌더한다.
+
+## 2026-05-05
+- Pattern: 데이터 수집 이력 샘플 요구가 바뀌었는데 계획/테스트 문구가 기존 "최신 5 + 오래된 5" 계약을 계속 들고 있었다.
+- Rule: 사용자가 샘플 기준을 수정하면 warehouse query, UI copy, 테스트명/기대값, 계획 산출물까지 같은 샘플 계약으로 동시에 갱신한다.
+- Pattern: 데이터 수집 이력 화면에 연구 뷰용 downstream 필터가 공통 렌더링되어, 화면 목적과 무관한 컨트롤이 노출됐다.
+- Rule: 페이지 공통 컨트롤은 모든 라우트에 무조건 렌더하지 않는다. `quality`/운영 관리 화면처럼 진단 목적이 다른 페이지는 라우팅 테스트로 필터·분석 컨트롤 비노출을 고정한다.
+- Pattern: Market refresh was treated as fixed after improving the visible fallback notice, but KRX raw-cache coverage still trusted poisoned parquet snapshots with empty `close` values.
+- Rule: For refresh/cache bugs, prove the exact failing provider path with a manual reproduction and test the cache-validity predicate, not only the UI notice text.
+- Rule: Raw market cache coverage must be based on numeric, non-null close values for each required business date; earliest/latest dates alone are insufficient because internal NaN rows can be forward-filled later.
+- Rule: When repairing an older requested window, ensure the latest raw-cache snapshot label is updated or merged so a newer poisoned snapshot cannot keep winning `_latest_raw_cache_file()`.

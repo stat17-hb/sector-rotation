@@ -238,6 +238,7 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=90)
     parser.add_argument("--min-text-len", type=int, default=300)
     parser.add_argument("--chrome-path", default=None)
+    parser.add_argument("--mobile-user-agent", action="store_true")
     parser.add_argument("--reuse-server", action="store_true")
     parser.add_argument("--allow-page-not-found", action="store_true")
     args = parser.parse_args()
@@ -292,15 +293,28 @@ def main() -> int:
         client = CdpClient(str(page["webSocketDebuggerUrl"]))
         client.call("Page.enable")
         client.call("Runtime.enable")
+        client.call("Network.enable")
         client.call(
             "Emulation.setDeviceMetricsOverride",
             {
                 "width": args.width,
                 "height": args.height,
                 "deviceScaleFactor": 1,
-                "mobile": False,
+                "mobile": bool(args.mobile_user_agent),
             },
         )
+        if args.mobile_user_agent:
+            client.call(
+                "Network.setUserAgentOverride",
+                {
+                    "userAgent": (
+                        "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+                        "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 "
+                        "Mobile/15E148 Safari/604.1"
+                    )
+                },
+            )
+            client.call("Page.navigate", {"url": target_url})
         status = _wait_for_streamlit_ready(client, timeout_sec=args.timeout, min_text_len=args.min_text_len)
         if status.get("hasPageNotFound") and not args.allow_page_not_found:
             raise RuntimeError(

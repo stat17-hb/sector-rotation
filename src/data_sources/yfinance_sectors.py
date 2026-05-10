@@ -12,6 +12,7 @@ import pandas as pd
 
 from src.contracts.validators import normalize_then_validate
 from src.data_sources.warehouse import (
+    can_acquire_write_lock,
     close_cached_read_only_connection,
     export_market_parquet,
     get_dataset_artifact_key,
@@ -34,6 +35,8 @@ LoaderResult = tuple[DataStatus, pd.DataFrame]
 CURATED_PATH = Path("data/curated/sector_prices_us.parquet")
 MARKET_ID = "US"
 DEFAULT_TICKER_NAMES: dict[str, str] = {
+    "^GSPC": "S&P 500",
+    "^IXIC": "Nasdaq Composite",
     "SPY": "S&P 500",
     "XLB": "Materials",
     "XLC": "Communication Services",
@@ -72,17 +75,36 @@ def _to_long_frame(history_frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _index_dimension_rows(tickers: list[str]) -> list[dict[str, Any]]:
+    benchmark_code = _configured_benchmark_code()
     return [
         {
             "index_code": ticker,
             "index_name": DEFAULT_TICKER_NAMES.get(ticker, ticker),
-            "family": "ETF",
-            "is_benchmark": ticker == "SPY",
+            "family": "INDEX" if str(ticker).startswith("^") else "ETF",
+            "is_benchmark": ticker == benchmark_code,
             "is_active": True,
             "export_sector": None,
         }
         for ticker in tickers
     ]
+
+
+def _configured_benchmark_code() -> str:
+    try:
+        from config.markets import load_market_configs
+
+        settings, _, _, _ = load_market_configs(MARKET_ID)
+        code = str(settings.get("benchmark_code", "")).strip().upper()
+        return code or "^GSPC"
+    except Exception:
+        return "^GSPC"
+
+
+def _coverage_code(tickers: list[str]) -> str:
+    if not tickers:
+        return _configured_benchmark_code()
+    benchmark_code = _configured_benchmark_code()
+    return benchmark_code if benchmark_code in tickers else tickers[0]
 
 
 def fetch_sector_prices(tickers: list[str], start: str, end: str) -> pd.DataFrame:
@@ -131,29 +153,54 @@ def run_manual_price_refresh(
     start: str,
     end: str,
 ) -> tuple[LoaderResult, dict[str, Any]]:
-    status, frame = load_sector_prices(tickers, start, end)
+    status, frame = load_sector_prices(
+        tickers,
+        start,
+        end,
+        skip_live_refresh_when_write_locked=False,
+    )
+    warehouse_write_skipped = bool(getattr(frame, "attrs", {}).get("warehouse_write_skipped"))
+    live_fetch_error = str(getattr(frame, "attrs", {}).get("live_fetch_error", "")).strip()
     summary = {
         "status": status,
         "coverage_complete": bool(
-            not frame.empty and is_market_coverage_complete(tickers, start, end, benchmark_code="SPY", market=MARKET_ID)
+            not frame.empty
+            and not warehouse_write_skipped
+            and is_market_coverage_complete(
+                tickers,
+                start,
+                end,
+                benchmark_code=_coverage_code([str(t).strip().upper() for t in tickers if str(t).strip()]),
+                market=MARKET_ID,
+            )
         ),
         "delta_codes": sorted({str(code) for code in frame.get("index_code", pd.Series(dtype=object)).astype(str).unique()}) if not frame.empty else [],
         "failed_days": [],
-        "failed_codes": {},
+        "failed_codes": {"live_fetch": live_fetch_error} if live_fetch_error else {},
         "provider": "YFINANCE",
         "reason": "manual_refresh",
         "rows": int(len(frame)),
     }
+    if warehouse_write_skipped:
+        summary["warehouse_write_skipped"] = True
+        summary["warehouse_write_error"] = str(frame.attrs.get("warehouse_write_error", ""))
     return (status, frame), summary
 
 
-def load_sector_prices(tickers: list[str], start: str, end: str) -> LoaderResult:
+def load_sector_prices(
+    tickers: list[str],
+    start: str,
+    end: str,
+    *,
+    skip_live_refresh_when_write_locked: bool = True,
+) -> LoaderResult:
     normalized = [str(ticker).strip().upper() for ticker in tickers if str(ticker).strip()]
     if not normalized:
         return ("SAMPLE", pd.DataFrame())
 
-    coverage_code = "SPY" if "SPY" in normalized else normalized[0]
+    coverage_code = _coverage_code(normalized)
     cached = read_market_prices(normalized, start, end, market=MARKET_ID)
+    has_stale_cached_rows = False
     if not cached.empty:
         coverage_complete = is_market_coverage_complete(
             normalized,
@@ -165,6 +212,7 @@ def load_sector_prices(tickers: list[str], start: str, end: str) -> LoaderResult
         if coverage_complete:
             return ("CACHED", normalize_then_validate(cached, "sector_prices"))
 
+        has_stale_cached_rows = True
         digits = "".join(ch for ch in str(end or "") if ch.isdigit())
         requested_end = pd.Timestamp(date(int(digits[:4]), int(digits[4:6]), int(digits[6:8])))
         benchmark_cached = cached[cached["index_code"].astype(str) == coverage_code]
@@ -178,10 +226,22 @@ def load_sector_prices(tickers: list[str], start: str, end: str) -> LoaderResult
                     requested_end.strftime("%Y-%m-%d"),
                 )
 
+    if (
+        has_stale_cached_rows
+        and skip_live_refresh_when_write_locked
+        and not can_acquire_write_lock()
+    ):
+        logger.info(
+            "US market live refresh deferred; warehouse write lock unavailable, returning cached data."
+        )
+        return ("CACHED", normalize_then_validate(cached, "sector_prices"))
+
     live: pd.DataFrame | None = None
+    live_fetch_error = ""
     try:
         live = normalize_then_validate(fetch_sector_prices(normalized, start, end), "sector_prices")
     except Exception as exc:
+        live_fetch_error = str(exc)
         logger.warning("US market live fetch failed: %s", exc)
     else:
         try:
@@ -193,6 +253,10 @@ def load_sector_prices(tickers: list[str], start: str, end: str) -> LoaderResult
                 "US market live refresh skipped, write lock unavailable; returning cached data. (%s)",
                 exc,
             )
+            if not skip_live_refresh_when_write_locked:
+                live.attrs["warehouse_write_skipped"] = True
+                live.attrs["warehouse_write_error"] = str(exc)
+                return ("LIVE", live)
         else:
             _run_best_effort_bookkeeping(
                 "export_market_parquet",
@@ -239,6 +303,9 @@ def load_sector_prices(tickers: list[str], start: str, end: str) -> LoaderResult
 
     cached = read_market_prices(normalized, start, end, market=MARKET_ID)
     if not cached.empty:
+        validated_cached = normalize_then_validate(cached, "sector_prices")
+        if live_fetch_error:
+            validated_cached.attrs["live_fetch_error"] = live_fetch_error
         _run_best_effort_bookkeeping(
             "record_ingest_run",
             record_ingest_run,
@@ -250,13 +317,18 @@ def load_sector_prices(tickers: list[str], start: str, end: str) -> LoaderResult
             status="CACHED",
             coverage_complete=False,
             failed_days=[],
-            failed_codes={},
+            failed_codes={"live_fetch": live_fetch_error} if live_fetch_error else {},
             delta_keys=[],
             row_count=int(len(cached)),
-            summary={"status": "CACHED", "rows": int(len(cached)), "source": "warehouse"},
+            summary={
+                "status": "CACHED",
+                "rows": int(len(cached)),
+                "source": "warehouse",
+                "failed_codes": {"live_fetch": live_fetch_error} if live_fetch_error else {},
+            },
             market=MARKET_ID,
         )
-        return ("CACHED", normalize_then_validate(cached, "sector_prices"))
+        return ("CACHED", validated_cached)
 
     if CURATED_PATH.exists():
         try:

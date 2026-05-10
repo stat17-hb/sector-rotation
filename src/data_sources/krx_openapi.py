@@ -85,6 +85,8 @@ _PERMISSION_CODES = {"403"}
 _OPENAPI_THREAD_LOCAL = threading.local()
 _OPENAPI_URL_OVERRIDE_WARNED = False
 _OPENAPI_URL_OVERRIDE_LOCK = threading.Lock()
+_OPENAPI_ACCESS_DENIED_BATCH_WARNINGS: set[str] = set()
+_OPENAPI_ACCESS_DENIED_BATCH_WARNING_LOCK = threading.Lock()
 
 
 class KRXOpenAPIError(RuntimeError):
@@ -109,6 +111,17 @@ class KRXOpenAPIAccessDeniedError(KRXOpenAPIResponseError):
 
 class KRXOpenAPIThrottleError(KRXOpenAPIAccessDeniedError):
     """Deprecated alias kept for backwards compatibility."""
+
+
+def _should_log_openapi_batch_abort_warning(reason: str, detail: str) -> bool:
+    if str(reason or "").strip().upper() != "ACCESS_DENIED":
+        return True
+    key = " ".join(str(detail or "").split())[:500]
+    with _OPENAPI_ACCESS_DENIED_BATCH_WARNING_LOCK:
+        if key in _OPENAPI_ACCESS_DENIED_BATCH_WARNINGS:
+            return False
+        _OPENAPI_ACCESS_DENIED_BATCH_WARNINGS.add(key)
+    return True
 
 
 def _load_secret_or_env(name: str) -> str:
@@ -1041,7 +1054,7 @@ def fetch_index_ohlcv_openapi_batch_detailed(
             if aborted:
                 break
 
-    if aborted:
+    if aborted and _should_log_openapi_batch_abort_warning(abort_reason, abort_detail):
         logger.warning(
             "KRX OpenAPI batch aborted start=%s end=%s processed=%d/%d reason=%s detail=%s",
             start,

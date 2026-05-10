@@ -12,6 +12,7 @@ import json
 import logging
 from datetime import date, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pandas as pd
 import streamlit as st
@@ -57,7 +58,6 @@ from src.dashboard.data import (
 )
 from src.dashboard.runtime import (
     invalidate_dashboard_caches,
-    run_feature_recompute,
     run_investor_flow_refresh,
     run_macro_refresh,
     run_market_refresh,
@@ -77,6 +77,7 @@ from src.dashboard.tabs import (
     render_analysis_canvas,
     render_dashboard_tabs,
     render_sidebar_controls,
+    resolve_dashboard_page_title,
 )
 from src.dashboard.types import AnalysisWindow, DashboardContext, DashboardDataBundle
 from src.macro.series_utils import extract_macro_series
@@ -190,7 +191,7 @@ _top_pick_sort_key = top_pick_sort_key
 st.set_page_config(
     page_title="Sector Rotation Dashboard",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",
 )
 
 
@@ -199,20 +200,50 @@ def _select_navigation_page(market_id: str, page_id: str) -> None:
     st.session_state["_nav_page_id"] = page_id
 
 
-def _build_navigation_pages() -> dict[str, list]:
-    pages: dict[str, list] = {}
+def _detect_navigation_from_url() -> tuple[str, str] | None:
+    """Infer the requested Streamlit page from the active browser URL."""
+    url = str(getattr(st.context, "url", "") or "")
+    path = urlparse(url).path.strip("/")
+    if not path:
+        return None
     for market_id in ("KR", "US"):
-        section_pages = []
         for option in build_dashboard_page_options(market_id):
-            section_pages.append(
-                st.Page(
-                    lambda market_id=market_id, page_id=option.page_id: _select_navigation_page(market_id, page_id),
-                    title=option.label,
-                    url_path=option.url_path,
-                    default=market_id == "KR" and option.page_id == "overview",
-                )
+            if path == option.url_path:
+                return market_id, option.page_id
+        if path == market_id.lower():
+            return market_id, "overview"
+    return None
+
+
+def _build_navigation_pages() -> dict[str, list]:
+    requested = _detect_navigation_from_url()
+    if requested is not None:
+        st.session_state["_nav_market_id"], st.session_state["_nav_page_id"] = requested
+
+    active_market = str(st.session_state.get("_nav_market_id", "KR")).strip().upper() or "KR"
+    if active_market not in {"KR", "US"}:
+        active_market = "KR"
+
+    pages: dict[str, list] = {
+        "시장": [
+            st.Page(
+                lambda market_id=market_id: _select_navigation_page(market_id, "overview"),
+                title=market_id,
+                url_path=market_id.lower(),
+                default=market_id == active_market,
             )
-        pages[market_id] = section_pages
+            for market_id in ("KR", "US")
+        ],
+        f"{active_market} 페이지": [],
+    }
+    for option in build_dashboard_page_options(active_market):
+        pages[f"{active_market} 페이지"].append(
+            st.Page(
+                lambda market_id=active_market, page_id=option.page_id: _select_navigation_page(market_id, page_id),
+                title=option.label,
+                url_path=option.url_path,
+            )
+        )
     return pages
 
 
@@ -299,7 +330,7 @@ asof_default = parse_asof_default(st.session_state)
 selected_flow_profile_state = str(st.session_state.get("flow_profile", "foreign_lead"))
 
 with st.sidebar:
-    asof_date, selected_flow_profile, refresh_market, refresh_macro, refresh_flow, recompute = render_sidebar_controls(
+    asof_date, selected_flow_profile, refresh_market, refresh_macro, refresh_flow = render_sidebar_controls(
         market_id=selected_market_id,
         ui_labels=getattr(market_profile, "ui_labels", {}),
         theme_mode=theme_mode,
@@ -382,10 +413,6 @@ if refresh_flow:
         progress_callback=_make_progress_callback(manual_progress_host, sidebar_progress_host),
     )
 
-if recompute:
-    run_feature_recompute()
-    st.rerun()
-
 # Core data load
 page_progress_host = st.empty()
 data_load_ok = False
@@ -436,6 +463,7 @@ try:
     macro_df = runtime_payload["macro_df"]
     price_status = str(runtime_payload["price_status"])
     macro_status = str(runtime_payload["macro_status"])
+    market_data_reference_date = str(runtime_payload.get("market_data_reference_date", "")).strip()
     market_blocking_error = str(runtime_payload["market_blocking_error"])
     investor_flow_status = str(runtime_payload["investor_flow_status"])
     investor_flow_fresh = bool(runtime_payload["investor_flow_fresh"])
@@ -458,6 +486,7 @@ except Exception as exc:
     macro_df = pd.DataFrame()
     price_status = "SAMPLE"
     macro_status = "SAMPLE"
+    market_data_reference_date = ""
     market_blocking_error = ""
     investor_flow_status = "SAMPLE"
     investor_flow_fresh = False
@@ -543,10 +572,13 @@ if not macro_df.empty:
     if len(fx_series) >= 2:
         fx_change = float((fx_series.iloc[-1] / fx_series.iloc[-2] - 1) * 100)
 
+dashboard_query_date_label = context.market_end_date.strftime("%Y-%m-%d")
+dashboard_data_date_label = market_data_reference_date or dashboard_query_date_label
+
 render_page_header(
-    title="섹터 로테이션 리서치",
+    title=resolve_dashboard_page_title(selected_dashboard_page, selected_market_id),
     description={
-        "overview": "시장 국면 전략과 섹터 순환 전략으로 초과수익을 추구합니다.",
+        "overview": "국면, 수급, 상대강도 기준의 섹터 리서치 화면입니다.",
         "signals": "섹터 액션과 필터 결과를 검토하는 랭킹 중심 페이지입니다.",
         "research": "기간, 국면, 섹터를 바꿔가며 신호의 근거를 검증합니다.",
         "constituents": "Strong Buy 섹터의 구성종목과 ETF 실행 참고 정보를 확인합니다.",
@@ -557,6 +589,8 @@ render_page_header(
         {"label": "국면", "value": current_regime, "tone": "success" if regime_is_confirmed else "warning"},
         {"label": "시장", "value": price_status, "tone": "danger" if price_status == "SAMPLE" else "warning" if price_status == "CACHED" else "success"},
         {"label": "매크로", "value": macro_status, "tone": "danger" if macro_status == "SAMPLE" else "warning" if macro_status == "CACHED" else "success"},
+        {"label": "조회 기준일", "value": dashboard_data_date_label, "tone": "info"},
+        {"label": "목표일", "value": dashboard_query_date_label, "tone": "warning" if dashboard_data_date_label != dashboard_query_date_label else "info"},
         {"label": "제공자", "value": context.provider_effective, "tone": "info"},
     ] + (
         [
@@ -598,7 +632,21 @@ benchmark_label = sector_name_map.get(
     benchmark_code,
     str(settings.get("benchmark_label", getattr(market_profile, "benchmark_label", benchmark_code))),
 )
-sector_columns = [column for column in prices_wide.columns if column != benchmark_label]
+reference_index_label_overrides = {
+    str(code): str(label)
+    for code, label in dict(settings.get("reference_index_labels", {}) or {}).items()
+}
+reference_index_labels = [
+    sector_name_map.get(str(code), reference_index_label_overrides.get(str(code), str(code)))
+    for code in settings.get("reference_index_codes", []) or []
+    if str(code).strip()
+]
+reference_index_label_set = {label for label in reference_index_labels if str(label).strip()}
+sector_columns = [
+    column
+    for column in prices_wide.columns
+    if column != benchmark_label and column not in reference_index_label_set
+]
 monthly_close_full, monthly_returns_full, benchmark_monthly_return, monthly_excess_returns_full = build_monthly_return_views(
     prices_wide=prices_wide,
     sector_columns=sector_columns,
@@ -779,6 +827,7 @@ if selected_dashboard_page == "overview":
         macro_status=macro_status,
         prices_wide=prices_wide,
         benchmark_label=benchmark_label,
+        reference_index_labels=reference_index_labels,
         signals=list(signals),
         theme_mode=context.theme_mode,
         sector_map=sector_map,
@@ -787,6 +836,7 @@ if selected_dashboard_page == "overview":
         lookup_message=str(st.session_state.get("stock_lookup_message", "")),
         lookup_display_model=build_stock_lookup_display_model(st.session_state.get("stock_lookup_result"), sector_map),
         locale=context.ui_locale,
+        is_mobile=mobile_client,
     )
     st.session_state["stock_lookup_query"] = lookup_query
     if lookup_submitted:
@@ -873,7 +923,7 @@ elif selected_dashboard_page != "overview":
 
 st.divider()
 st.caption(
-    f"As of {asof_date} | "
+    f"조회 기준일 {dashboard_data_date_label} | 목표일 {dashboard_query_date_label} | 선택 기준일 {asof_date} | "
     f"{', '.join(getattr(market_profile, 'source_badges', (context.provider_effective,)))} | "
     f"Regime: {bundle.current_regime}"
 )

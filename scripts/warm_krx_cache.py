@@ -13,11 +13,18 @@ if str(ROOT) not in sys.path:
 
 import yaml
 
-from src.data_sources.krx_indices import warm_sector_price_cache
+from src.data_sources.krx_indices import get_active_kr_index_universe_codes, warm_sector_price_cache
 from src.transforms.calendar import get_last_business_day
 
 
 def _load_sector_codes() -> list[str]:
+    try:
+        codes = get_active_kr_index_universe_codes("1001")
+    except Exception:
+        codes = []
+    if codes:
+        return codes
+
     with open("config/sector_map.yml", encoding="utf-8") as f:
         sector_map = yaml.safe_load(f) or {}
 

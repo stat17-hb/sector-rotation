@@ -310,20 +310,20 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     .block-container {{
-        padding-top: 1.05rem;
-        padding-bottom: 1.15rem;
-        padding-left: clamp(1rem, 2vw, 1.8rem);
-        padding-right: clamp(1rem, 2vw, 1.8rem);
+        padding-top: 1rem;
+        padding-bottom: 1.3rem;
+        padding-left: clamp(1.1rem, 2.2vw, 2rem);
+        padding-right: clamp(1.1rem, 2.2vw, 2rem);
         max-width: 1480px;
     }}
 
     [data-testid="stSidebarContent"] {{
-        padding: 1.05rem 0.92rem 1rem;
+        padding: 1.18rem 1rem 1.1rem;
     }}
 
     [data-testid="stSidebar"] [data-testid="stHeading"] h1,
     [data-testid="stSidebar"] h1 {{
-        font-size: 1.02rem !important;
+        font-size: 1.12rem !important;
         font-weight: 750 !important;
         letter-spacing: -0.01em;
         margin-bottom: 0.9rem;
@@ -345,15 +345,15 @@ def inject_css(theme_mode: str) -> None:
     [data-testid="stSidebar"] [data-testid="stSidebarNav"] span,
     [data-testid="stSidebar"] [data-testid="stSidebarNav"] p {{
         font-family: var(--font-ui) !important;
-        font-size: 0.78rem !important;
+        font-size: 0.86rem !important;
         font-weight: 680 !important;
         color: var(--text-muted) !important;
     }}
 
     [data-testid="stSidebar"] [data-testid="stSidebarNav"] a {{
-        min-height: 1.82rem;
+        min-height: 2.08rem;
         border-radius: var(--radius-sm);
-        padding: 0.3rem 0.5rem;
+        padding: 0.38rem 0.58rem;
         color: var(--text-muted) !important;
         transition: background-color 0.16s ease, color 0.16s ease, border-color 0.16s ease;
     }}
@@ -452,7 +452,7 @@ def inject_css(theme_mode: str) -> None:
         border: 1px solid {control_border_css};
         color: var(--text);
         border-radius: var(--radius-sm);
-        min-height: 2.1rem;
+        min-height: 2.36rem;
         box-shadow: 0 1px 0 color-mix(in srgb, var(--surface) 72%, transparent);
     }}
 
@@ -469,8 +469,8 @@ def inject_css(theme_mode: str) -> None:
         font-weight: {button_font_weight} !important;
         letter-spacing: 0;
         border-radius: var(--radius-pill) !important;
-        min-height: 2.28rem;
-        padding: 0.46rem 0.82rem;
+        min-height: 2.52rem;
+        padding: 0.58rem 0.96rem;
         border: 1px solid var(--border) !important;
         background: var(--surface) !important;
         color: var(--text) !important;
@@ -511,8 +511,8 @@ def inject_css(theme_mode: str) -> None:
         background: {card_background_css};
         box-shadow: none;
         border-radius: var(--radius-sm);
-        padding: 13px 15px;
-        margin-bottom: 0.8rem;
+        padding: 15px 17px;
+        margin-bottom: 0.92rem;
         transition: border-color 0.2s ease, background-color 0.2s ease;
     }}
 
@@ -529,7 +529,7 @@ def inject_css(theme_mode: str) -> None:
         box-shadow: none;
         border-radius: 0;
         padding: {layout_tokens['page_shell_padding']};
-        margin-bottom: 0.45rem;
+        margin-bottom: 0.24rem;
         animation: riseIn 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
     }}
 
@@ -588,10 +588,10 @@ def inject_css(theme_mode: str) -> None:
 
     .page-shell__description {{
         color: var(--text-muted);
-        font-size: {body_small_font_size};
-        line-height: {body_line_height};
-        max-width: 65ch;
-        margin-top: 0.24rem;
+        font-size: {body_font_size};
+        line-height: 1.38;
+        max-width: 56ch;
+        margin-top: 0.18rem;
         text-wrap: pretty;
     }}
 
@@ -606,12 +606,12 @@ def inject_css(theme_mode: str) -> None:
         display: inline-flex;
         align-items: center;
         gap: 0.4rem;
-        padding: 0.24rem 0.48rem;
+        padding: 0.32rem 0.58rem;
         border-radius: var(--radius-sm);
         border: 1px solid var(--border);
         background: color-mix(in srgb, var(--surface) 84%, var(--surface-tint) 16%);
         font-family: var(--font-ui);
-        font-size: 0.64rem;
+        font-size: {caption_font_size};
         color: var(--text-muted);
         letter-spacing: 0;
         text-transform: none;
@@ -619,7 +619,7 @@ def inject_css(theme_mode: str) -> None:
 
     .page-shell__pill strong {{
         color: var(--text);
-        font-size: 0.66rem;
+        font-size: {caption_font_size};
         font-weight: {badge_font_weight};
     }}
 
@@ -642,14 +642,14 @@ def inject_css(theme_mode: str) -> None:
     .status-strip {{
         display: grid;
         grid-template-columns: auto 1fr auto;
-        align-items: start;
-        gap: 0.85rem;
+        align-items: center;
+        gap: 0.78rem;
         border: 1px solid var(--border);
         background: color-mix(in srgb, var(--surface) 96%, var(--surface-tint) 4%);
         box-shadow: none;
-        border-radius: var(--radius-lg);
-        padding: 0.68rem 0.78rem;
-        margin-bottom: 0.72rem;
+        border-radius: var(--radius-md);
+        padding: 0.6rem 0.78rem;
+        margin-bottom: 0.62rem;
         transition: none;
         animation: riseIn 480ms cubic-bezier(0.16, 1, 0.3, 1) both;
     }}
@@ -658,9 +658,9 @@ def inject_css(theme_mode: str) -> None:
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        min-width: 56px;
+        min-width: 64px;
         border-radius: var(--radius-sm);
-        padding: 0.34rem 0.56rem;
+        padding: 0.28rem 0.52rem;
         font-size: {caption_font_size};
         font-weight: {badge_font_weight};
         letter-spacing: 0;
@@ -670,15 +670,15 @@ def inject_css(theme_mode: str) -> None:
     .status-strip__title {{
         color: var(--text);
         font-family: var(--font-ui);
-        font-size: {card_title_size};
+        font-size: {body_font_size};
         font-weight: {heading_font_weight};
         line-height: {heading_line_height};
     }}
 
     .status-strip__message {{
         color: var(--text-muted);
-        font-size: {body_small_font_size};
-        margin-top: 0.12rem;
+        font-size: {caption_font_size};
+        margin-top: 0.06rem;
     }}
 
     .status-strip__meta {{
@@ -718,7 +718,26 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     .overview-reference-shell {{
-        margin-bottom: 0.72rem;
+        margin-bottom: 0.48rem;
+    }}
+
+    .overview-command-surface {{
+        margin-bottom: 0.4rem;
+    }}
+
+    .overview-command-surface__header {{
+        display: grid;
+        grid-template-columns: minmax(150px, 0.48fr) minmax(0, 2fr);
+        gap: 0.86rem;
+        align-items: start;
+        margin-bottom: 0.62rem;
+    }}
+
+    .overview-command-surface__copy {{
+        color: var(--text-muted);
+        font-size: {body_small_font_size};
+        line-height: {body_line_height};
+        margin-top: 0.18rem;
     }}
 
     .overview-section-title {{
@@ -727,30 +746,41 @@ def inject_css(theme_mode: str) -> None:
         font-size: {section_title_size};
         font-weight: {heading_font_weight};
         line-height: {heading_line_height};
-        margin-bottom: 0.58rem;
+        margin-bottom: 0.42rem;
         letter-spacing: 0;
     }}
 
     .overview-market-grid {{
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 0.58rem;
+        gap: 0.5rem;
     }}
 
     .overview-market-card {{
         border: 1px solid var(--border);
-        background: var(--surface);
-        border-radius: var(--radius-lg);
-        padding: 0.72rem 0.8rem;
-        min-height: 5.3rem;
+        background: color-mix(in srgb, var(--surface) 88%, var(--surface-tint) 12%);
+        border-radius: var(--radius-sm);
+        padding: 0.62rem 0.72rem;
+        min-height: 3.65rem;
         display: flex;
         flex-direction: column;
         justify-content: space-between;
     }}
 
+    .overview-market-card--metric {{
+        gap: 0.3rem;
+    }}
+
+    .overview-market-card__metric-row {{
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 0.55rem;
+    }}
+
     .overview-market-card__label {{
         color: var(--text);
-        font-size: {body_small_font_size};
+        font-size: {caption_font_size};
         font-weight: 720;
         line-height: 1.2;
     }}
@@ -758,26 +788,26 @@ def inject_css(theme_mode: str) -> None:
     .overview-market-card__value {{
         color: var(--text);
         font-family: var(--font-mono);
-        font-size: 1.16rem;
+        font-size: 1.02rem;
         font-weight: 760;
         font-variant-numeric: tabular-nums;
         line-height: 1.2;
-        margin-top: 0.32rem;
+        margin-top: 0;
     }}
 
     .overview-market-card__change {{
         font-family: var(--font-mono);
-        font-size: {body_small_font_size};
+        font-size: {caption_font_size};
         font-weight: 700;
-        margin-top: 0.2rem;
+        margin-top: 0;
     }}
 
     .overview-market-card__change[data-tone="positive"] {{
-        color: var(--danger);
+        color: var(--success);
     }}
 
     .overview-market-card__change[data-tone="negative"] {{
-        color: var(--primary);
+        color: var(--danger);
     }}
 
     .overview-market-card--status {{
@@ -814,7 +844,7 @@ def inject_css(theme_mode: str) -> None:
         border-radius: var(--radius-sm);
         font-size: {caption_font_size};
         font-weight: {badge_font_weight};
-        padding: 0.28rem 0.48rem;
+        padding: 0.36rem 0.58rem;
     }}
 
     .overview-lookup-chip[data-selected="true"] {{
@@ -823,8 +853,61 @@ def inject_css(theme_mode: str) -> None:
         color: var(--primary);
     }}
 
+    .overview-mobile-decision-strip {{
+        display: none;
+    }}
+
+    .overview-mobile-decision-strip__label {{
+        color: var(--text-muted);
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
+        margin-bottom: 0.34rem;
+    }}
+
+    .overview-mobile-decision-strip__grid {{
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.38rem;
+    }}
+
+    .overview-decision-tile {{
+        border: 1px solid var(--border);
+        background: color-mix(in srgb, var(--surface) 88%, var(--surface-tint) 12%);
+        border-radius: var(--radius-sm);
+        padding: 0.54rem 0.58rem;
+        min-width: 0;
+    }}
+
+    .overview-decision-tile span {{
+        display: block;
+        color: var(--text);
+        font-size: {caption_font_size};
+        font-weight: 760;
+        line-height: 1.22;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }}
+
+    .overview-decision-tile strong {{
+        display: block;
+        font-family: var(--font-mono);
+        font-size: {body_small_font_size};
+        font-weight: 780;
+        line-height: 1.2;
+        margin-top: 0.18rem;
+    }}
+
+    .overview-decision-tile strong[data-tone="positive"] {{
+        color: var(--success);
+    }}
+
+    .overview-decision-tile strong[data-tone="negative"] {{
+        color: var(--danger);
+    }}
+
     .overview-sector-table-wrap {{
-        max-height: 410px;
+        max-height: 462px;
         overflow: auto;
         border: 1px solid var(--border);
         border-radius: var(--radius-sm);
@@ -840,7 +923,7 @@ def inject_css(theme_mode: str) -> None:
 
     .overview-sector-table th,
     .overview-sector-table td {{
-        padding: 0.48rem 0.46rem;
+        padding: 0.58rem 0.56rem;
         border-bottom: 1px solid var(--border);
         white-space: nowrap;
         vertical-align: middle;
@@ -871,26 +954,26 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     .overview-sector-table td[data-tone="positive"] {{
-        color: var(--danger);
+        color: var(--success);
         font-weight: 760;
     }}
 
     .overview-sector-table td[data-tone="negative"] {{
-        color: var(--primary);
+        color: var(--danger);
         font-weight: 760;
     }}
 
     .overview-heatmap-grid {{
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: repeat(5, minmax(0, 1fr));
         gap: 0.35rem;
     }}
 
     .overview-heatmap-tile {{
-        min-height: 4.25rem;
+        min-height: 3.75rem;
         border: 1px solid var(--border);
         border-radius: var(--radius-sm);
-        padding: 0.62rem 0.58rem;
+        padding: 0.62rem;
         display: flex;
         flex-direction: column;
         justify-content: center;
@@ -899,15 +982,15 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     .overview-heatmap-tile[data-tone="positive"] {{
-        background: color-mix(in srgb, var(--danger) var(--tile-strength), #ffffff);
+        background: color-mix(in srgb, var(--success) var(--tile-strength), #ffffff);
         color: #ffffff;
-        border-color: color-mix(in srgb, var(--danger) 42%, var(--border));
+        border-color: color-mix(in srgb, var(--success) 42%, var(--border));
     }}
 
     .overview-heatmap-tile[data-tone="negative"] {{
-        background: color-mix(in srgb, var(--success) var(--tile-strength), #ffffff);
-        color: #0F3428;
-        border-color: color-mix(in srgb, var(--success) 42%, var(--border));
+        background: color-mix(in srgb, var(--danger) var(--tile-strength), #ffffff);
+        color: #ffffff;
+        border-color: color-mix(in srgb, var(--danger) 42%, var(--border));
     }}
 
     .overview-heatmap-tile span {{
@@ -918,7 +1001,7 @@ def inject_css(theme_mode: str) -> None:
 
     .overview-heatmap-tile strong {{
         font-family: var(--font-mono);
-        font-size: 0.96rem;
+        font-size: 0.98rem;
         font-weight: 780;
         font-variant-numeric: tabular-nums;
     }}
@@ -931,7 +1014,14 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     .command-bar {{
-        margin-bottom: 0.85rem;
+        margin-bottom: 0.62rem;
+    }}
+
+    .command-bar--compact {{
+        display: grid;
+        grid-template-columns: auto minmax(180px, 1fr) minmax(240px, 1.4fr);
+        gap: 0.72rem;
+        align-items: baseline;
     }}
 
     .command-bar__eyebrow {{
@@ -951,6 +1041,40 @@ def inject_css(theme_mode: str) -> None:
         line-height: {heading_line_height};
     }}
 
+    .command-bar__note {{
+        color: var(--text-muted);
+        font-size: {caption_font_size};
+        line-height: 1.35;
+    }}
+
+    .filter-chip-row {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.35rem;
+        align-items: center;
+        min-height: 2.42rem;
+    }}
+
+    .filter-chip-row span {{
+        display: inline-flex;
+        align-items: center;
+        gap: 0.28rem;
+        min-height: 1.95rem;
+        border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--border));
+        background: color-mix(in srgb, var(--surface) 92%, var(--surface-tint) 8%);
+        border-radius: var(--radius-pill);
+        padding: 0.34rem 0.66rem;
+        color: var(--text);
+        font-size: {caption_font_size};
+        font-weight: 680;
+        line-height: 1.2;
+    }}
+
+    .filter-chip-row b {{
+        color: var(--text-muted);
+        font-weight: {badge_font_weight};
+    }}
+
     .top-bar-summary {{
         border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--border));
         background: color-mix(in srgb, var(--surface) 90%, var(--surface-tint) 10%);
@@ -958,8 +1082,8 @@ def inject_css(theme_mode: str) -> None:
         color: var(--text);
         font-size: {body_small_font_size};
         line-height: {body_line_height};
-        padding: 0.72rem 0.9rem;
-        min-height: 3rem;
+        padding: 0.86rem 1rem;
+        min-height: 3.35rem;
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
         gap: 0.65rem;
@@ -991,7 +1115,7 @@ def inject_css(theme_mode: str) -> None:
         box-shadow: none;
         border-radius: var(--radius-lg);
         padding: {layout_tokens['panel_padding']};
-        margin-bottom: 0.72rem;
+        margin-bottom: 0.86rem;
     }}
 
     .analysis-toolbar__eyebrow {{
@@ -1024,16 +1148,16 @@ def inject_css(theme_mode: str) -> None:
     .analysis-toolbar__summary {{
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 0.56rem;
-        margin-top: 0.58rem;
+        gap: 0.68rem;
+        margin-top: 0.7rem;
     }}
 
     .analysis-toolbar__summary-item {{
         border: 1px solid var(--border);
         background: color-mix(in srgb, var(--surface) 88%, var(--surface-tint) 12%);
         border-radius: var(--radius-sm);
-        padding: 0.58rem 0.68rem;
-        min-height: 2.6rem;
+        padding: 0.7rem 0.78rem;
+        min-height: 2.95rem;
     }}
 
     .analysis-toolbar__summary-item span {{
@@ -1067,7 +1191,7 @@ def inject_css(theme_mode: str) -> None:
 
     .cycle-palette__label {{
         color: var(--text-muted);
-        font-size: 0.74rem;
+        font-size: {caption_font_size};
         font-weight: 700;
         letter-spacing: 0.06em;
         text-transform: uppercase;
@@ -1083,7 +1207,7 @@ def inject_css(theme_mode: str) -> None:
         color: var(--text);
         font-size: {caption_font_size};
         font-weight: {button_font_weight};
-        padding: 0.38rem 0.7rem;
+        padding: 0.46rem 0.78rem;
     }}
 
     .cycle-palette__swatch {{
@@ -1143,7 +1267,7 @@ def inject_css(theme_mode: str) -> None:
         font-size: {caption_font_size};
         font-weight: {badge_font_weight};
         line-height: 1;
-        padding: 0.58rem 0.6rem;
+        padding: 0.68rem 0.7rem;
         text-align: center;
         margin-top: 0.08rem;
     }}
@@ -1164,13 +1288,13 @@ def inject_css(theme_mode: str) -> None:
     .decision-hero {{
         display: grid;
         grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.85fr);
-        gap: 0.78rem;
+        gap: 0.95rem;
         border: 1px solid var(--border);
         background: var(--surface);
         box-shadow: none;
         border-radius: var(--radius-lg);
-        padding: 0.86rem 0.9rem 0.82rem;
-        margin-bottom: 0.74rem;
+        padding: 1rem 1.08rem 0.98rem;
+        margin-bottom: 0.9rem;
         position: relative;
         overflow: hidden;
         animation: riseIn 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -1679,7 +1803,7 @@ def inject_css(theme_mode: str) -> None:
         display: flex;
         align-items: baseline;
         gap: 0.65rem;
-        font-size: 0.8rem;
+        font-size: {body_small_font_size};
     }}
 
     .flow-card__label {{
@@ -1687,7 +1811,7 @@ def inject_css(theme_mode: str) -> None:
         min-width: 75px;
         max-width: 75px;
         font-weight: 700;
-        font-size: 0.72rem;
+        font-size: {caption_font_size};
         flex-shrink: 0;
     }}
 
@@ -1713,7 +1837,7 @@ def inject_css(theme_mode: str) -> None:
         --gdg-border-color: {table_tokens['grid']};
         --gdg-horizontal-border-color: {table_tokens['grid']};
         --gdg-vertical-border-color: {table_tokens['grid']};
-        --gdg-header-font-style: 700 12px {ui_font_css};
+        --gdg-header-font-style: 700 13.5px {ui_font_css};
     }}
 
     [data-testid="stDataFrame"] div[class*="glideDataEditor"] > div {{
@@ -1745,8 +1869,8 @@ def inject_css(theme_mode: str) -> None:
         color: {provisional_badge_text};
         border: 1px solid {provisional_badge_border};
         border-radius: var(--radius-pill);
-        padding: 2px 8px;
-        font-size: 11.5px;
+        padding: 3px 9px;
+        font-size: 12.5px;
         font-weight: 700;
         letter-spacing: 0.02em;
         margin-left: 8px;
@@ -1784,18 +1908,18 @@ def inject_css(theme_mode: str) -> None:
     .action-avoid,
     .action-na {{
         border-radius: var(--radius-pill);
-        padding: 2px 8px;
+        padding: 3px 9px;
         font-weight: {badge_font_weight};
         font-size: {badge_font_size};
         letter-spacing: 0.05em;
         display: inline-block;
         text-align: center;
-        min-width: 84px;
+        min-width: 92px;
         text-transform: uppercase;
     }}
 
     [data-testid="stTabs"] [data-baseweb="tab-list"] {{
-        gap: 0.24rem;
+        gap: 0.3rem;
         border-bottom: 1px solid var(--border);
     }}
 
@@ -1838,7 +1962,7 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     div[data-testid="stMetricValue"] {{
-        font-size: 1.22rem;
+        font-size: 1.38rem;
         font-weight: {heading_font_weight} !important;
     }}
 
@@ -1913,35 +2037,112 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     @media (max-width: 840px) {{
-        .stApp h1 {{ font-size: 1.8rem !important; line-height: 1.25 !important; }}
-        .stApp h2 {{ font-size: 1.5rem !important; line-height: 1.25 !important; }}
-        div[data-testid="stMetricValue"] {{ font-size: 1.28rem !important; }}
+        .stApp h1 {{ font-size: 1.95rem !important; line-height: 1.22 !important; }}
+        .stApp h2 {{ font-size: 1.58rem !important; line-height: 1.24 !important; }}
+        div[data-testid="stMetricValue"] {{ font-size: 1.42rem !important; }}
 
         .block-container {{
-            padding-top: 2.2rem;
+            padding-top: 1.05rem;
         }}
 
         .page-shell {{
-            padding: 0.95rem;
+            padding: 0.46rem 0 0.58rem;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 0.18rem;
         }}
 
         .page-shell__grid {{
             grid-template-columns: 1fr;
+            gap: 0.34rem;
         }}
 
         .page-shell__meta {{
-            padding: 0.76rem 0.82rem;
+            padding: 0;
             border-left: 0;
-            border-top: 1px solid var(--border);
+            border-top: 0;
         }}
 
         .page-shell__pills {{
-            gap: 0.5rem;
+            gap: 0.26rem;
+            justify-content: flex-start;
+        }}
+
+        .page-shell__pill:nth-child(n + 4) {{
+            display: none;
+        }}
+
+        .page-shell__meta-eyebrow {{
+            text-align: left;
+            font-size: 0.62rem;
+            display: none;
+        }}
+
+        .page-shell__title {{
+            font-size: 1.36rem;
+        }}
+
+        .page-shell__description {{
+            display: none;
+        }}
+
+        .page-shell__eyebrow {{
+            font-size: 0.72rem;
+            margin-bottom: 0.12rem;
+        }}
+
+        .page-shell__pill {{
+            gap: 0.3rem;
+            padding: 0.26rem 0.46rem;
+            font-size: 0.68rem;
+        }}
+
+        .page-shell__pill strong {{
+            font-size: 0.7rem;
         }}
 
         .status-strip {{
-            grid-template-columns: 1fr;
-            gap: 0.55rem;
+            grid-template-columns: auto 1fr auto;
+            gap: 0.38rem;
+            padding: 0.42rem 0.52rem;
+            margin-bottom: 0.42rem;
+            border-radius: var(--radius-sm);
+        }}
+
+        .status-strip__badge {{
+            width: auto;
+            min-width: 0;
+            padding: 0.16rem 0.34rem;
+            font-size: 0.68rem;
+        }}
+
+        .status-strip__title {{
+            font-size: 0.82rem;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }}
+
+        .status-strip__message {{
+            display: none;
+        }}
+
+        .status-strip__meta {{
+            white-space: nowrap;
+            font-size: 0.68rem;
+        }}
+
+        [data-testid="stExpander"] details {{
+            border-radius: var(--radius-sm) !important;
+        }}
+
+        [data-testid="stExpander"] summary {{
+            min-height: 2.12rem !important;
+            padding: 0.34rem 0.52rem !important;
+        }}
+
+        [data-testid="stExpander"] summary p {{
+            font-size: 0.9rem !important;
+            line-height: 1.18 !important;
         }}
 
         .decision-hero {{
@@ -1950,7 +2151,7 @@ def inject_css(theme_mode: str) -> None:
         }}
 
         .decision-hero__title {{
-            font-size: 1.34rem;
+            font-size: 1.48rem;
         }}
 
         .decision-hero__stats,
@@ -1961,8 +2162,71 @@ def inject_css(theme_mode: str) -> None:
 
         .top-bar-summary {{
             grid-template-columns: 1fr;
-            font-size: 0.86rem;
-            padding: 0.68rem 0.82rem;
+            font-size: 0.92rem;
+            padding: 0.82rem 0.92rem;
+        }}
+
+        .overview-command-surface__header,
+        .command-bar--compact {{
+            grid-template-columns: 1fr;
+        }}
+
+        .overview-reference-shell {{
+            margin-bottom: 0.28rem;
+        }}
+
+        .overview-command-surface {{
+            margin-bottom: 0.28rem;
+        }}
+
+        .overview-command-surface__header {{
+            gap: 0.38rem;
+            margin-bottom: 0.36rem;
+        }}
+
+        .overview-command-surface__copy {{
+            display: none;
+        }}
+
+        .overview-heatmap-grid {{
+            grid-template-columns: 1fr;
+        }}
+
+        .overview-market-grid {{
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }}
+
+        .overview-market-card--status {{
+            display: none;
+        }}
+
+        .overview-market-card {{
+            min-height: 2.9rem;
+            padding: 0.48rem 0.54rem;
+        }}
+
+        .overview-market-card__metric-row {{
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0.12rem;
+        }}
+
+        .overview-market-card__value {{
+            font-size: 0.9rem;
+        }}
+
+        .overview-mobile-decision-strip {{
+            display: block;
+            margin: 0.36rem 0 0.46rem;
+        }}
+
+        .overview-sector-table-wrap {{
+            max-height: 520px;
+        }}
+
+        .overview-sector-table th,
+        .overview-sector-table td {{
+            padding: 0.5rem 0.44rem;
         }}
 
         .research-page-frame {{
@@ -1984,8 +2248,8 @@ def inject_css(theme_mode: str) -> None:
         }}
 
         [data-testid="stTabs"] [data-baseweb="tab"] {{
-            padding: 0.4rem 0.62rem;
-            font-size: 0.88rem;
+            padding: 0.46rem 0.72rem;
+            font-size: 0.94rem;
         }}
     }}
 

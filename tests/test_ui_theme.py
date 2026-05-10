@@ -112,12 +112,12 @@ def test_layout_and_typography_tokens_cover_toss_inspired_density_contract():
     assert light_layout["radius_lg"] == "8px"
     assert light_typography["display_line_height"] == "1.08"
     assert "Pretendard" in light_typography["ui_family"]
-    assert light_typography["display_hero_size"] == "1.56rem"
-    assert light_typography["display_secondary_size"] == "1.34rem"
-    assert light_typography["body_size"] == "0.88rem"
-    assert light_typography["body_small_size"] == "0.8rem"
-    assert light_typography["caption_size"] == "0.68rem"
-    assert light_typography["button_size"] == "0.8rem"
+    assert light_typography["display_hero_size"] == "1.86rem"
+    assert light_typography["display_secondary_size"] == "1.48rem"
+    assert light_typography["body_size"] == "0.94rem"
+    assert light_typography["body_small_size"] == "0.86rem"
+    assert light_typography["caption_size"] == "0.74rem"
+    assert light_typography["button_size"] == "0.88rem"
 
 
 def test_build_font_face_css_handles_presence_and_missing_fonts(tmp_path):
@@ -207,6 +207,7 @@ def test_inject_css_includes_new_dashboard_layout_classes(monkeypatch):
     assert ".status-strip" in css
     assert ".command-bar" in css
     assert ".research-page-frame" in css
+    assert ".overview-mobile-decision-strip" in css
     assert ".research-page-frame__summary" in css
     assert ".top-bar-summary" in css
     assert ".analysis-toolbar" in css
@@ -217,6 +218,10 @@ def test_inject_css_includes_new_dashboard_layout_classes(monkeypatch):
     assert ".status-card-grid" in css
     assert ".compact-note" in css
     assert ".sector-rank-list__metric" in css
+    assert ".page-shell__pill:nth-child(n + 4)" in css
+    assert ".overview-market-card__metric-row" in css
+    assert ".overview-market-card--status" in css
+    assert ".status-strip__message" in css
     assert "--radius-xl" in css
     assert "--ring:" in css
     assert "@media (max-width: 1120px)" in css

@@ -8,8 +8,11 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
+import json
 import logging
+import os
+from pathlib import Path
 import socket
 from typing import Any, Callable, Literal, Mapping, TypedDict
 
@@ -22,6 +25,8 @@ from src.data_sources.krx_constituents import (
     normalize_constituent_result as _normalize_constituent_result,
 )
 from src.data_sources.pykrx_compat import (
+    KRXAccessDeniedError,
+    KRXInvalidPayloadError,
     ensure_pykrx_transport_compat,
     request_krx_data,
     reset_krx_shared_session,
@@ -66,6 +71,11 @@ class DiscoveryDetails(TypedDict):
     provider: str
     status: str
 
+
+class KRXInvestorFlowEndpointUnavailable(RuntimeError):
+    """Raised when the KRX trading-value endpoint is unavailable for the whole refresh."""
+
+
 FLOW_PROVIDER = "PYKRX_UNOFFICIAL"
 DEFAULT_LOOKBACK_CALENDAR_DAYS = 120
 KRX_INVESTOR_FLOW_WEB_HISTORY_FLOOR = "20140501"
@@ -78,7 +88,10 @@ HISTORICAL_BACKFILL_DISCOVERY_REASON = "historical_backfill_discovery"
 HISTORICAL_BACKFILL_VALIDATION_REASON = "historical_backfill_validation"
 CACHED_CONSTITUENT_FALLBACK_PREFIX = "CACHED_FALLBACK("
 DEFAULT_KR_CALENDAR_BENCHMARK_CODE = "1001"
+MAX_CONSECUTIVE_EMPTY_TRADING_VALUE_TICKERS = 3
 RETRY_SESSION_RESET_BATCH_SIZE = 25
+ACCESS_DENIED_COOLDOWN_SECONDS = 6 * 60 * 60
+ACCESS_DENIED_COOLDOWN_STATE_PATH = Path("data/runtime/krx_investor_flow_access_denied_cooldown.json")
 INVESTOR_FLOW_COLUMN_CANDIDATES: dict[str, tuple[str, ...]] = {
     "개인": ("개인",),
     "외국인": ("외국인합계", "외국인"),
@@ -101,6 +114,8 @@ TRADING_VALUE_GENERAL_COLUMNS: tuple[str, ...] = (
     "외국인합계",
     "전체",
 )
+_ACCESS_DENIED_COOLDOWN_UNTIL: datetime | None = None
+_ACCESS_DENIED_COOLDOWN_DETAIL = ""
 TRADING_VALUE_DETAIL_COLUMNS: tuple[str, ...] = (
     "금융투자",
     "보험",
@@ -143,6 +158,183 @@ def _emit_progress(
     if meta:
         event["meta"] = dict(meta)
     progress_callback(event)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _is_access_denied_failure_reason(reason: str) -> bool:
+    lowered = str(reason or "").lower()
+    return (
+        str(reason or "").startswith("ACCESS_DENIED:")
+        or "access denied" in lowered
+        or "status=403" in lowered
+    )
+
+
+def _parse_utc_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if text.endswith("Z"):
+        text = f"{text[:-1]}+00:00"
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _write_access_denied_cooldown_state(payload: Mapping[str, Any]) -> None:
+    path = ACCESS_DENIED_COOLDOWN_STATE_PATH
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp_path.write_text(
+            json.dumps(dict(payload), ensure_ascii=False, indent=2, sort_keys=True),
+            encoding="utf-8",
+        )
+        tmp_path.replace(path)
+    except Exception:
+        logger.debug("KRX investor-flow cooldown state write skipped", exc_info=True)
+
+
+def _clear_access_denied_cooldown_state() -> None:
+    try:
+        ACCESS_DENIED_COOLDOWN_STATE_PATH.unlink(missing_ok=True)
+    except Exception:
+        logger.debug("KRX investor-flow cooldown state clear skipped", exc_info=True)
+
+
+def _read_access_denied_cooldown_state() -> dict[str, Any] | None:
+    path = ACCESS_DENIED_COOLDOWN_STATE_PATH
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return None
+    except Exception:
+        logger.debug("KRX investor-flow cooldown state read failed; clearing it", exc_info=True)
+        _clear_access_denied_cooldown_state()
+        return None
+    if not isinstance(payload, dict):
+        _clear_access_denied_cooldown_state()
+        return None
+    if not bool(payload.get("active")):
+        _clear_access_denied_cooldown_state()
+        return None
+    return payload
+
+
+def _activate_access_denied_cooldown(reason: str, *, now: datetime | None = None) -> dict[str, Any]:
+    global _ACCESS_DENIED_COOLDOWN_DETAIL, _ACCESS_DENIED_COOLDOWN_UNTIL
+    current = now or _utc_now()
+    _ACCESS_DENIED_COOLDOWN_UNTIL = current + timedelta(seconds=ACCESS_DENIED_COOLDOWN_SECONDS)
+    _ACCESS_DENIED_COOLDOWN_DETAIL = str(reason or "").strip()
+    cooldown = {
+        "active": True,
+        "until": _ACCESS_DENIED_COOLDOWN_UNTIL.isoformat(),
+        "detail": _ACCESS_DENIED_COOLDOWN_DETAIL,
+        "created_at": current.isoformat(),
+    }
+    _write_access_denied_cooldown_state(cooldown)
+    return cooldown
+
+
+def _get_access_denied_cooldown(*, now: datetime | None = None) -> dict[str, Any] | None:
+    global _ACCESS_DENIED_COOLDOWN_DETAIL, _ACCESS_DENIED_COOLDOWN_UNTIL
+    current = now or _utc_now()
+    persisted = _read_access_denied_cooldown_state()
+    if persisted:
+        persisted_until = _parse_utc_datetime(persisted.get("until"))
+        if persisted_until is None:
+            _clear_access_denied_cooldown_state()
+        elif _ACCESS_DENIED_COOLDOWN_UNTIL is None or persisted_until > _ACCESS_DENIED_COOLDOWN_UNTIL:
+            _ACCESS_DENIED_COOLDOWN_UNTIL = persisted_until
+            _ACCESS_DENIED_COOLDOWN_DETAIL = str(persisted.get("detail") or "").strip()
+    if _ACCESS_DENIED_COOLDOWN_UNTIL is None:
+        return None
+    if current >= _ACCESS_DENIED_COOLDOWN_UNTIL:
+        _ACCESS_DENIED_COOLDOWN_UNTIL = None
+        _ACCESS_DENIED_COOLDOWN_DETAIL = ""
+        _clear_access_denied_cooldown_state()
+        return None
+    return {
+        "active": True,
+        "until": _ACCESS_DENIED_COOLDOWN_UNTIL.isoformat(),
+        "detail": _ACCESS_DENIED_COOLDOWN_DETAIL,
+    }
+
+
+def _reset_access_denied_cooldown() -> None:
+    global _ACCESS_DENIED_COOLDOWN_DETAIL, _ACCESS_DENIED_COOLDOWN_UNTIL
+    _ACCESS_DENIED_COOLDOWN_UNTIL = None
+    _ACCESS_DENIED_COOLDOWN_DETAIL = ""
+    _clear_access_denied_cooldown_state()
+
+
+def _reset_access_denied_cooldown_memory_only() -> None:
+    global _ACCESS_DENIED_COOLDOWN_DETAIL, _ACCESS_DENIED_COOLDOWN_UNTIL
+    _ACCESS_DENIED_COOLDOWN_UNTIL = None
+    _ACCESS_DENIED_COOLDOWN_DETAIL = ""
+
+
+def _access_denied_cooldown_reason(active_cooldown: Mapping[str, Any]) -> str:
+    cooldown_until = str(active_cooldown.get("until", "")).strip()
+    cooldown_detail = str(active_cooldown.get("detail", "")).strip()
+    reason = (
+        "ACCESS_DENIED: KRX investor-flow live refresh is cooling down after a recent "
+        f"access-denied response. retry_after={cooldown_until}"
+    )
+    if cooldown_detail:
+        reason += f" detail={cooldown_detail[:240]}"
+    return reason
+
+
+def _load_access_denied_cooldown_fallback(
+    *,
+    sector_map: dict[str, Any],
+    start: str,
+    end: str,
+    market: str,
+    window_meta: dict[str, Any],
+    active_cooldown: Mapping[str, Any],
+    progress_callback: ProgressCallback | None,
+) -> tuple[LoaderResult, dict[str, Any]]:
+    fallback_status, fallback_frame = load_sector_investor_flow(
+        sector_map=sector_map,
+        start=start,
+        end=end,
+        market=market,
+        allow_bootstrap_partial_preview=True,
+    )
+    reason = _access_denied_cooldown_reason(active_cooldown)
+    logger.warning("Investor-flow refresh skipped during KRX access-denied cooldown: %s", reason)
+    summary = {
+        "status": fallback_status,
+        "provider": FLOW_PROVIDER,
+        "requested_start": start,
+        "requested_end": end,
+        "coverage_complete": False,
+        "failed_days": [],
+        "failed_codes": {"refresh": reason},
+        "predicted_requests": 0,
+        "processed_requests": 0,
+        "rows": int(len(fallback_frame)),
+        "window": window_meta,
+        "cooldown": dict(active_cooldown),
+    }
+    _emit_progress(
+        progress_callback,
+        task="투자자수급 갱신",
+        phase="KRX 접근차단 cooldown",
+        pct=100,
+        detail=reason,
+        status="error",
+    )
+    return (fallback_status, fallback_frame), summary
 
 
 @dataclass(frozen=True)
@@ -199,6 +391,8 @@ def _requested_trading_days_with_source(
     weekday_days = _weekday_range_strings(start, end)
     if str(market).strip().upper() != "KR":
         return weekday_days, "weekday_range"
+    if _get_access_denied_cooldown():
+        return weekday_days, "access_denied_cooldown_weekday_fallback"
     try:
         if stock_module is None:
             ensure_pykrx_transport_compat()
@@ -493,12 +687,69 @@ def _short_exception_detail(exc: BaseException) -> str:
     return detail[:200]
 
 
+def _is_krx_endpoint_payload_error(exc: BaseException) -> bool:
+    if isinstance(exc, (KRXAccessDeniedError, KRXInvalidPayloadError)):
+        return True
+    detail = str(exc)
+    return (
+        "KRX JSON endpoint returned" in detail
+        or "Expecting value: line 1 column 1 (char 0)" in detail
+    )
+
+
+def _format_refresh_failure_reason(exc: BaseException) -> str:
+    detail = str(exc).strip()
+    lowered = detail.lower()
+    if isinstance(exc, KRXAccessDeniedError) or "access denied" in lowered or "status=403" in lowered:
+        return (
+            "ACCESS_DENIED: KRX Data Marketplace blocked the investor-flow trading-value endpoint. "
+            "Configure KRX_ID/KRX_PW and retry; if it still fails, KRX is blocking this unofficial endpoint. "
+            f"detail={detail[:240]}"
+        )
+    if isinstance(exc, KRXInvalidPayloadError) or "non-json" in lowered or "empty or non-json" in lowered:
+        return (
+            "NON_JSON_RESPONSE: KRX investor-flow trading-value endpoint returned an empty or non-JSON response. "
+            f"detail={detail[:240]}"
+        )
+    return detail
+
+
+def _is_expected_krx_refresh_failure(exc: BaseException) -> bool:
+    if _is_krx_endpoint_payload_error(exc):
+        return True
+    if not isinstance(exc, KRXInvestorFlowEndpointUnavailable):
+        return False
+    detail = str(exc).lower()
+    return (
+        "access denied" in detail
+        or "status=403" in detail
+        or "empty or non-json" in detail
+        or "endpoint returned empty frames" in detail
+    )
+
+
 def _fetch_first_non_empty_frame(*builders) -> tuple[pd.DataFrame, list[dict[str, Any]], str]:
     attempts: list[dict[str, Any]] = []
     for name, builder in builders:
         try:
             frame = builder()
         except Exception as exc:
+            if _is_krx_endpoint_payload_error(exc):
+                detail = _short_exception_detail(exc)
+                failure_reason = _format_refresh_failure_reason(exc)
+                if _is_access_denied_failure_reason(failure_reason):
+                    _activate_access_denied_cooldown(failure_reason)
+                attempts.append(
+                    {
+                        "builder": str(name),
+                        "status": "fatal",
+                        "detail": detail,
+                    }
+                )
+                raise KRXInvestorFlowEndpointUnavailable(
+                    "KRX investor-flow trading-value endpoint returned an empty or non-JSON response. "
+                    f"Last builder={name}, detail={detail}"
+                ) from exc
             attempts.append(
                 {
                     "builder": str(name),
@@ -911,6 +1162,7 @@ def _collect_ticker_flow_rows(
     processed_requests = 0
     predicted_requests = max(0, len(tickers) * 3)
     last_pct = -1
+    consecutive_endpoint_empty_tickers = 0
 
     def _emit_collection_progress(current_ticker: str) -> None:
         nonlocal last_pct
@@ -949,6 +1201,9 @@ def _collect_ticker_flow_rows(
                 end=end,
                 allow_wrapper_fallback=allow_wrapper_fallback,
             )
+        except KRXInvestorFlowEndpointUnavailable:
+            _emit_collection_progress(str(ticker))
+            raise
         except Exception as exc:
             failed_codes[str(ticker)] = _short_exception_detail(exc)
             failed_detail[str(ticker)] = {
@@ -976,7 +1231,18 @@ def _collect_ticker_flow_rows(
             failed_codes[str(ticker)] = final_reason
             failed_detail[str(ticker)] = detail
             _emit_collection_progress(str(ticker))
+            if str(validation_detail.get("family", "")) == "all_builders_empty":
+                consecutive_endpoint_empty_tickers += 1
+                if consecutive_endpoint_empty_tickers >= MAX_CONSECUTIVE_EMPTY_TRADING_VALUE_TICKERS:
+                    raise KRXInvestorFlowEndpointUnavailable(
+                        "KRX investor-flow trading-value endpoint returned empty frames for "
+                        f"{consecutive_endpoint_empty_tickers} consecutive tickers. "
+                        "Stopping early to avoid repeated pykrx wrapper failures."
+                    )
+            else:
+                consecutive_endpoint_empty_tickers = 0
             continue
+        consecutive_endpoint_empty_tickers = 0
 
         ticker_name = ""
         try:
@@ -1018,6 +1284,18 @@ def collect_sector_investor_flow(
     market: str = "KR",
     progress_callback: ProgressCallback | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, dict[str, Any]]:
+    active_cooldown = _get_access_denied_cooldown()
+    if active_cooldown:
+        reason = _access_denied_cooldown_reason(active_cooldown)
+        _emit_progress(
+            progress_callback,
+            task="투자자수급 갱신",
+            phase="KRX 접근차단 cooldown",
+            pct=100,
+            detail=reason,
+            status="error",
+        )
+        raise KRXInvestorFlowEndpointUnavailable(reason)
     _emit_progress(
         progress_callback,
         task="투자자수급 갱신",
@@ -1688,6 +1966,8 @@ def run_manual_investor_flow_refresh(
     resolved_end = _normalize_yyyymmdd(end_date_str)
     if not resolved_end:
         raise ValueError(f"Invalid investor-flow end date: {end_date_str}")
+
+    active_cooldown = _get_access_denied_cooldown()
     if start_date_str:
         start = _normalize_yyyymmdd(start_date_str)
         if not start:
@@ -1700,6 +1980,24 @@ def run_manual_investor_flow_refresh(
             "failed_days_repaired": [],
         }
     else:
+        if active_cooldown:
+            start = (pd.Timestamp(resolved_end) - pd.Timedelta(days=lookback_days)).strftime("%Y%m%d")
+            window_meta = {
+                "mode": "access_denied_cooldown",
+                "complete_cursor": read_investor_flow_operational_complete_cursor(market=market) or "",
+                "latest_run_reason": "",
+                "latest_run_end": "",
+                "failed_days_repaired": [],
+            }
+            return _load_access_denied_cooldown_fallback(
+                sector_map=sector_map,
+                start=start,
+                end=resolved_end,
+                market=market,
+                window_meta=window_meta,
+                active_cooldown=active_cooldown,
+                progress_callback=progress_callback,
+            )
         start, resolved_end, window_meta = resolve_investor_flow_refresh_window(
             end_date_str=resolved_end,
             lookback_days=lookback_days,
@@ -1740,6 +2038,17 @@ def run_manual_investor_flow_refresh(
             status="complete",
         )
         return ("CACHED", cached), summary
+
+    if active_cooldown:
+        return _load_access_denied_cooldown_fallback(
+            sector_map=sector_map,
+            start=start,
+            end=end,
+            market=market,
+            window_meta=window_meta,
+            active_cooldown=active_cooldown,
+            progress_callback=progress_callback,
+        )
 
     try:
         raw_frame, sector_frame, summary = collect_sector_investor_flow(
@@ -1845,7 +2154,17 @@ def run_manual_investor_flow_refresh(
         )
         return ("LIVE", cached), summary
     except Exception as exc:
-        logger.exception("Investor-flow refresh failed")
+        failure_reason = _format_refresh_failure_reason(exc)
+        cooldown: dict[str, Any] | None = None
+        if _is_access_denied_failure_reason(failure_reason):
+            cooldown = _activate_access_denied_cooldown(failure_reason)
+        if _is_expected_krx_refresh_failure(exc):
+            logger.warning(
+                "Investor-flow refresh degraded to cache after expected KRX endpoint failure: %s",
+                failure_reason,
+            )
+        else:
+            logger.exception("Investor-flow refresh failed")
         fallback_status, fallback_frame = load_sector_investor_flow(
             sector_map=sector_map,
             start=start,
@@ -1860,12 +2179,14 @@ def run_manual_investor_flow_refresh(
             "requested_end": end,
             "coverage_complete": False,
             "failed_days": [],
-            "failed_codes": {"refresh": str(exc)},
+            "failed_codes": {"refresh": failure_reason},
             "predicted_requests": 0,
             "processed_requests": 0,
             "rows": int(len(fallback_frame)),
             "window": window_meta,
         }
+        if cooldown:
+            summary["cooldown"] = cooldown
         try:
             record_investor_flow_run_failure(
                 reason="manual_refresh",

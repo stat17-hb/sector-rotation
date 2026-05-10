@@ -36,6 +36,8 @@ _SESSION_LOCK = threading.Lock()
 _SESSION_AUTHENTICATED: bool | None = None
 _SESSION_AUTH_DETAIL = "KRX_ID/KRX_PW not configured"
 _ACCESS_DENIED_DETAIL: str = ""
+_WARNING_ONCE_KEYS: set[str] = set()
+_WARNING_ONCE_LOCK = threading.Lock()
 
 _BROWSER_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -48,9 +50,27 @@ class KRXAccessDeniedError(RuntimeError):
     """Raised when KRX responds with deterministic access-denied HTML."""
 
 
+class KRXInvalidPayloadError(RuntimeError):
+    """Raised when a KRX JSON endpoint returns an empty or non-JSON payload."""
+
+
 def _set_access_denied_detail(detail: str | None) -> None:
     global _ACCESS_DENIED_DETAIL
     _ACCESS_DENIED_DETAIL = str(detail or "").strip()
+
+
+def _access_denied_detail_blocks_login(detail: str | None) -> bool:
+    """Only login-page access denial should suppress repeated login attempts."""
+    return str(detail or "").strip().lower().startswith("access denied during krx login")
+
+
+def _should_log_warning_once(category: str, detail: str | None) -> bool:
+    key = f"{category}:{' '.join(str(detail or '').split())[:500]}"
+    with _WARNING_ONCE_LOCK:
+        if key in _WARNING_ONCE_KEYS:
+            return False
+        _WARNING_ONCE_KEYS.add(key)
+    return True
 
 
 def _load_secret_or_env(name: str) -> str:
@@ -211,14 +231,14 @@ def _get_shared_session() -> _requests.Session:
         blocked_detail = _ACCESS_DENIED_DETAIL
         try:
             if login_id and login_pw:
-                if blocked_detail:
+                if _access_denied_detail_blocks_login(blocked_detail):
                     _set_krx_login_state(False, blocked_detail)
                 else:
                     _set_krx_login_state(False, "KRX login warmup not completed yet")
                     _warmup_krx_login_session(session)
                     authenticated, detail = _login_krx_session(session, login_id, login_pw)
                     _set_krx_login_state(authenticated, detail)
-                    if not authenticated:
+                    if not authenticated and _should_log_warning_once("login_failed", detail):
                         logger.warning("KRX login failed; proceeding without authenticated session: %s", detail)
             else:
                 _set_krx_login_state(None, "KRX_ID/KRX_PW not configured")
@@ -249,7 +269,7 @@ def reset_krx_shared_session() -> None:
             logger.debug("KRX shared session close failed during reset.", exc_info=True)
     login_id = _load_secret_or_env("KRX_ID")
     login_pw = _load_secret_or_env("KRX_PW")
-    if _ACCESS_DENIED_DETAIL:
+    if _access_denied_detail_blocks_login(_ACCESS_DENIED_DETAIL):
         _set_krx_login_state(False, _ACCESS_DENIED_DETAIL)
     elif login_id and login_pw:
         _set_krx_login_state(False, "KRX session reset; next request will re-authenticate")
@@ -383,10 +403,10 @@ def request_krx_data(
                 _set_access_denied_detail(detail)
                 raise KRXAccessDeniedError(detail) from exc
             if "html" in content_type or text.lstrip().startswith("<"):
-                raise RuntimeError(
+                raise KRXInvalidPayloadError(
                     f"KRX JSON endpoint returned non-JSON HTML (status={response.status_code}, snippet={snippet!r})"
                 ) from exc
-            raise RuntimeError(
+            raise KRXInvalidPayloadError(
                 "KRX JSON endpoint returned non-JSON payload "
                 f"(status={response.status_code}, content_type={content_type or 'unknown'}, snippet={snippet!r})"
             ) from exc
@@ -398,11 +418,17 @@ def request_krx_data(
             _raise_for_non_json_response(response)
             _set_access_denied_detail("")
             return response
-        except KRXAccessDeniedError:
+        except KRXAccessDeniedError as exc:
+            if attempt == 0:
+                if _should_log_warning_once("json_access_denied_retry", str(exc)):
+                    logger.warning("KRX JSON endpoint returned access denied; resetting session and retrying once: %s", exc)
+                reset_krx_shared_session()
+                continue
             raise
         except RuntimeError as exc:
             if attempt == 0:
-                logger.warning("KRX JSON endpoint returned invalid payload; resetting session and retrying once: %s", exc)
+                if _should_log_warning_once("json_invalid_payload_retry", str(exc)):
+                    logger.warning("KRX JSON endpoint returned invalid payload; resetting session and retrying once: %s", exc)
                 reset_krx_shared_session()
                 continue
             raise

@@ -45,6 +45,7 @@ def _isolate_streamlit_runtime(monkeypatch):
     monkeypatch.delenv("KRX_OPENAPI_KEY", raising=False)
     monkeypatch.delenv("KRX_PROVIDER", raising=False)
     monkeypatch.setattr(krx_openapi, "_OPENAPI_URL_OVERRIDE_WARNED", False)
+    krx_openapi._OPENAPI_ACCESS_DENIED_BATCH_WARNINGS.clear()
 
 
 def test_get_krx_provider_parsing():
@@ -295,6 +296,35 @@ def test_fetch_index_ohlcv_openapi_batch_detailed_collects_failed_days_and_prese
     assert details["aborted"] is True
     assert details["abort_reason"] == "ACCESS_DENIED"
     assert details["processed_requests"] == 2
+
+
+def test_fetch_index_ohlcv_openapi_batch_logs_repeated_access_denied_once(caplog):
+    denied_response = _FakeResponse(
+        status_code=200,
+        payload=ValueError("not json"),
+        text="<html><body>Access Denied</body></html>",
+    )
+    caplog.set_level("WARNING", logger="src.data_sources.krx_openapi")
+
+    for _ in range(2):
+        successes, failures, details = krx_openapi.fetch_index_ohlcv_openapi_batch_detailed(
+            ["1001"],
+            "20260226",
+            "20260226",
+            auth_key="DUMMY",
+            session=_FakeSession({"20260226": denied_response}),
+            force=True,
+        )
+        assert successes == {}
+        assert failures == {"1001": "KRX OpenAPI returned no data rows"}
+        assert details["abort_reason"] == "ACCESS_DENIED"
+
+    warnings = [
+        rec
+        for rec in caplog.records
+        if "KRX OpenAPI batch aborted" in rec.getMessage()
+    ]
+    assert len(warnings) == 1
 
 
 def test_fetch_index_ohlcv_openapi_batch_force_retries_access_denied_then_succeeds():

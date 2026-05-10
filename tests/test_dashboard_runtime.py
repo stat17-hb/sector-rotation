@@ -12,6 +12,22 @@ from src.dashboard import runtime
 from src.dashboard.types import DashboardContext
 
 
+def test_app_sidebar_uses_auto_initial_state_for_responsive_first_viewport():
+    app_source = Path("app.py").read_text(encoding="utf-8")
+
+    assert 'initial_sidebar_state="auto"' in app_source
+    assert 'initial_sidebar_state="expanded"' not in app_source
+
+
+def test_app_header_displays_dashboard_data_reference_date():
+    app_source = Path("app.py").read_text(encoding="utf-8")
+
+    assert "market_data_reference_date" in app_source
+    assert '"조회 기준일"' in app_source
+    assert '"목표일"' in app_source
+    assert "선택 기준일" in app_source
+
+
 class _DummyCache:
     def __init__(self) -> None:
         self.clears = 0
@@ -98,7 +114,7 @@ def _context(market_id: str = "KR") -> DashboardContext:
         settings={},
         sector_map={},
         macro_series_cfg={},
-        benchmark_code="1001" if market_id == "KR" else "SPY",
+        benchmark_code="1001" if market_id == "KR" else "^GSPC",
         market_end_date=date(2026, 4, 7),
         market_end_date_str="20260407",
         macro_cache_token="macro",
@@ -121,6 +137,7 @@ def test_invalidate_dashboard_caches_scopes(monkeypatch):
     flow = _DummyCache()
     macro = _DummyCache()
     signals = _DummyCache()
+    monitoring_clears: list[str] = []
 
     monkeypatch.setattr(runtime, "cached_api_preflight", api)
     monkeypatch.setattr(runtime, "cached_sector_prices", sector)
@@ -128,6 +145,7 @@ def test_invalidate_dashboard_caches_scopes(monkeypatch):
     monkeypatch.setattr(runtime, "cached_investor_flow", flow)
     monkeypatch.setattr(runtime, "cached_macro", macro)
     monkeypatch.setattr(runtime, "cached_signals", signals)
+    monkeypatch.setattr(runtime, "_clear_monitoring_data_cache", lambda: monitoring_clears.append("clear"))
 
     runtime.invalidate_dashboard_caches("market")
     assert api.clears == 1
@@ -136,14 +154,17 @@ def test_invalidate_dashboard_caches_scopes(monkeypatch):
     assert flow.clears == 1
     assert macro.clears == 0
     assert signals.clears == 1
+    assert monitoring_clears == ["clear"]
 
     runtime.invalidate_dashboard_caches("macro")
     assert macro.clears == 1
     assert signals.clears == 2
+    assert monitoring_clears == ["clear", "clear"]
 
     runtime.invalidate_dashboard_caches("flow")
     assert flow.clears == 2
     assert signals.clears == 3
+    assert monitoring_clears == ["clear", "clear", "clear"]
 
     runtime.invalidate_dashboard_caches("all")
     assert api.clears == 2
@@ -152,6 +173,7 @@ def test_invalidate_dashboard_caches_scopes(monkeypatch):
     assert flow.clears == 3
     assert macro.clears == 2
     assert signals.clears == 4
+    assert monitoring_clears == ["clear", "clear", "clear", "clear"]
 
 
 def test_run_market_refresh_returns_notice_and_invalidates(monkeypatch):
@@ -172,12 +194,111 @@ def test_run_market_refresh_returns_notice_and_invalidates(monkeypatch):
 
     notice = runtime.run_market_refresh(_context("US"), price_years=3, progress_callback=events.append)
 
-    assert notice == ("success", "US:SPY,5044")
+    assert notice == ("success", "US:^GSPC,5044")
     assert close_calls == ["close"]
     assert invalidate_calls == ["market"]
     assert [event["phase"] for event in events] == ["준비 중", "데이터 요청 중", "캐시 정리 중", "완료"]
     assert events[-1]["pct"] == 100
     assert events[-1]["status"] == "complete"
+
+
+def test_run_market_refresh_uses_incremental_start_from_warehouse_latest_dates(monkeypatch):
+    calls: list[tuple[list[str], str, str]] = []
+
+    monkeypatch.setattr(runtime, "close_cached_read_only_connection", lambda: None)
+    monkeypatch.setattr(runtime, "get_market_index_universe_codes", lambda benchmark_code, market_id: ["1001", "5044"])
+    monkeypatch.setattr(runtime, "get_market_range_strings", lambda end_date_str, price_years: ("20230101", end_date_str))
+    monkeypatch.setattr(runtime, "get_market_latest_dates", lambda codes, *, market: {"1001": "20260405", "5044": "20260404"})
+    monkeypatch.setattr(runtime, "invalidate_dashboard_caches", lambda scope: None)
+    monkeypatch.setattr(runtime, "build_market_refresh_notice", lambda summary: ("success", summary["status"]))
+    monkeypatch.setattr(
+        runtime,
+        "_resolve_market_refresh_runner",
+        lambda market_id: lambda codes, start, end: (
+            calls.append((list(codes), start, end))
+            or (("LIVE", pd.DataFrame()), {"status": "LIVE", "coverage_complete": True})
+        ),
+    )
+
+    notice = runtime.run_market_refresh(_context("KR"), price_years=3)
+
+    assert notice == ("success", "LIVE")
+    assert calls == [(["1001", "5044"], "20260405", "20260407")]
+
+
+def test_run_market_refresh_skips_runner_when_warehouse_is_current(monkeypatch):
+    invalidate_calls: list[str] = []
+    transient_clears: list[str] = []
+
+    monkeypatch.setattr(runtime, "get_market_index_universe_codes", lambda benchmark_code, market_id: ["1001", "5044"])
+    monkeypatch.setattr(runtime, "get_market_range_strings", lambda end_date_str, price_years: ("20230101", end_date_str))
+    monkeypatch.setattr(runtime, "get_market_latest_dates", lambda codes, *, market: {"1001": "20260407", "5044": "20260407"})
+    monkeypatch.setattr(runtime, "invalidate_dashboard_caches", lambda scope: invalidate_calls.append(scope))
+    monkeypatch.setattr(runtime, "clear_market_price_transient_override", lambda: transient_clears.append("clear"))
+    monkeypatch.setattr(runtime, "build_market_refresh_notice", lambda summary: ("info", summary["status"]))
+    monkeypatch.setattr(
+        runtime,
+        "_resolve_market_refresh_runner",
+        lambda market_id: lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("runner should not run when warehouse is current")),
+    )
+
+    notice = runtime.run_market_refresh(_context("KR"), price_years=3)
+
+    assert notice == ("info", "CACHED")
+    assert invalidate_calls == ["market"]
+    assert transient_clears == ["clear"]
+
+
+def test_run_market_refresh_sets_transient_override_for_write_lock_preview(monkeypatch):
+    close_calls: list[str] = []
+    invalidate_calls: list[str] = []
+    transient_sets: list[dict[str, object]] = []
+    transient_clears: list[str] = []
+    frame = pd.DataFrame(
+        {
+            "index_code": ["SPY"],
+            "index_name": ["S&P 500"],
+            "close": [500.0],
+        },
+        index=pd.to_datetime(["2026-04-07"]),
+    )
+
+    monkeypatch.setattr(runtime, "close_cached_read_only_connection", lambda: close_calls.append("close"))
+    monkeypatch.setattr(runtime, "get_all_sector_codes", lambda benchmark_code: [benchmark_code])
+    monkeypatch.setattr(runtime, "get_market_range_strings", lambda end_date_str, price_years: ("20260401", end_date_str))
+    monkeypatch.setattr(runtime, "invalidate_dashboard_caches", lambda scope: invalidate_calls.append(scope))
+    monkeypatch.setattr(runtime, "set_market_price_transient_override", lambda **kwargs: transient_sets.append(kwargs))
+    monkeypatch.setattr(runtime, "clear_market_price_transient_override", lambda: transient_clears.append("clear"))
+    monkeypatch.setattr(
+        runtime,
+        "build_market_refresh_notice",
+        lambda summary: ("warning", "preview") if summary["warehouse_write_skipped"] else ("success", "saved"),
+    )
+    monkeypatch.setattr(
+        runtime,
+        "_resolve_market_refresh_runner",
+        lambda market_id: lambda codes, start, end: (
+            ("LIVE", frame),
+            {
+                "status": "LIVE",
+                "coverage_complete": False,
+                "warehouse_write_skipped": True,
+                "rows": len(frame),
+            },
+        ),
+    )
+
+    notice = runtime.run_market_refresh(_context("US"), price_years=3)
+
+    assert notice == ("warning", "preview")
+    assert close_calls == ["close"]
+    assert invalidate_calls == ["market"]
+    assert transient_clears == []
+    assert len(transient_sets) == 1
+    assert transient_sets[0]["market_id_arg"] == "US"
+    assert transient_sets[0]["requested_end"] == "20260407"
+    assert transient_sets[0]["status"] == "LIVE"
+    assert transient_sets[0]["frame"].equals(frame)
 
 
 def test_run_macro_refresh_returns_notice_and_invalidates(monkeypatch):
@@ -199,23 +320,49 @@ def test_run_macro_refresh_returns_notice_and_invalidates(monkeypatch):
     assert events[-1]["status"] == "complete"
 
 
-def test_run_feature_recompute_clears_features_and_invalidates(tmp_path, monkeypatch):
-    close_calls: list[str] = []
-    invalidate_calls: list[str] = []
-    features_dir = tmp_path / "data" / "features"
-    features_dir.mkdir(parents=True)
-    (features_dir / "artifact.txt").write_text("x", encoding="utf-8")
+def test_run_macro_refresh_keeps_configured_window_for_macro_sync_policy(monkeypatch):
+    calls: list[dict[str, object]] = []
+    cfg = {
+        "ecos": {"leading_index": {"enabled": True}},
+        "kosis": {"cpi_yoy": {"enabled": True}},
+    }
 
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(runtime, "close_cached_read_only_connection", lambda: close_calls.append("close"))
-    monkeypatch.setattr(runtime, "invalidate_dashboard_caches", lambda scope: invalidate_calls.append(scope))
+    monkeypatch.setattr(runtime, "close_cached_read_only_connection", lambda: None)
+    monkeypatch.setattr(runtime, "invalidate_dashboard_caches", lambda scope: None)
+    monkeypatch.setattr(runtime, "build_macro_refresh_notice", lambda summary: ("success", summary["status"]))
+    monkeypatch.setattr(
+        runtime,
+        "_sync_macro_warehouse",
+        lambda **kwargs: calls.append(dict(kwargs)) or (None, pd.DataFrame({"value": [1]}), {"status": "LIVE", "rows": 1}),
+    )
 
-    runtime.run_feature_recompute()
+    notice = runtime.run_macro_refresh(_context("KR"), cfg)
 
-    assert close_calls == ["close"]
-    assert invalidate_calls == ["signals"]
-    assert features_dir.exists()
-    assert list(features_dir.iterdir()) == []
+    assert notice == ("success", "LIVE")
+    assert calls
+    assert calls[0]["start_ym"] == "201605"
+    assert calls[0]["end_ym"] == "202604"
+    assert calls[0]["market"] == "KR"
+
+
+def test_run_macro_refresh_does_not_bypass_provider_series_policy(monkeypatch):
+    calls: list[dict[str, object]] = []
+    cfg = {"ecos": {"leading_index": {"enabled": True}}}
+
+    monkeypatch.setattr(runtime, "close_cached_read_only_connection", lambda: None)
+    monkeypatch.setattr(runtime, "invalidate_dashboard_caches", lambda scope: None)
+    monkeypatch.setattr(runtime, "build_macro_refresh_notice", lambda summary: ("info", summary["status"]))
+    monkeypatch.setattr(
+        runtime,
+        "_sync_macro_warehouse",
+        lambda **kwargs: calls.append(dict(kwargs)) or (None, pd.DataFrame(), {"status": "CACHED", "coverage_complete": True}),
+    )
+
+    notice = runtime.run_macro_refresh(_context("KR"), cfg)
+
+    assert notice == ("info", "CACHED")
+    assert calls
+    assert calls[0]["start_ym"] == "201605"
 
 
 def test_run_investor_flow_refresh_returns_notice_and_invalidates(monkeypatch):
@@ -234,6 +381,7 @@ def test_run_investor_flow_refresh_returns_notice_and_invalidates(monkeypatch):
     def _runner(**kwargs):
         assert kwargs["market"] == "KR"
         assert kwargs["end_date_str"] == "20260407"
+        assert "start_date_str" not in kwargs
         return (("LIVE", pd.DataFrame()), {"status": "LIVE", "coverage_complete": True})
 
     monkeypatch.setattr(
@@ -370,6 +518,23 @@ def test_build_investor_flow_refresh_notice_surfaces_auth_required():
     assert "KRX_ID / KRX_PW" in notice[1]
 
 
+def test_build_investor_flow_refresh_notice_surfaces_access_denied():
+    notice = dashboard_data.build_investor_flow_refresh_notice(
+        {
+            "status": "CACHED",
+            "coverage_complete": False,
+            "rows": 0,
+            "failed_codes": {
+                "refresh": "ACCESS_DENIED: KRX Data Marketplace blocked the investor-flow trading-value endpoint.",
+            },
+        }
+    )
+
+    assert notice[0] == "error"
+    assert "접근을 차단" in notice[1]
+    assert "KRX_ID / KRX_PW" in notice[1]
+
+
 def test_build_investor_flow_refresh_notice_mentions_bootstrap_partial_preview():
     notice = dashboard_data.build_investor_flow_refresh_notice(
         {
@@ -420,6 +585,39 @@ def test_build_investor_flow_refresh_notice_surfaces_warehouse_write_lock():
     assert "warehouse write lock" in notice[1]
     assert "임시 preview" in notice[1]
     assert "warehouse에 반영되지 않았습니다" in notice[1]
+
+
+def test_build_market_refresh_notice_surfaces_warehouse_write_lock_preview():
+    notice = dashboard_data.build_market_refresh_notice(
+        {
+            "status": "LIVE",
+            "coverage_complete": False,
+            "warehouse_write_skipped": True,
+            "provider": "YFINANCE",
+            "rows": 12,
+        }
+    )
+
+    assert notice[0] == "warning"
+    assert "warehouse write lock" in notice[1]
+    assert "temporary preview" in notice[1]
+
+
+def test_build_market_refresh_notice_includes_provider_failure_detail():
+    notice = dashboard_data.build_market_refresh_notice(
+        {
+            "status": "CACHED",
+            "coverage_complete": False,
+            "provider": "OPENAPI",
+            "failed_days": [],
+            "failed_codes": {"1001": "KRX OpenAPI returned no data rows"},
+            "rows": 10,
+        }
+    )
+
+    assert notice[0] == "warning"
+    assert notice[1] != "Market data refresh fell back to cache."
+    assert "1001=KRX OpenAPI returned no data rows" in notice[1]
 
 
 def test_cached_investor_flow_uses_bootstrap_partial_preview(monkeypatch):
@@ -583,7 +781,7 @@ def test_cached_signals_keeps_us_flow_overlay_disabled(monkeypatch):
     dates = pd.to_datetime(["2026-04-07", "2026-04-08"])
     sector_prices = pd.DataFrame(
         {
-            "index_code": ["SPY", "XLK"],
+            "index_code": ["^GSPC", "XLK"],
             "index_name": ["S&P 500", "Technology"],
             "close": [100.0, 101.0],
         },

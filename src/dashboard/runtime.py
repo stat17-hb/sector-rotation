@@ -2,8 +2,7 @@
 from __future__ import annotations
 
 import logging
-import shutil
-from pathlib import Path
+from datetime import timedelta
 from typing import Any, Callable, Literal
 
 import pandas as pd
@@ -19,13 +18,16 @@ from src.dashboard.data import (
     cached_sector_prices,
     cached_signals,
     clear_investor_flow_transient_override,
+    clear_market_price_transient_override,
     get_all_sector_codes,
     get_market_index_universe_codes,
     get_market_range_strings,
     set_investor_flow_transient_override,
+    set_market_price_transient_override,
 )
 from src.dashboard.types import DashboardContext
 from src.data_sources.warehouse import close_cached_read_only_connection
+from src.data_sources.warehouse import get_market_latest_dates
 
 
 logger = logging.getLogger(__name__)
@@ -60,6 +62,15 @@ def _emit_progress(
     )
 
 
+def _clear_monitoring_data_cache() -> None:
+    try:
+        from src.dashboard.tabs import clear_monitoring_data_cache
+    except Exception:
+        logger.debug("Monitoring data cache clearer is unavailable", exc_info=True)
+        return
+    clear_monitoring_data_cache()
+
+
 def invalidate_dashboard_caches(scope: CacheScope) -> None:
     """Clear the dashboard cache family associated with the requested scope."""
     if scope == "all":
@@ -69,6 +80,7 @@ def invalidate_dashboard_caches(scope: CacheScope) -> None:
         cached_investor_flow.clear()
         cached_macro.clear()
         cached_signals.clear()
+        _clear_monitoring_data_cache()
         return
     if scope == "market":
         cached_api_preflight.clear()
@@ -76,14 +88,17 @@ def invalidate_dashboard_caches(scope: CacheScope) -> None:
         cached_analysis_sector_prices.clear()
         cached_investor_flow.clear()
         cached_signals.clear()
+        _clear_monitoring_data_cache()
         return
     if scope == "macro":
         cached_macro.clear()
         cached_signals.clear()
+        _clear_monitoring_data_cache()
         return
     if scope == "flow":
         cached_investor_flow.clear()
         cached_signals.clear()
+        _clear_monitoring_data_cache()
         return
     if scope == "signals":
         cached_signals.clear()
@@ -99,6 +114,47 @@ def _resolve_market_refresh_runner(market_id: str) -> Callable[[list[str], str, 
     return run_manual_price_refresh
 
 
+def _resolve_incremental_market_range(
+    *,
+    index_codes: list[str],
+    fallback_start: str,
+    end: str,
+    market: str,
+) -> tuple[str, str, dict[str, Any]]:
+    """Return the market refresh window anchored by warehouse max dates when complete."""
+    normalized_codes = [str(code).strip() for code in index_codes if str(code).strip()]
+    fallback_start_digits = "".join(ch for ch in str(fallback_start or "") if ch.isdigit())[:8]
+    end_digits = "".join(ch for ch in str(end or "") if ch.isdigit())[:8]
+    if not normalized_codes or len(fallback_start_digits) != 8 or len(end_digits) != 8:
+        return fallback_start, end, {"mode": "configured_window", "reason": "invalid_window"}
+
+    latest_dates = get_market_latest_dates(normalized_codes, market=market)
+    missing_codes = [code for code in normalized_codes if not str(latest_dates.get(code, "")).strip()]
+    if missing_codes:
+        return fallback_start_digits, end_digits, {
+            "mode": "configured_window",
+            "reason": "missing_code_history",
+            "missing_codes": missing_codes,
+        }
+
+    parsed_latest = [
+        pd.Timestamp(str(latest_dates[code])).normalize()
+        for code in normalized_codes
+        if str(latest_dates.get(code, "")).strip()
+    ]
+    if not parsed_latest:
+        return fallback_start_digits, end_digits, {"mode": "configured_window", "reason": "empty_latest_dates"}
+
+    start_ts = min(parsed_latest) + timedelta(days=1)
+    fallback_ts = pd.Timestamp(fallback_start_digits).normalize()
+    start_ts = max(start_ts, fallback_ts)
+    return start_ts.strftime("%Y%m%d"), end_digits, {
+        "mode": "incremental",
+        "reason": "day_after_oldest_code_latest",
+        "latest_dates": latest_dates,
+    }
+
+
 def run_market_refresh(
     context: DashboardContext,
     price_years: int,
@@ -106,7 +162,7 @@ def run_market_refresh(
     progress_callback: ProgressCallback | None = None,
 ) -> tuple[str, str] | None:
     """Execute a manual market refresh and convert the result into a UI notice."""
-    refresh_start_str, refresh_end_str = get_market_range_strings(context.market_end_date_str, price_years)
+    configured_start_str, refresh_end_str = get_market_range_strings(context.market_end_date_str, price_years)
     runner = _resolve_market_refresh_runner(context.market_id)
     try:
         normalized_market = str(context.market_id or "").strip().upper()
@@ -115,6 +171,12 @@ def run_market_refresh(
             if normalized_market == "KR"
             else get_all_sector_codes(context.benchmark_code)
         )
+        refresh_start_str, refresh_end_str, window_meta = _resolve_incremental_market_range(
+            index_codes=sector_codes,
+            fallback_start=configured_start_str,
+            end=refresh_end_str,
+            market=context.market_id,
+        )
         _emit_progress(
             progress_callback,
             task="시장데이터 갱신",
@@ -122,6 +184,31 @@ def run_market_refresh(
             pct=5,
             detail=f"{refresh_start_str} ~ {refresh_end_str}",
         )
+        if pd.Timestamp(refresh_start_str) > pd.Timestamp(refresh_end_str):
+            summary = {
+                "status": "CACHED",
+                "coverage_complete": True,
+                "delta_codes": [],
+                "failed_days": [],
+                "failed_codes": {},
+                "provider": "YFINANCE" if normalized_market == "US" else "OPENAPI",
+                "reason": "manual_refresh",
+                "start": refresh_start_str,
+                "end": refresh_end_str,
+                "window": window_meta,
+            }
+            clear_market_price_transient_override()
+            invalidate_dashboard_caches("market")
+            notice = build_market_refresh_notice(summary)
+            _emit_progress(
+                progress_callback,
+                task="시장데이터 갱신",
+                phase="이미 최신 구간",
+                pct=100,
+                detail=notice[1] if notice else "",
+                status="complete",
+            )
+            return notice
         close_cached_read_only_connection()
         cached_api_preflight.clear()
         _emit_progress(
@@ -131,11 +218,12 @@ def run_market_refresh(
             pct=35,
             detail=f"{len(sector_codes)} indices",
         )
-        (_, _), refresh_summary = runner(
+        (status, frame), refresh_summary = runner(
             sector_codes,
             refresh_start_str,
             refresh_end_str,
         )
+        refresh_summary.setdefault("window", window_meta)
         _emit_progress(
             progress_callback,
             task="시장데이터 갱신",
@@ -143,6 +231,16 @@ def run_market_refresh(
             pct=85,
             detail=f"상태 {refresh_summary.get('status', '')}",
         )
+        if bool(refresh_summary.get("warehouse_write_skipped")) and isinstance(frame, pd.DataFrame) and not frame.empty:
+            set_market_price_transient_override(
+                market_id_arg=context.market_id,
+                requested_end=context.market_end_date_str,
+                status=status,
+                summary=refresh_summary,
+                frame=frame,
+            )
+        else:
+            clear_market_price_transient_override()
         invalidate_dashboard_caches("market")
         notice = build_market_refresh_notice(refresh_summary)
         _emit_progress(
@@ -155,6 +253,7 @@ def run_market_refresh(
         )
         return notice
     except Exception as exc:
+        clear_market_price_transient_override()
         _emit_progress(
             progress_callback,
             task="시장데이터 갱신",
@@ -313,18 +412,8 @@ def run_investor_flow_refresh(
         logger.exception("Manual investor-flow refresh failed")
         return ("error", f"Investor-flow refresh failed: {exc}")
 
-
-def run_feature_recompute() -> None:
-    """Clear derived feature artifacts and invalidate signal caches."""
-    close_cached_read_only_connection()
-    shutil.rmtree("data/features", ignore_errors=True)
-    Path("data/features").mkdir(exist_ok=True)
-    invalidate_dashboard_caches("signals")
-
-
 __all__ = [
     "invalidate_dashboard_caches",
-    "run_feature_recompute",
     "run_investor_flow_refresh",
     "run_macro_refresh",
     "run_market_refresh",

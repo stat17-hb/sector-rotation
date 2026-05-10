@@ -43,6 +43,7 @@ def load_screened_stocks(
     benchmark_code: str = "1001",
     settings: dict | None = None,
     force_refresh: bool = False,
+    allow_live_fetch: bool = True,
 ) -> tuple[DataStatus, list[dict]]:
     """Load momentum-screened stocks for Strong Buy sectors.
 
@@ -51,6 +52,7 @@ def load_screened_stocks(
         benchmark_code: KOSPI benchmark code (default "1001").
         settings: Dashboard settings dict (rs_ma_period, rsi_period, etc.).
         force_refresh: Bypass cache and re-fetch.
+        allow_live_fetch: When false, return only an existing cache hit and skip live KRX/pykrx calls.
 
     Returns:
         (status, rows) where each row is a dict with scoring fields.
@@ -62,6 +64,9 @@ def load_screened_stocks(
         cached = _read_cache(strong_buy_sectors)
         if cached is not None:
             return "CACHED", cached
+
+    if not allow_live_fetch:
+        return "UNAVAILABLE", []
 
     try:
         rows = _fetch_and_score(strong_buy_sectors, benchmark_code, settings or {})
@@ -79,11 +84,15 @@ def load_representative_etf_context(
     etf_map: dict[str, list[dict]] | None,
     settings: dict | None = None,
     force_refresh: bool = False,
+    allow_live_fetch: bool = True,
 ) -> tuple[DataStatus, list[dict]]:
     """Load representative ETF execution context for Strong Buy sectors.
 
     The result is intentionally execution-support only. It must not affect
     sector ranking, action, or stock-screening results.
+
+    Set allow_live_fetch=False to use this as a cache-only fast path during
+    page render. Manual refresh should keep allow_live_fetch=True.
     """
     if not strong_buy_sectors:
         return "UNAVAILABLE", []
@@ -97,6 +106,9 @@ def load_representative_etf_context(
         cached = _read_etf_context_cache(strong_buy_sectors, normalized_etf_map)
         if cached is not None:
             return "CACHED", cached
+
+    if not allow_live_fetch:
+        return "UNAVAILABLE", []
 
     try:
         rows = _fetch_representative_etf_context(

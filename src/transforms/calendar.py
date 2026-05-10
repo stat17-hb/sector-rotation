@@ -88,9 +88,9 @@ def _get_last_business_day_pykrx(ref: date, benchmark_code: str) -> date:
 
 
 def _get_last_business_day_yfinance(ref: date, benchmark_code: str) -> date:
-    """Fetch recent ETF history via Yahoo chart API and return the latest trading day."""
+    """Fetch recent US market history via Yahoo chart API and return the latest trading day."""
     df = fetch_yahoo_chart_history(
-        str(benchmark_code).strip() or "SPY",
+        str(benchmark_code).strip() or "^GSPC",
         ref - timedelta(days=YFINANCE_LOOKBACK_DAYS),
         ref,
     )

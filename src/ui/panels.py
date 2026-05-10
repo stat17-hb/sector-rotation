@@ -1,6 +1,8 @@
 """Panel-oriented UI renderers."""
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from src.ui.base import *
 def _render_card_html(
     *,
@@ -86,8 +88,7 @@ def render_status_strip(banner: Mapping[str, object] | None) -> None:
     details = [str(item).strip() for item in banner.get("details", []) if str(item).strip()]
     detail_count = len(details)
     detail_html = (
-        f'<span class="status-strip__meta">{detail_count} detail'
-        f"{'' if detail_count == 1 else 's'}</span>"
+        f'<span class="status-strip__meta">{detail_count}개 상세</span>'
         if detail_count
         else ""
     )
@@ -108,7 +109,7 @@ def render_status_strip(banner: Mapping[str, object] | None) -> None:
     )
 
     if details:
-        with st.expander("시스템 상세 정보", expanded=False):
+        with st.expander("상세 상태", expanded=False):
             for detail in details:
                 st.write(f"- {detail}")
 
@@ -427,6 +428,7 @@ def _build_overview_market_cards(
     *,
     prices_wide: pd.DataFrame,
     benchmark_label: str,
+    reference_index_labels: Sequence[str] | None = None,
     signals: Sequence,
     current_regime: str,
     price_status: str,
@@ -434,6 +436,7 @@ def _build_overview_market_cards(
 ) -> list[str]:
     cards: list[str] = []
     preferred = [benchmark_label]
+    preferred.extend(str(label).strip() for label in reference_index_labels or [])
     preferred.extend(
         str(getattr(signal, "sector_name", "")).strip()
         for signal in sorted(signals, key=signal_display_sort_key)[:2]
@@ -443,17 +446,21 @@ def _build_overview_market_cards(
         if label and label in prices_wide.columns and label not in labels:
             labels.append(label)
 
-    for label in labels[:2]:
+    market_card_limit = 1 + len([label for label in reference_index_labels or [] if str(label).strip()])
+    market_card_limit = max(2, market_card_limit)
+    for label in labels[:market_card_limit]:
         series = prices_wide[label]
         latest = pd.to_numeric(series, errors="coerce").dropna()
         value = latest.iloc[-1] if not latest.empty else None
         change = _series_change_pct(series)
         tone = "positive" if (change or 0.0) >= 0 else "negative"
         cards.append(
-            '<div class="overview-market-card">'
+            '<div class="overview-market-card overview-market-card--metric">'
             f'<div class="overview-market-card__label">{html.escape(label)}</div>'
+            '<div class="overview-market-card__metric-row">'
             f'<div class="overview-market-card__value">{html.escape(_format_overview_number(value))}</div>'
             f'<div class="overview-market-card__change" data-tone="{tone}">{html.escape(_format_overview_pct(change))}</div>'
+            "</div>"
             "</div>"
         )
 
@@ -572,7 +579,11 @@ def _build_overview_trend_figure(
                 y=normalized.values,
                 mode="lines",
                 name=label,
-                line={"width": 2.4 if label == benchmark_label else 1.8},
+                line={
+                    "width": 1.35 if label == benchmark_label else 2.15,
+                    "dash": "dot" if label == benchmark_label else "solid",
+                },
+                opacity=0.68 if label == benchmark_label else 0.96,
                 hovertemplate="%{fullData.name}<br>%{x|%Y-%m-%d}<br>%{y:.3f}<extra></extra>",
             )
         )
@@ -589,9 +600,9 @@ def _build_overview_trend_figure(
     fig.update_layout(**template)
     fig.update_layout(
         title="섹터 상대강도 추이 (vs 기준값 1.0)",
-        height=340,
-        margin={"l": 36, "r": 18, "t": 48, "b": 36},
-        legend={"orientation": "v", "x": 1.01, "y": 1.0},
+        height=318,
+        margin={"l": 34, "r": 18, "t": 42, "b": 58},
+        legend={"orientation": "h", "x": 0.0, "y": -0.18, "xanchor": "left"},
     )
     fig.update_yaxes(tickformat=".2f", title="")
     fig.update_xaxes(title="")
@@ -625,6 +636,33 @@ def _render_overview_heatmap(signals: Sequence) -> None:
     )
 
 
+def _render_overview_mobile_decision_strip(frame: pd.DataFrame) -> None:
+    """Render a compact mobile-only top-sector strip before secondary controls."""
+    if frame.empty:
+        return
+
+    tiles: list[str] = []
+    for _, row in frame.head(3).iterrows():
+        ret_3m = _safe_float(row.get("3M"))
+        tone = "positive" if (ret_3m or 0.0) >= 0 else "negative"
+        tiles.append(
+            '<div class="overview-decision-tile">'
+            f'<span>{html.escape(str(row.get("섹터", "")))}</span>'
+            f'<strong data-tone="{tone}">{html.escape(_format_overview_pct(ret_3m))}</strong>'
+            "</div>"
+        )
+
+    st.markdown(
+        '<div class="overview-mobile-decision-strip">'
+        '<div class="overview-mobile-decision-strip__label">상위 섹터</div>'
+        '<div class="overview-mobile-decision-strip__grid">'
+        + "".join(tiles)
+        + "</div>"
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def render_toss_overview_dashboard(
     *,
     market_id: str,
@@ -633,6 +671,7 @@ def render_toss_overview_dashboard(
     macro_status: str,
     prices_wide: pd.DataFrame,
     benchmark_label: str,
+    reference_index_labels: Sequence[str] | None = None,
     signals: Sequence,
     theme_mode: str,
     sector_map: Mapping[str, object],
@@ -641,93 +680,116 @@ def render_toss_overview_dashboard(
     lookup_message: str = "",
     lookup_display_model: Mapping[str, Any] | None = None,
     locale: UiLocale = DEFAULT_UI_LOCALE,
+    is_mobile: bool = False,
 ) -> tuple[str, bool]:
     """Render the reference-style overview and return stock lookup submission state."""
     cards = _build_overview_market_cards(
         prices_wide=prices_wide,
         benchmark_label=benchmark_label,
+        reference_index_labels=reference_index_labels,
         signals=signals,
         current_regime=current_regime,
         price_status=price_status,
         macro_status=macro_status,
     )
-    st.markdown(
-        '<section class="overview-reference-shell">'
-        '<div class="overview-section-title">시장/국면 한눈에 보기</div>'
-        f'<div class="overview-market-grid">{"".join(cards)}</div>'
-        "</section>",
-        unsafe_allow_html=True,
-    )
 
     lookup_query = str(lookup_query_value or "")
     lookup_submitted = False
+    sort_key = "모멘텀 점수"
+    sector_frame = _build_overview_sector_frame(signals, sort_key=sort_key)
     with st.container(border=True):
-        st.markdown('<div class="overview-section-title">종목-섹터 조회</div>', unsafe_allow_html=True)
-        with st.form("overview_stock_lookup_form"):
-            input_col, market_col, button_col = st.columns([3.5, 1.2, 0.82])
-            with input_col:
-                lookup_query = st.text_input(
-                    get_ui_text("stock_lookup_label", locale),
-                    value=lookup_query,
-                    placeholder="종목명 또는 티커를 입력하세요 (예: 삼성전자, 005930)",
-                    label_visibility="collapsed",
-                )
-            with market_col:
-                st.selectbox(
-                    "시장",
-                    options=[f"{market_id} ({'KOSPI/KOSDAQ' if market_id == 'KR' else 'US'})"],
-                    index=0,
-                    label_visibility="collapsed",
-                    disabled=True,
-                )
-            with button_col:
-                lookup_submitted = st.form_submit_button("상세 조회", width="stretch", type="primary")
-
-        if lookup_status or lookup_message:
-            status_text = " · ".join(item for item in [lookup_status, lookup_message] if item)
-            st.caption(status_text)
-        detail = dict(lookup_display_model or {})
-        candidates = list(detail.get("candidates", []) or detail.get("matched_sectors", []) or [])
-        if candidates:
-            selected_suffix = get_ui_text("stock_lookup_selected_suffix", locale)
-            selected_code = str(dict(detail.get("canonical_sector") or {}).get("sector_code", "")).strip()
-            chips = []
-            for candidate in candidates[:4]:
-                sector_name = str(candidate.get("sector_name", "")).strip()
-                selected = bool(candidate.get("selected")) or str(candidate.get("sector_code", "")).strip() == selected_code
-                if sector_name:
-                    chips.append(
-                        '<span class="overview-lookup-chip" data-selected="{}">{}</span>'.format(
-                            "true" if selected else "false",
-                            html.escape(f"{sector_name} ({selected_suffix})" if selected else sector_name),
-                        )
-                    )
-            if chips:
-                st.markdown('<div class="overview-lookup-chips">' + "".join(chips) + "</div>", unsafe_allow_html=True)
-
-    filter_col_1, filter_col_2, filter_col_3, filter_col_4 = st.columns([1, 1.2, 1.2, 1.2])
-    with filter_col_1:
-        period = st.segmented_control(
-            "기간",
-            options=["1M", "3M", "6M", "1Y"],
-            default="3M",
-            label_visibility="visible",
+        st.markdown(
+            '<section class="overview-reference-shell overview-command-surface">'
+            '<div class="overview-command-surface__header">'
+            '<div>'
+            '<div class="overview-section-title">시장/조회</div>'
+            '<div class="overview-command-surface__copy">국면, 데이터 상태, 종목 조회를 먼저 확인합니다.</div>'
+            '</div>'
+            f'<div class="overview-market-grid">{"".join(cards)}</div>'
+            '</div>'
+            '</section>',
+            unsafe_allow_html=True,
         )
-    with filter_col_2:
-        compare_basis = st.selectbox("비교 기준", options=["벤치마크 대비", "절대 수익률"], index=0)
-    with filter_col_3:
-        sort_key = st.selectbox("정렬 기준", options=["모멘텀 점수", "수익률(3M)", "상대강도"], index=0)
-    with filter_col_4:
-        sector_group = st.selectbox("섹터 그룹", options=["WICS 대분류", "전체"], index=0)
+        if is_mobile:
+            _render_overview_mobile_decision_strip(sector_frame)
+        lookup_context = st.expander("종목-섹터 조회", expanded=False) if is_mobile else nullcontext()
+        with lookup_context:
+            with st.form("overview_stock_lookup_form"):
+                if is_mobile:
+                    input_col, button_col = st.columns([3.2, 1.0])
+                    market_col = None
+                else:
+                    input_col, market_col, button_col = st.columns([4.2, 1.25, 0.9])
+                with input_col:
+                    lookup_query = st.text_input(
+                        get_ui_text("stock_lookup_label", locale),
+                        value=lookup_query,
+                        placeholder="종목명 또는 티커를 입력하세요 (예: 삼성전자, 005930)",
+                        label_visibility="collapsed",
+                    )
+                if market_col is not None:
+                    with market_col:
+                        st.selectbox(
+                            "시장",
+                            options=[f"{market_id} ({'KOSPI/KOSDAQ' if market_id == 'KR' else 'US'})"],
+                            index=0,
+                            label_visibility="collapsed",
+                            disabled=True,
+                        )
+                with button_col:
+                    lookup_submitted = st.form_submit_button("상세 조회", width="stretch", type="primary")
+
+            if lookup_status or lookup_message:
+                status_text = " · ".join(item for item in [lookup_status, lookup_message] if item)
+                st.caption(status_text)
+            detail = dict(lookup_display_model or {})
+            candidates = list(detail.get("candidates", []) or detail.get("matched_sectors", []) or [])
+            if candidates:
+                selected_suffix = get_ui_text("stock_lookup_selected_suffix", locale)
+                selected_code = str(dict(detail.get("canonical_sector") or {}).get("sector_code", "")).strip()
+                chips = []
+                for candidate in candidates[:4]:
+                    sector_name = str(candidate.get("sector_name", "")).strip()
+                    selected = bool(candidate.get("selected")) or str(candidate.get("sector_code", "")).strip() == selected_code
+                    if sector_name:
+                        chips.append(
+                            '<span class="overview-lookup-chip" data-selected="{}">{}</span>'.format(
+                                "true" if selected else "false",
+                                html.escape(f"{sector_name} ({selected_suffix})" if selected else sector_name),
+                            )
+                        )
+                if chips:
+                    st.markdown('<div class="overview-lookup-chips">' + "".join(chips) + "</div>", unsafe_allow_html=True)
+
+        filter_context = st.expander("필터", expanded=False) if is_mobile else nullcontext()
+        with filter_context:
+            if is_mobile:
+                filter_col_1, filter_col_2 = st.columns([1.0, 1.0])
+                filter_col_3, filter_col_4 = st.columns([1.0, 1.0])
+            else:
+                filter_col_1, filter_col_2, filter_col_3, filter_col_4 = st.columns([1.0, 1.2, 1.2, 1.2])
+            with filter_col_1:
+                period = st.segmented_control(
+                    "기간",
+                    options=["1M", "3M", "6M", "1Y"],
+                    default="3M",
+                    label_visibility="visible",
+                )
+            with filter_col_2:
+                compare_basis = st.selectbox("비교 기준", options=["벤치마크 대비", "절대 수익률"], index=0)
+            with filter_col_3:
+                sort_key = st.selectbox("정렬 기준", options=["모멘텀 점수", "수익률(3M)", "상대강도"], index=0)
+            with filter_col_4:
+                sector_group = st.selectbox("섹터 그룹", options=["WICS 대분류", "전체"], index=0)
     del compare_basis, sector_group, sector_map
 
     sector_frame = _build_overview_sector_frame(signals, sort_key=str(sort_key))
-    left_col, center_col, right_col = st.columns([1.28, 1.52, 1.0], gap="medium")
+    left_col, right_col = st.columns([1.08, 2.08], gap="medium")
     with left_col:
         with st.container(border=True):
             st.markdown('<div class="overview-section-title">섹터 모멘텀 & 상대강도</div>', unsafe_allow_html=True)
             _render_overview_sector_table(sector_frame)
-    with center_col:
+    with right_col:
         with st.container(border=True):
             st.markdown('<div class="overview-section-title">섹터 상대강도 추이</div>', unsafe_allow_html=True)
             fig = _build_overview_trend_figure(
@@ -738,9 +800,8 @@ def render_toss_overview_dashboard(
                 theme_mode=theme_mode,
             )
             st.plotly_chart(fig, width="stretch")
-    with right_col:
         with st.container(border=True):
-            st.markdown('<div class="overview-section-title">섹터 히트맵 (3M 수익률)</div>', unsafe_allow_html=True)
+            st.markdown('<div class="overview-section-title">상위/하위 섹터 변화 (3M)</div>', unsafe_allow_html=True)
             _render_overview_heatmap(signals)
 
     return lookup_query, lookup_submitted
@@ -761,18 +822,32 @@ def render_top_bar_filters(
     """Render high-frequency filters in the main content area."""
     if not enable_regime_filter:
         st.session_state[filter_regime_key] = False
+    current_position_mode = normalize_position_mode(
+        str(st.session_state.get(position_mode_key, "all"))
+    )
+    if st.session_state.get(position_mode_key) != current_position_mode:
+        st.session_state[position_mode_key] = current_position_mode
+
+    position_mode_control_kwargs = {
+        "label": get_ui_text("filter_position_scope", locale),
+        "options": list(POSITION_MODE_OPTIONS),
+        "format_func": lambda value: format_position_mode_label(value, locale=locale),
+        "selection_mode": "single",
+        "key": position_mode_key,
+        "width": "stretch",
+    }
 
     with st.container(border=True):
         st.markdown(
             (
-                '<div class="command-bar">'
+                '<div class="command-bar command-bar--compact">'
                 f'<div class="command-bar__eyebrow">{html.escape(get_ui_text("command_bar_eyebrow", locale))}</div>'
                 f'<div class="command-bar__title">{html.escape(get_ui_text("command_bar_title", locale))}</div>'
+                f'<div class="command-bar__note">{html.escape(get_ui_text("command_bar_scope_note", locale))}</div>'
                 "</div>"
             ),
             unsafe_allow_html=True,
         )
-        st.caption(get_ui_text("command_bar_scope_note", locale))
 
         if is_mobile:
             st.selectbox(
@@ -787,13 +862,7 @@ def render_top_bar_filters(
                     key=filter_regime_key,
                 )
             st.segmented_control(
-                get_ui_text("filter_position_scope", locale),
-                options=list(POSITION_MODE_OPTIONS),
-                default=normalize_position_mode(str(st.session_state.get(position_mode_key, "all"))),
-                format_func=lambda value: format_position_mode_label(value, locale=locale),
-                selection_mode="single",
-                key=position_mode_key,
-                width="stretch",
+                **position_mode_control_kwargs,
             )
             st.toggle(
                 get_ui_text("filter_alerted_only", locale),
@@ -822,13 +891,7 @@ def render_top_bar_filters(
                     )
             with mode_col:
                 st.segmented_control(
-                    get_ui_text("filter_position_scope", locale),
-                    options=list(POSITION_MODE_OPTIONS),
-                    default=normalize_position_mode(str(st.session_state.get(position_mode_key, "all"))),
-                    format_func=lambda value: format_position_mode_label(value, locale=locale),
-                    selection_mode="single",
-                    key=position_mode_key,
-                    width="stretch",
+                    **position_mode_control_kwargs,
                 )
             with alerted_col:
                 st.toggle(
@@ -843,17 +906,12 @@ def render_top_bar_filters(
                 scope_label = get_ui_text("scope_matching_regime", locale) if regime_only else get_ui_text("scope_full_universe", locale)
                 st.markdown(
                     (
-                        '<div class="top-bar-summary">'
-                        f'<div class="top-bar-summary__item"><span>{html.escape(get_ui_text("summary_regime_label", locale))}</span>'
-                        f"<strong>{html.escape(current_regime)}</strong></div>"
-                        f'<div class="top-bar-summary__item"><span>{html.escape(get_ui_text("summary_action_label", locale))}</span>'
-                        f"<strong>{html.escape(get_action_filter_label(current_action, locale))}</strong></div>"
-                        f'<div class="top-bar-summary__item"><span>{html.escape(get_ui_text("summary_scope_label", locale))}</span>'
-                        f"<strong>{html.escape(scope_label)}</strong></div>"
-                        f'<div class="top-bar-summary__item"><span>{html.escape(get_ui_text("summary_positions_label", locale))}</span>'
-                        f"<strong>{html.escape(format_position_mode_label(position_mode, locale=locale))}</strong></div>"
-                        f'<div class="top-bar-summary__item"><span>{html.escape(get_ui_text("summary_alerts_label", locale))}</span>'
-                        f"<strong>{html.escape(get_ui_text('summary_alerted_only', locale) if alerted_only else get_ui_text('summary_all_signals', locale))}</strong></div>"
+                        '<div class="filter-chip-row">'
+                        f'<span><b>{html.escape(get_ui_text("summary_regime_label", locale))}</b>{html.escape(current_regime)}</span>'
+                        f'<span><b>{html.escape(get_ui_text("summary_action_label", locale))}</b>{html.escape(get_action_filter_label(current_action, locale))}</span>'
+                        f'<span><b>{html.escape(get_ui_text("summary_scope_label", locale))}</b>{html.escape(scope_label)}</span>'
+                        f'<span><b>{html.escape(get_ui_text("summary_positions_label", locale))}</b>{html.escape(format_position_mode_label(position_mode, locale=locale))}</span>'
+                        f'<span><b>{html.escape(get_ui_text("summary_alerts_label", locale))}</b>{html.escape(get_ui_text("summary_alerted_only", locale) if alerted_only else get_ui_text("summary_all_signals", locale))}</span>'
                         "</div>"
                     ),
                     unsafe_allow_html=True,
@@ -867,17 +925,12 @@ def render_top_bar_filters(
             scope_label = get_ui_text("scope_matching_regime", locale) if regime_only else get_ui_text("scope_full_universe", locale)
             st.markdown(
                 (
-                    '<div class="top-bar-summary">'
-                    f'<div class="top-bar-summary__item"><span>{html.escape(get_ui_text("summary_regime_label", locale))}</span>'
-                    f"<strong>{html.escape(current_regime)}</strong></div>"
-                    f'<div class="top-bar-summary__item"><span>{html.escape(get_ui_text("summary_action_label", locale))}</span>'
-                    f"<strong>{html.escape(get_action_filter_label(current_action, locale))}</strong></div>"
-                    f'<div class="top-bar-summary__item"><span>{html.escape(get_ui_text("summary_scope_label", locale))}</span>'
-                    f"<strong>{html.escape(scope_label)}</strong></div>"
-                    f'<div class="top-bar-summary__item"><span>{html.escape(get_ui_text("summary_positions_label", locale))}</span>'
-                    f"<strong>{html.escape(format_position_mode_label(position_mode, locale=locale))}</strong></div>"
-                    f'<div class="top-bar-summary__item"><span>{html.escape(get_ui_text("summary_alerts_label", locale))}</span>'
-                    f"<strong>{html.escape(get_ui_text('summary_alerted_only', locale) if alerted_only else get_ui_text('summary_all_signals', locale))}</strong></div>"
+                    '<div class="filter-chip-row">'
+                    f'<span><b>{html.escape(get_ui_text("summary_regime_label", locale))}</b>{html.escape(current_regime)}</span>'
+                    f'<span><b>{html.escape(get_ui_text("summary_action_label", locale))}</b>{html.escape(get_action_filter_label(current_action, locale))}</span>'
+                    f'<span><b>{html.escape(get_ui_text("summary_scope_label", locale))}</b>{html.escape(scope_label)}</span>'
+                    f'<span><b>{html.escape(get_ui_text("summary_positions_label", locale))}</b>{html.escape(format_position_mode_label(position_mode, locale=locale))}</span>'
+                    f'<span><b>{html.escape(get_ui_text("summary_alerts_label", locale))}</b>{html.escape(get_ui_text("summary_alerted_only", locale) if alerted_only else get_ui_text("summary_all_signals", locale))}</span>'
                     "</div>"
                 ),
                 unsafe_allow_html=True,

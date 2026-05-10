@@ -1,5 +1,9 @@
-benchmark_code: "SPY"
+benchmark_code: "^GSPC"
 benchmark_label: "S&P 500"
+reference_index_codes:
+  - "^IXIC"
+reference_index_labels:
+  "^IXIC": "Nasdaq Composite"
 momentum_method: "legacy_rs_ma_v0"
 fx_series_alias: "dxy"
 fx_shock_pct: 3.0

@@ -1,5 +1,5 @@
 benchmark:
-  code: "SPY"
+  code: "^GSPC"
   name: "S&P 500"
 
 regimes:

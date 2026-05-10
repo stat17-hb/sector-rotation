@@ -7,6 +7,7 @@ import pandas as pd
 
 from src.dashboard import tabs
 import src.data_sources.krx_stock_screening as screening_mod
+import src.data_sources.warehouse as warehouse
 from src.signals.flow import summarize_sector_investor_flow
 import src.ui.components as ui_components
 
@@ -263,6 +264,12 @@ def test_normalize_dashboard_page_id_falls_back_to_summary_when_page_is_unavaila
     assert tabs.normalize_dashboard_page_id("flow", "US") == "flow"
 
 
+def test_resolve_dashboard_page_title_uses_current_market_and_page_label():
+    assert tabs.resolve_dashboard_page_title("signals", "KR") == "KR 섹터 모멘텀"
+    assert tabs.resolve_dashboard_page_title("flow", "US") == "US ETF 수급 프록시"
+    assert tabs.resolve_dashboard_page_title("quality", "US") == "US 대시보드"
+
+
 def test_render_sidebar_controls_returns_runtime_controls_without_page_radio(monkeypatch):
     monkeypatch.setattr(
         tabs.st,
@@ -301,12 +308,12 @@ def test_render_sidebar_controls_returns_runtime_controls_without_page_radio(mon
         probe_investor_flow_status="LIVE",
         flow_profile="foreign_lead",
         momentum_method="legacy_rs_ma_v0",
-        btn_states={"refresh_market": True, "refresh_macro": True, "recompute": True},
+        btn_states={"refresh_market": True, "refresh_macro": True},
         asof_default=date(2026, 4, 26),
         ui_locale="ko",
     )
 
-    assert result == (date(2026, 4, 26), "foreign_lead", False, False, False, False)
+    assert result == (date(2026, 4, 26), "foreign_lead", False, False, False)
 
 
 def test_render_sidebar_controls_hides_kr_flow_profile_for_us(monkeypatch):
@@ -345,12 +352,12 @@ def test_render_sidebar_controls_hides_kr_flow_profile_for_us(monkeypatch):
         probe_investor_flow_status="LIVE",
         flow_profile="foreign_lead",
         momentum_method="legacy_rs_ma_v0",
-        btn_states={"refresh_market": True, "refresh_macro": True, "recompute": True},
+        btn_states={"refresh_market": True, "refresh_macro": True},
         asof_default=date(2026, 4, 26),
         ui_locale="ko",
     )
 
-    assert result == (date(2026, 4, 26), "foreign_lead", False, False, False, False)
+    assert result == (date(2026, 4, 26), "foreign_lead", False, False, False)
     assert tabs.get_ui_text("flow_profile_label", "ko") not in subheaders
 
 
@@ -509,6 +516,43 @@ def test_render_dashboard_tabs_routes_filter_state_to_selected_pages(monkeypatch
     assert calls[3][1]["signals"] == signals
     assert calls[3][1]["shared_flow_summary_map"] == {"5044": {"dummy": True}}
     assert calls[3][1]["investor_flow_profile"] == "foreign_lead"
+
+
+def test_render_dashboard_tabs_quality_page_does_not_render_research_filters(monkeypatch):
+    calls: list[str] = []
+
+    monkeypatch.setattr(tabs.st, "tabs", _fail_st_tabs)
+    monkeypatch.setattr(tabs.st, "container", lambda: _DummyContext())
+    monkeypatch.setattr(tabs, "render_summary_tab", lambda **_kwargs: calls.append("summary"))
+    monkeypatch.setattr(tabs, "render_charts_tab", lambda **_kwargs: calls.append("charts"))
+    monkeypatch.setattr(tabs, "render_all_signals_tab", lambda **_kwargs: calls.append("all_signals"))
+    monkeypatch.setattr(tabs, "render_screening_tab", lambda **_kwargs: calls.append("screening"))
+    monkeypatch.setattr(tabs, "render_investor_flow_tab", lambda **_kwargs: calls.append("flow"))
+    monkeypatch.setattr(tabs, "render_monitoring_tab", lambda **_kwargs: calls.append("monitoring"))
+    monkeypatch.setattr(
+        tabs,
+        "render_top_bar_filters",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("quality page must not render research filters")),
+    )
+
+    tabs.render_dashboard_tabs(
+        current_regime="Recovery",
+        theme_mode="dark",
+        signals=[],
+        held_sectors=[],
+        settings={},
+        is_mobile_client=False,
+        market_id="KR",
+        investor_flow_status="CACHED",
+        investor_flow_fresh=True,
+        investor_flow_profile="foreign_lead",
+        investor_flow_frame=pd.DataFrame(),
+        sector_map={},
+        ui_locale="ko",
+        selected_page_id="quality",
+    )
+
+    assert calls == ["monitoring"]
 
 
 def test_render_dashboard_tabs_does_not_route_research_canvas_or_duplicate_summary(monkeypatch):
@@ -747,10 +791,112 @@ def test_render_investor_flow_tab_renders_us_context_sections(monkeypatch):
     assert "Form SHO Context" in calls
 
 
+def test_build_kr_latest_sector_flow_amounts_formats_large_values():
+    frame = pd.DataFrame(
+        {
+            "sector_name": ["KRX 반도체", "KRX 반도체", "KRX 바이오", "KRX 바이오"],
+            "investor_type": ["외국인", "기관합계", "외국인", "개인"],
+            "net_buy_amount": [1_250_000_000_000, -230_000_000_000, 19_000_000_000, -11_000_000_000],
+        },
+        index=pd.to_datetime(["2026-04-07"] * 4),
+    )
+
+    display = tabs._build_kr_latest_sector_flow_amounts(frame)
+
+    assert display.iloc[0].to_dict() == {
+        "Sector": "KRX 반도체",
+        "외국인": "+1.25조",
+        "기관": "-2300억",
+        "개인": "0원",
+        "합계": "+1.02조",
+    }
+    assert display.iloc[1]["외국인"] == "+190억"
+    assert display.iloc[1]["개인"] == "-110억"
+
+
+def test_build_kr_sector_flow_trend_figure_accepts_trade_date_index_name():
+    frame = pd.DataFrame(
+        {
+            "sector_name": ["KRX 반도체", "KRX 반도체", "KRX 반도체", "KRX 바이오"],
+            "investor_type": ["외국인", "기관합계", "개인", "외국인"],
+            "net_buy_amount": [100, -20, -30, 50],
+        },
+        index=pd.to_datetime(["2026-04-06", "2026-04-07", "2026-04-06", "2026-04-07"]),
+    )
+    frame.index.name = "trade_date"
+    frame["trade_date"] = frame.index
+
+    fig = tabs._build_kr_sector_flow_trend_figure(frame)
+
+    assert len(fig.data) == 4
+    assert {trace.name for trace in fig.data} == {"외국인", "기관", "개인"}
+    assert sum(1 for trace in fig.data if trace.showlegend) == 3
+    assert "섹터별 투자자 수급 추이" == fig.layout.title.text
+
+
+def test_get_kr_flow_sector_options_sorts_by_latest_abs_total():
+    frame = pd.DataFrame(
+        {
+            "sector_name": ["KRX 반도체", "KRX 바이오", "KRX 반도체", "KRX 바이오"],
+            "investor_type": ["외국인", "외국인", "기관합계", "개인"],
+            "net_buy_amount": [10, 50, -300, -10],
+        },
+        index=pd.to_datetime(["2026-04-06", "2026-04-06", "2026-04-07", "2026-04-07"]),
+    )
+
+    assert tabs._get_kr_flow_sector_options(frame) == ["KRX 반도체", "KRX 바이오"]
+
+
+def test_render_investor_flow_tab_does_not_render_sector_selectbox(monkeypatch):
+    charts: list[object] = []
+
+    class _DummyTab:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(tabs, "render_panel_header", lambda **kwargs: None)
+    monkeypatch.setattr(tabs.st, "info", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tabs.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tabs.st, "dataframe", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tabs.st, "plotly_chart", lambda fig, **kwargs: charts.append(fig))
+    monkeypatch.setattr(
+        tabs.st,
+        "selectbox",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("flow tab must show all sectors without selectbox")),
+    )
+
+    frame = pd.DataFrame(
+        {
+            "sector_name": ["KRX 반도체", "KRX 반도체", "KRX 바이오", "KRX 바이오"],
+            "investor_type": ["외국인", "기관합계", "외국인", "개인"],
+            "net_buy_amount": [10, -5, 7, -3],
+        },
+        index=pd.to_datetime(["2026-04-06", "2026-04-07", "2026-04-06", "2026-04-07"]),
+    )
+
+    tabs.render_investor_flow_tab(
+        tab=_DummyTab(),
+        signals=[],
+        investor_flow_frame=frame,
+        investor_flow_status="LIVE",
+        investor_flow_fresh=True,
+        investor_flow_profile="foreign_lead",
+        investor_flow_detail={},
+        market_id="KR",
+        ui_locale="ko",
+    )
+
+    assert len(charts) == 1
+
+
 def test_render_investor_flow_tab_hides_action_change_table_for_reference_only_state(monkeypatch):
     warnings: list[str] = []
     infos: list[str] = []
     dataframes: list[pd.DataFrame] = []
+    charts: list[object] = []
 
     class _DummyTab:
         def __enter__(self):
@@ -765,6 +911,7 @@ def test_render_investor_flow_tab_hides_action_change_table_for_reference_only_s
     monkeypatch.setattr(tabs.st, "info", lambda text: infos.append(text))
     monkeypatch.setattr(tabs.st, "caption", lambda *args, **kwargs: None)
     monkeypatch.setattr(tabs.st, "dataframe", lambda df, **kwargs: dataframes.append(df.copy()))
+    monkeypatch.setattr(tabs.st, "plotly_chart", lambda fig, **kwargs: charts.append(fig))
 
     frame = pd.DataFrame(
         {
@@ -804,28 +951,30 @@ def test_render_investor_flow_tab_hides_action_change_table_for_reference_only_s
         ui_locale="ko",
     )
 
-    assert any("partial preview" in text or "cached snapshot" in text for text in warnings)
-    assert any("reference-only" in text for text in warnings)
-    assert any("최종 신호에는 반영되지 않았습니다" in text for text in warnings)
-    assert any("의견 변화 표를 숨기고 참여 주체 비교표와 raw snapshot만 표시합니다" in text for text in infos)
-    assert len(dataframes) == 2
+    assert warnings == []
+    assert infos == []
+    assert len(dataframes) == 1
     assert list(dataframes[0].columns) == [
         "Sector",
-        "Flow state",
-        "Flow sigma",
-        "Foreign",
-        "Institutional",
-        "Retail",
-        "Foreign σ",
-        "Institutional σ",
-        "Retail σ",
+        "외국인",
+        "기관",
+        "개인",
+        "합계",
     ]
-    assert list(dataframes[1].columns) == ["Sector", "Investor", "Latest ratio", "net_buy_amount", "Flow state"]
+    assert dataframes[0].iloc[0].to_dict() == {
+        "Sector": "KRX 반도체",
+        "외국인": "+50원",
+        "기관": "0원",
+        "개인": "0원",
+        "합계": "+50원",
+    }
+    assert len(charts) == 1
 
 
 def test_render_investor_flow_tab_shows_glance_matrix_before_raw_snapshot(monkeypatch):
     dataframes: list[pd.DataFrame] = []
     warnings: list[str] = []
+    charts: list[object] = []
 
     class _DummyTab:
         def __enter__(self):
@@ -839,6 +988,7 @@ def test_render_investor_flow_tab_shows_glance_matrix_before_raw_snapshot(monkey
     monkeypatch.setattr(tabs.st, "info", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tabs.st, "caption", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tabs.st, "dataframe", lambda df, **kwargs: dataframes.append(df.copy()))
+    monkeypatch.setattr(tabs.st, "plotly_chart", lambda fig, **kwargs: charts.append(fig))
 
     frame = pd.DataFrame(
         {
@@ -877,26 +1027,29 @@ def test_render_investor_flow_tab_shows_glance_matrix_before_raw_snapshot(monkey
         ui_locale="ko",
     )
 
-    assert len(dataframes) == 2
+    assert len(dataframes) == 1
     assert list(dataframes[0].columns) == [
         "Sector",
-        "Flow state",
-        "Flow sigma",
-        "Foreign",
-        "Institutional",
-        "Retail",
-        "Foreign σ",
-        "Institutional σ",
-        "Retail σ",
-        "Action change",
+        "외국인",
+        "기관",
+        "개인",
+        "합계",
     ]
-    assert list(dataframes[1].columns) == ["Sector", "Investor", "Latest ratio", "net_buy_amount", "Flow state"]
+    assert dataframes[0].iloc[0].to_dict() == {
+        "Sector": "KRX 반도체",
+        "외국인": "+50원",
+        "기관": "+50원",
+        "개인": "0원",
+        "합계": "+100원",
+    }
+    assert len(charts) == 1
     assert not any("reference-only" in text or "참고용" in text for text in warnings)
 
 
 def test_render_investor_flow_tab_uses_raw_snapshot_fallback_when_signal_flow_is_missing(monkeypatch):
     dataframes: list[pd.DataFrame] = []
     infos: list[str] = []
+    charts: list[object] = []
 
     class _DummyTab:
         def __enter__(self):
@@ -911,6 +1064,7 @@ def test_render_investor_flow_tab_uses_raw_snapshot_fallback_when_signal_flow_is
     monkeypatch.setattr(tabs.st, "info", lambda text, **kwargs: infos.append(str(text)))
     monkeypatch.setattr(tabs.st, "caption", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tabs.st, "dataframe", lambda df, **kwargs: dataframes.append(df.copy()))
+    monkeypatch.setattr(tabs.st, "plotly_chart", lambda fig, **kwargs: charts.append(fig))
 
     frame = pd.DataFrame(
         {
@@ -950,25 +1104,26 @@ def test_render_investor_flow_tab_uses_raw_snapshot_fallback_when_signal_flow_is
         ui_locale="ko",
     )
 
-    assert any("참여 주체 비교표와 raw snapshot" in text for text in infos)
-    assert len(dataframes) == 2
+    assert infos == []
+    assert len(dataframes) == 1
     assert list(dataframes[0].columns) == [
         "Sector",
-        "Flow state",
-        "Flow sigma",
-        "Foreign",
-        "Institutional",
-        "Retail",
-        "Foreign σ",
-        "Institutional σ",
-        "Retail σ",
+        "외국인",
+        "기관",
+        "개인",
+        "합계",
     ]
-    assert dataframes[0].iloc[0]["Foreign"] == "+20.00%"
+    assert dataframes[0].iloc[0]["외국인"] == "+50원"
+    assert dataframes[0].iloc[0]["기관"] == "+50원"
+    assert dataframes[0].iloc[0]["개인"] == "-30원"
+    assert dataframes[0].iloc[0]["합계"] == "+70원"
+    assert len(charts) == 1
 
 
 def test_render_investor_flow_tab_adds_participant_matched_reference_cues_to_raw_table(monkeypatch):
     dataframes: list[pd.DataFrame] = []
     markdown_calls: list[str] = []
+    charts: list[object] = []
 
     class _DummyTab:
         def __enter__(self):
@@ -984,6 +1139,7 @@ def test_render_investor_flow_tab_adds_participant_matched_reference_cues_to_raw
     monkeypatch.setattr(tabs.st, "caption", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tabs.st, "markdown", lambda text, **kwargs: markdown_calls.append(text))
     monkeypatch.setattr(tabs.st, "dataframe", lambda df, **kwargs: dataframes.append(df.copy()))
+    monkeypatch.setattr(tabs.st, "plotly_chart", lambda fig, **kwargs: charts.append(fig))
 
     frame = pd.DataFrame(
         {
@@ -1019,20 +1175,21 @@ def test_render_investor_flow_tab_adds_participant_matched_reference_cues_to_raw
         ui_locale="ko",
     )
 
-    assert len(dataframes) == 2
-    raw_df = dataframes[1]
-    assert list(raw_df.columns) == ["Sector", "Investor", "Latest ratio", "net_buy_amount", "Flow state"]
-    matched_rows = raw_df[raw_df["Sector"] == "KRX 반도체"].reset_index(drop=True)
-    assert "수급 우호" in matched_rows.loc[0, "Flow state"]
-    assert "수급 우호" in matched_rows.loc[1, "Flow state"]
-    assert "수급 역풍" in matched_rows.loc[2, "Flow state"]
-    unavailable_rows = raw_df[raw_df["Sector"] == "KRX 미확인"].reset_index(drop=True)
-    assert unavailable_rows.loc[0, "Flow state"] == "실험 데이터 없음"
-    assert any("장기 표준편차" in text for text in markdown_calls)
+    assert len(dataframes) == 1
+    latest_df = dataframes[0]
+    assert list(latest_df.columns) == ["Sector", "외국인", "기관", "개인", "합계"]
+    matched_rows = latest_df[latest_df["Sector"] == "KRX 반도체"].reset_index(drop=True)
+    assert matched_rows.loc[0, "외국인"] == "+9원"
+    assert matched_rows.loc[0, "기관"] == "+8원"
+    assert matched_rows.loc[0, "개인"] == "-9원"
+    assert matched_rows.loc[0, "합계"] == "+8원"
+    assert not any("장기 표준편차" in text for text in markdown_calls)
+    assert len(charts) == 1
 
 
 def test_render_monitoring_tab_splits_sector_and_ticker_failures(monkeypatch):
     calls: list[tuple[str, str]] = []
+    dataframes: list[pd.DataFrame] = []
 
     class _DummyTab:
         def __enter__(self):
@@ -1073,21 +1230,19 @@ def test_render_monitoring_tab_splits_sector_and_ticker_failures(monkeypatch):
     monkeypatch.setattr(tabs.st, "info", lambda text, **kwargs: calls.append(("info", str(text))))
     monkeypatch.setattr(tabs.st, "success", lambda text, **kwargs: calls.append(("success", str(text))))
     monkeypatch.setattr(tabs.st, "error", lambda text, **kwargs: calls.append(("error", str(text))))
-    monkeypatch.setattr(tabs.st, "dataframe", lambda *args, **kwargs: calls.append(("dataframe", "shown")))
+    monkeypatch.setattr(tabs.st, "dataframe", lambda frame, **kwargs: dataframes.append(frame))
     monkeypatch.setattr(tabs.st, "columns", lambda n: [_DummyCol() for _ in range(n)])
 
     tabs.render_monitoring_tab(tab=_DummyTab(), market_id="KR", ui_locale="ko")
 
-    warning_texts = [text for kind, text in calls if kind == "warning"]
-    info_texts = [text for kind, text in calls if kind == "info"]
-    assert "오류 섹터 1건" in warning_texts
-    assert "오류 종목 1건" in warning_texts
-    assert any("마지막 incomplete manual_refresh 저장 결과" in text for text in info_texts)
-    assert any("실패 유형 요약" in text for text in info_texts)
+    error_rows = dataframes[1]
+    assert error_rows["데이터"].tolist() == ["수급데이터", "수급데이터"]
+    assert error_rows["항목"].tolist() == ["sector:5044", "005930"]
 
 
 def test_render_monitoring_tab_separates_other_collection_errors(monkeypatch):
     calls: list[tuple[str, str]] = []
+    dataframes: list[pd.DataFrame] = []
 
     class _DummyTab:
         def __enter__(self):
@@ -1125,17 +1280,17 @@ def test_render_monitoring_tab_separates_other_collection_errors(monkeypatch):
     monkeypatch.setattr(tabs.st, "info", lambda text, **kwargs: calls.append(("info", str(text))))
     monkeypatch.setattr(tabs.st, "success", lambda text, **kwargs: calls.append(("success", str(text))))
     monkeypatch.setattr(tabs.st, "error", lambda text, **kwargs: calls.append(("error", str(text))))
-    monkeypatch.setattr(tabs.st, "dataframe", lambda *args, **kwargs: calls.append(("dataframe", "shown")))
+    monkeypatch.setattr(tabs.st, "dataframe", lambda frame, **kwargs: dataframes.append(frame))
     monkeypatch.setattr(tabs.st, "columns", lambda n: [_DummyCol() for _ in range(n)])
 
     tabs.render_monitoring_tab(tab=_DummyTab(), market_id="KR", ui_locale="ko")
 
-    warning_texts = [text for kind, text in calls if kind == "warning"]
-    assert "기타 수집 오류 2건" in warning_texts
+    error_rows = dataframes[1]
+    assert error_rows["항목"].tolist() == ["warehouse", "refresh"]
 
 
 def test_render_monitoring_tab_keeps_warm_status_when_runtime_status_is_omitted(monkeypatch):
-    metrics: list[tuple[str, str]] = []
+    dataframes: list[pd.DataFrame] = []
 
     class _DummyTab:
         def __enter__(self):
@@ -1143,11 +1298,6 @@ def test_render_monitoring_tab_keeps_warm_status_when_runtime_status_is_omitted(
 
         def __exit__(self, exc_type, exc, tb):
             return False
-
-    class _DummyCol:
-        def metric(self, label, value, *args, **kwargs):
-            metrics.append((str(label), str(value)))
-            return None
 
     monkeypatch.setattr(tabs, "render_panel_header", lambda **kwargs: None)
     monkeypatch.setattr(
@@ -1165,7 +1315,6 @@ def test_render_monitoring_tab_keeps_warm_status_when_runtime_status_is_omitted(
                 "aborted": False,
                 "abort_reason": "",
             },
-            "bounds": {"min_trade_date": "2025-01-02", "max_trade_date": "2026-04-10"},
             "history": pd.DataFrame(),
         },
     )
@@ -1174,9 +1323,9 @@ def test_render_monitoring_tab_keeps_warm_status_when_runtime_status_is_omitted(
     monkeypatch.setattr(tabs.st, "info", lambda *args, **kwargs: None)
     monkeypatch.setattr(tabs.st, "success", lambda *args, **kwargs: None)
     monkeypatch.setattr(tabs.st, "error", lambda *args, **kwargs: None)
-    monkeypatch.setattr(tabs.st, "dataframe", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tabs.st, "dataframe", lambda frame, **kwargs: dataframes.append(frame))
     monkeypatch.setattr(tabs.st, "caption", lambda *args, **kwargs: None)
-    monkeypatch.setattr(tabs.st, "columns", lambda n: [_DummyCol() for _ in range(n)])
+    monkeypatch.setattr(tabs.st, "markdown", lambda *args, **kwargs: None)
 
     tabs.render_monitoring_tab(
         tab=_DummyTab(),
@@ -1185,11 +1334,13 @@ def test_render_monitoring_tab_keeps_warm_status_when_runtime_status_is_omitted(
         ui_locale="ko",
     )
 
-    assert ("상태", "LIVE") in metrics
+    flow_status = dataframes[0][dataframes[0]["데이터"].eq("수급데이터")].iloc[0]
+    assert flow_status["상태"] == "LIVE"
 
 
 def test_render_monitoring_tab_uses_runtime_flow_snapshot_when_warehouse_history_is_empty(monkeypatch):
     calls: list[tuple[str, str]] = []
+    dataframes: list[pd.DataFrame] = []
 
     class _DummyTab:
         def __enter__(self):
@@ -1219,7 +1370,7 @@ def test_render_monitoring_tab_uses_runtime_flow_snapshot_when_warehouse_history
     monkeypatch.setattr(tabs.st, "info", lambda text, **kwargs: calls.append(("info", str(text))))
     monkeypatch.setattr(tabs.st, "success", lambda text, **kwargs: calls.append(("success", str(text))))
     monkeypatch.setattr(tabs.st, "error", lambda text, **kwargs: calls.append(("error", str(text))))
-    monkeypatch.setattr(tabs.st, "dataframe", lambda *args, **kwargs: calls.append(("dataframe", "shown")))
+    monkeypatch.setattr(tabs.st, "dataframe", lambda frame, **kwargs: dataframes.append(frame))
     monkeypatch.setattr(tabs.st, "columns", lambda n: [_DummyCol() for _ in range(n)])
 
     runtime_frame = pd.DataFrame(
@@ -1252,10 +1403,135 @@ def test_render_monitoring_tab_uses_runtime_flow_snapshot_when_warehouse_history
         ui_locale="ko",
     )
 
-    info_texts = [text for kind, text in calls if kind == "info"]
-    assert any("2026-04-10" in text for text in info_texts)
-    assert any("runtime snapshot" in text for text in info_texts)
-    assert ("dataframe", "shown") in calls
+    flow_status = dataframes[0][dataframes[0]["데이터"].eq("수급데이터")].iloc[0]
+    assert flow_status["상태"] == "CACHED"
+    assert dataframes[-1]["요청범위"].tolist() == ["20251211 ~ 20260410"]
+
+
+def test_render_monitoring_tab_shows_dataset_sample_history(monkeypatch):
+    dataframe_payloads: list[pd.DataFrame] = []
+    header_titles: list[str] = []
+
+    class _DummyTab:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    rows = []
+    for dataset in ("market_prices", "macro_data", "investor_flow"):
+        for idx in range(12):
+            if idx < 2:
+                continue
+            rows.append(
+                {
+                    "created_at": pd.Timestamp("2026-05-05T00:00:00Z") + pd.Timedelta(hours=idx),
+                    "dataset": dataset,
+                    "reason": "manual_refresh",
+                    "provider": "OPENAPI" if dataset == "market_prices" else "ECOS" if dataset == "macro_data" else "KRX_UNOFFICIAL",
+                    "requested_start": "20260501",
+                    "requested_end": "20260505",
+                    "status": "LIVE" if idx != 1 else "CACHED",
+                    "coverage_complete": idx != 1,
+                    "aborted": idx == 1,
+                    "abort_reason": "transport timeout" if idx == 1 else "",
+                    "failed_days": ["20260502"] if idx == 1 else [],
+                    "failed_codes": {"1001": "empty close"} if idx == 1 else {},
+                    "predicted_requests": 4,
+                    "processed_requests": 3,
+                    "row_count": 10 + idx,
+                    "completion_pct": 75.0,
+                    "sample_bucket": "latest",
+                }
+            )
+    history = pd.DataFrame(rows)
+
+    monkeypatch.setattr(
+        tabs,
+        "render_panel_header",
+        lambda **kwargs: header_titles.append(str(kwargs.get("title", ""))),
+    )
+    monkeypatch.setattr(
+        tabs,
+        "_cached_monitoring_data",
+        lambda market_id: {
+            "statuses": {
+                "market_prices": {
+                    "status": "LIVE",
+                    "provider": "OPENAPI",
+                    "watermark_key": "20260505",
+                    "coverage_complete": True,
+                    "predicted_requests": 1,
+                    "processed_requests": 1,
+                    "failed_days": [],
+                    "failed_codes": {},
+                    "aborted": False,
+                },
+                "macro_data": {"status": "LIVE", "provider": "ECOS", "coverage_complete": True},
+                "investor_flow": {"status": "LIVE", "provider": "KRX_UNOFFICIAL", "coverage_complete": True},
+            },
+            "history": history,
+            "dataset_order": ["market_prices", "macro_data", "investor_flow"],
+        },
+    )
+    monkeypatch.setattr(tabs.st, "subheader", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tabs.st, "warning", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tabs.st, "info", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tabs.st, "success", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tabs.st, "error", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tabs.st, "caption", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tabs.st, "dataframe", lambda frame, **kwargs: dataframe_payloads.append(frame))
+
+    tabs.render_monitoring_tab(tab=_DummyTab(), market_id="KR", ui_locale="ko")
+
+    assert "데이터 수집 이력 샘플" in header_titles
+    assert {"시장데이터", "매크로데이터", "수급데이터"}.issubset(set(header_titles))
+    assert len(dataframe_payloads) == 4
+    expected_columns = [
+        "수집일시",
+        "요청범위",
+        "상태",
+        "커버리지",
+        "중단",
+        "오류요약",
+        "완료율(%)",
+        "provider",
+        "저장행수",
+    ]
+    status_table = dataframe_payloads[0]
+    assert status_table["데이터"].tolist() == ["시장데이터", "매크로데이터", "수급데이터"]
+    market_sample = dataframe_payloads[1]
+    assert market_sample.columns.tolist() == expected_columns
+    assert len(market_sample) == 10
+    assert pd.to_datetime(market_sample["수집일시"]).tolist() == sorted(
+        pd.to_datetime(market_sample["수집일시"]).tolist(),
+        reverse=True,
+    )
+
+
+def test_cached_monitoring_data_reads_manual_refresh_history(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    monkeypatch.setattr(warehouse, "read_dataset_status", lambda dataset, market: {})
+
+    def _fake_history(**kwargs):
+        calls.append(kwargs)
+        return pd.DataFrame()
+
+    monkeypatch.setattr(warehouse, "read_collection_run_history", _fake_history)
+    tabs._cached_monitoring_data.clear()
+
+    tabs._cached_monitoring_data("KR")
+
+    assert calls == [
+        {
+            "market": "KR",
+            "reasons": ("manual_refresh",),
+            "sample_per_dataset": True,
+            "sample_size": 10,
+        }
+    ]
 
 
 def test_render_screening_tab_renders_representative_etf_context(monkeypatch):
@@ -1324,3 +1600,170 @@ def test_render_screening_tab_renders_representative_etf_context(monkeypatch):
     assert len(dataframe_payloads) == 2
     assert isinstance(dataframe_payloads[-1], pd.DataFrame)
     assert "대표 ETF" in dataframe_payloads[-1].columns
+
+
+def test_render_screening_tab_initial_render_uses_cache_only_loaders(monkeypatch):
+    load_kwargs: list[dict[str, object]] = []
+    etf_kwargs: list[dict[str, object]] = []
+
+    class _DummyTab:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _DummyContainer:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def _load_screened_stocks(**kwargs):
+        load_kwargs.append(kwargs)
+        return (
+            "CACHED",
+            [
+                {
+                    "ticker": "005930",
+                    "name": "삼성전자",
+                    "sector_name": "KRX 반도체",
+                    "rs": 1.2,
+                    "rsi": 58.0,
+                    "rs_strong": True,
+                    "trend_ok": True,
+                    "momentum_ok": True,
+                    "ret_1m": 5.0,
+                    "ret_3m": 11.0,
+                    "alerts": "",
+                }
+            ],
+        )
+
+    def _load_representative_etf_context(**kwargs):
+        etf_kwargs.append(kwargs)
+        return (
+            "CACHED",
+            [
+                {
+                    "sector_name": "KRX 반도체",
+                    "etf_code": "396500",
+                    "etf_name": "TIGER 반도체TOP10",
+                    "style_tags": "TOP10",
+                    "execution_state": "정상",
+                    "latest_trade_value": 1_200_000_000.0,
+                    "avg_trade_value_20d": 850_000_000.0,
+                    "net_assets": 220_000_000_000.0,
+                    "nav": 10200.0,
+                    "reference_date": "20260428",
+                    "freshness_label": "20260428",
+                    "note": "",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(tabs, "render_panel_header", lambda **kwargs: None)
+    monkeypatch.setattr(screening_mod, "load_screened_stocks", _load_screened_stocks)
+    monkeypatch.setattr(screening_mod, "load_representative_etf_context", _load_representative_etf_context)
+    monkeypatch.setattr(tabs.st, "caption", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tabs.st, "button", lambda *args, **kwargs: False)
+    monkeypatch.setattr(tabs.st, "toggle", lambda *args, **kwargs: True)
+    monkeypatch.setattr(tabs.st, "columns", lambda spec: [_DummyContainer() for _ in range(len(spec))])
+    monkeypatch.setattr(tabs.st, "spinner", lambda *args, **kwargs: _DummyContainer())
+    monkeypatch.setattr(tabs.st, "dataframe", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tabs.st, "download_button", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tabs.st, "markdown", lambda *args, **kwargs: None)
+
+    tabs.render_screening_tab(
+        tab=_DummyTab(),
+        signals=[SimpleNamespace(index_code="5044", sector_name="KRX 반도체", action="Strong Buy")],
+        settings={},
+        benchmark_code="1001",
+        etf_map={"5044": [{"code": "396500", "name": "TIGER 반도체TOP10"}]},
+    )
+
+    assert load_kwargs[-1]["force_refresh"] is False
+    assert load_kwargs[-1]["allow_live_fetch"] is False
+    assert etf_kwargs[-1]["force_refresh"] is False
+    assert etf_kwargs[-1]["allow_live_fetch"] is False
+
+
+def test_render_screening_tab_refresh_allows_live_loaders(monkeypatch):
+    load_kwargs: list[dict[str, object]] = []
+    etf_kwargs: list[dict[str, object]] = []
+
+    class _DummyTab:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    class _DummyContainer:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    stock_row = {
+        "ticker": "005930",
+        "name": "삼성전자",
+        "sector_name": "KRX 반도체",
+        "rs": 1.2,
+        "rsi": 58.0,
+        "rs_strong": True,
+        "trend_ok": True,
+        "momentum_ok": True,
+        "ret_1m": 5.0,
+        "ret_3m": 11.0,
+        "alerts": "",
+    }
+    etf_row = {
+        "sector_name": "KRX 반도체",
+        "etf_code": "396500",
+        "etf_name": "TIGER 반도체TOP10",
+        "style_tags": "TOP10",
+        "execution_state": "정상",
+        "latest_trade_value": 1_200_000_000.0,
+        "avg_trade_value_20d": 850_000_000.0,
+        "net_assets": 220_000_000_000.0,
+        "nav": 10200.0,
+        "reference_date": "20260428",
+        "freshness_label": "20260428",
+        "note": "",
+    }
+
+    monkeypatch.setattr(tabs, "render_panel_header", lambda **kwargs: None)
+    monkeypatch.setattr(
+        screening_mod,
+        "load_screened_stocks",
+        lambda **kwargs: (load_kwargs.append(kwargs) or ("LIVE", [stock_row])),
+    )
+    monkeypatch.setattr(
+        screening_mod,
+        "load_representative_etf_context",
+        lambda **kwargs: (etf_kwargs.append(kwargs) or ("LIVE", [etf_row])),
+    )
+    monkeypatch.setattr(tabs.st, "caption", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tabs.st, "button", lambda *args, **kwargs: True)
+    monkeypatch.setattr(tabs.st, "toggle", lambda *args, **kwargs: True)
+    monkeypatch.setattr(tabs.st, "columns", lambda spec: [_DummyContainer() for _ in range(len(spec))])
+    monkeypatch.setattr(tabs.st, "spinner", lambda *args, **kwargs: _DummyContainer())
+    monkeypatch.setattr(tabs.st, "dataframe", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tabs.st, "download_button", lambda *args, **kwargs: None)
+    monkeypatch.setattr(tabs.st, "markdown", lambda *args, **kwargs: None)
+
+    tabs.render_screening_tab(
+        tab=_DummyTab(),
+        signals=[SimpleNamespace(index_code="5044", sector_name="KRX 반도체", action="Strong Buy")],
+        settings={},
+        benchmark_code="1001",
+        etf_map={"5044": [{"code": "396500", "name": "TIGER 반도체TOP10"}]},
+    )
+
+    assert load_kwargs[-1]["force_refresh"] is True
+    assert load_kwargs[-1]["allow_live_fetch"] is True
+    assert etf_kwargs[-1]["force_refresh"] is True
+    assert etf_kwargs[-1]["allow_live_fetch"] is True

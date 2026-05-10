@@ -176,6 +176,7 @@ def test_render_status_strip_renders_markup_and_details(monkeypatch):
     assert markdown_calls
     assert "status-strip" in markdown_calls[0]
     assert "Cache fallback" in markdown_calls[0]
+    assert "2개 상세" in markdown_calls[0]
     assert any("KRX: HTTP_ERROR" in call for call in write_calls)
 
 
@@ -407,7 +408,7 @@ def test_render_rs_scatter_uses_light_theme_action_palette():
 def test_render_top_bar_filters_returns_selected_state(monkeypatch):
     session_state: dict[str, object] = {}
     markdown_calls: list[str] = []
-    caption_calls: list[str] = []
+    segmented_kwargs: list[dict[str, object]] = []
 
     monkeypatch.setattr("src.ui.components.st.session_state", session_state)
     monkeypatch.setattr("src.ui.components.st.container", lambda **_: _DummyBlock())
@@ -425,16 +426,16 @@ def test_render_top_bar_filters_returns_selected_state(monkeypatch):
     )
     monkeypatch.setattr(
         "src.ui.components.st.segmented_control",
-        lambda _label, options, default, format_func, selection_mode, key, width: session_state.__setitem__(key, options[1]),
+        lambda **kwargs: (
+            segmented_kwargs.append(dict(kwargs)),
+            session_state.__setitem__(str(kwargs["key"]), list(kwargs["options"])[1]),
+        )[-1],
     )
     monkeypatch.setattr(
         "src.ui.components.st.markdown",
         lambda text, **_: markdown_calls.append(text),
     )
-    monkeypatch.setattr(
-        "src.ui.components.st.caption",
-        lambda text: caption_calls.append(text),
-    )
+    monkeypatch.setattr("src.ui.components.st.caption", lambda text: None)
 
     action, regime_only, position_mode, alerted_only = render_top_bar_filters(
         current_regime="Recovery",
@@ -446,22 +447,13 @@ def test_render_top_bar_filters_returns_selected_state(monkeypatch):
     assert regime_only is True
     assert position_mode == "held"
     assert alerted_only is True
+    assert segmented_kwargs
+    assert "default" not in segmented_kwargs[0]
     assert any("command-bar" in call for call in markdown_calls)
-    assert any("top-bar-summary" in call for call in markdown_calls)
+    assert any("filter-chip-row" in call for call in markdown_calls)
     assert any("Recovery" in call for call in markdown_calls)
     assert any("하단 상세 뷰 필터" in call or "Downstream detail filters" in call for call in markdown_calls)
     assert any("아래 요약·차트·테이블·탭의 연구 뷰만 정제합니다." in call for call in markdown_calls)
-    assert any(
-        "필터링된 보기(요약, 차트, 테이블)" in call
-        or "downstream research view" in call
-        or "요약·차트·테이블" in call
-        for call in caption_calls
-    )
-    assert any(
-        "상단 실전 대응 보드와 분석 캔버스는 바꾸지 않습니다" in call
-        or "do not change the upper decision boards or analysis canvas" in call
-        for call in caption_calls
-    )
 
 
 def test_render_decision_hero_renders_regime_and_provisional_badge(monkeypatch):
@@ -1707,6 +1699,31 @@ def test_build_sector_strength_heatmap_thins_all_range_x_labels_and_hides_cell_t
     assert visible_labels[0] == "2016-01"
     assert visible_labels[1] == "2016-04"
     assert ticktext[1] == ""
+
+
+def test_render_overview_mobile_decision_strip_shows_top_three(monkeypatch):
+    markdown_calls: list[str] = []
+    frame = pd.DataFrame(
+        [
+            {"섹터": "KRX 반도체", "3M": 51.8},
+            {"섹터": "KRX 증권", "3M": 61.28},
+            {"섹터": "KRX 건설", "3M": 80.83},
+            {"섹터": "KRX 보험", "3M": 28.30},
+        ]
+    )
+
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **_: markdown_calls.append(text))
+
+    panels_module._render_overview_mobile_decision_strip(frame)
+
+    assert markdown_calls
+    markup = markdown_calls[0]
+    assert "overview-mobile-decision-strip" in markup
+    assert "상위 섹터" in markup
+    assert "KRX 반도체" in markup
+    assert "KRX 증권" in markup
+    assert "KRX 건설" in markup
+    assert "KRX 보험" not in markup
 
 
 def test_render_cycle_timeline_panel_returns_selected_phase(monkeypatch):

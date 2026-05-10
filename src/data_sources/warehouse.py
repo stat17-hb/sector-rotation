@@ -115,6 +115,28 @@ def close_cached_read_only_connection() -> None:
     _invalidate_ro_cache()
 
 
+def can_acquire_write_lock() -> bool:
+    """Return whether a write connection can be opened right now.
+
+    This is a non-mutating probe for interactive read paths. It lets the app
+    defer optional refresh work when another Streamlit/Python process already
+    holds the warehouse file on Windows.
+    """
+    WAREHOUSE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _invalidate_ro_cache()
+    try:
+        raw = duckdb.connect(str(WAREHOUSE_PATH), read_only=False)
+    except (duckdb.IOException, duckdb.ConnectionException):
+        return False
+    try:
+        return True
+    finally:
+        try:
+            raw.close()
+        finally:
+            _invalidate_ro_cache()
+
+
 class _WritingConn:
     """Proxy for a write DuckDB connection that invalidates the RO cache on close."""
 
@@ -2389,15 +2411,97 @@ def macro_row_count(*, market: str = "KR") -> int:
         con.close()
 
 
-def read_investor_flow_run_history(
+COLLECTION_HISTORY_DATASETS: tuple[WarehouseDataset, ...] = (
+    "market_prices",
+    "macro_data",
+    "investor_flow",
+)
+
+
+def _macro_alias_completion_pct(
+    *,
+    market: str,
+    provider: str,
+    requested_start: str,
+    requested_end: str,
+) -> float | None:
+    normalized_market = _normalize_market_id(market)
+    normalized_provider = str(provider or "").strip().upper()
+    start_token = "".join(ch for ch in str(requested_start or "") if ch.isdigit())[:6]
+    end_token = "".join(ch for ch in str(requested_end or "") if ch.isdigit())[:6]
+    if not normalized_provider or len(start_token) != 6 or len(end_token) != 6:
+        return None
+
+    try:
+        expected_periods = pd.period_range(start_token, end_token, freq="M")
+    except ValueError:
+        return None
+    if expected_periods.empty:
+        return None
+
+    start_date = expected_periods[0].to_timestamp(how="end").strftime("%Y-%m-%d")
+    end_date = expected_periods[-1].to_timestamp(how="end").strftime("%Y-%m-%d")
+    con = _connect_ro()
+    try:
+        if not _table_exists(con, "dim_macro_series") or not _table_exists(con, "fact_macro_monthly"):
+            return None
+        coverage = con.execute(
+            """
+            WITH aliases AS (
+                SELECT series_alias
+                FROM dim_macro_series
+                WHERE market = ?
+                  AND provider = ?
+                  AND enabled
+            )
+            SELECT
+                aliases.series_alias,
+                COUNT(DISTINCT STRFTIME(fact.period_month, '%Y%m')) AS covered_periods
+            FROM aliases
+            LEFT JOIN fact_macro_monthly AS fact
+              ON fact.market = ?
+             AND fact.provider = ?
+             AND fact.series_alias = aliases.series_alias
+             AND fact.period_month BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+            GROUP BY aliases.series_alias
+            ORDER BY aliases.series_alias
+            """,
+            [
+                normalized_market,
+                normalized_provider,
+                normalized_market,
+                normalized_provider,
+                start_date,
+                end_date,
+            ],
+        ).fetchdf()
+    finally:
+        con.close()
+
+    if coverage.empty:
+        return None
+    expected_count = len(expected_periods)
+    complete_aliases = int((coverage["covered_periods"].astype(int) == expected_count).sum())
+    return round(complete_aliases / len(coverage) * 100, 1)
+
+
+def read_collection_run_history(
     *,
     market: str = "KR",
     limit: int = 15,
+    datasets: tuple[WarehouseDataset, ...] | list[WarehouseDataset] | None = None,
+    reasons: tuple[str, ...] | list[str] | None = None,
+    sample_per_dataset: bool = False,
+    sample_size: int = 10,
 ) -> "pd.DataFrame":
-    """Return the last *limit* ingest_runs rows for investor_flow as a DataFrame.
+    """Return ingest_runs rows for dashboard collection datasets.
+
+    When ``sample_per_dataset`` is false, returns the latest ``limit`` rows
+    across the selected datasets. When true, returns the latest
+    ``sample_size`` rows per dataset and ignores ``limit``.
 
     Columns returned:
-        created_at, reason, requested_start, requested_end, status,
+        created_at, dataset, reason, requested_start, requested_end, status,
         coverage_complete, aborted, predicted_requests, processed_requests,
         row_count, completion_pct
     Returns an empty DataFrame when the warehouse does not exist.
@@ -2407,28 +2511,69 @@ def read_investor_flow_run_history(
 
     _ensure_schema_for_readers()
     normalized_market = _normalize_market_id(market)
+    selected_datasets = COLLECTION_HISTORY_DATASETS if datasets is None else tuple(datasets)
+    if not selected_datasets:
+        return pd.DataFrame()
+    selected_reasons = tuple(str(reason).strip() for reason in (reasons or []) if str(reason).strip())
+
+    placeholders = ", ".join("?" for _ in selected_datasets)
+    reason_clause = ""
+    reason_params: list[str] = []
+    if selected_reasons:
+        reason_placeholders = ", ".join("?" for _ in selected_reasons)
+        reason_clause = f" AND reason IN ({reason_placeholders})"
+        reason_params = list(selected_reasons)
+    sample_count = max(1, int(sample_size or 5))
     con = _connect_ro()
     try:
-        df = con.execute(
-            """
-            SELECT
-                created_at,
-                reason,
-                requested_start,
-                requested_end,
-                status,
-                coverage_complete,
-                aborted,
-                predicted_requests,
-                processed_requests,
-                row_count
-            FROM ingest_runs
-            WHERE dataset = ? AND market = ?
-            ORDER BY created_at DESC
-            LIMIT ?
-            """,
-            [INVESTOR_FLOW_DATASET, normalized_market, limit],
-        ).fetchdf()
+        base_select_cols = """
+            created_at,
+            dataset,
+            reason,
+            provider,
+            requested_start,
+            requested_end,
+            status,
+            coverage_complete,
+            aborted,
+            abort_reason,
+            failed_days_json,
+            failed_codes_json,
+            predicted_requests,
+            processed_requests,
+            row_count
+        """
+        if sample_per_dataset:
+            df = con.execute(
+                f"""
+                WITH ranked AS (
+                    SELECT
+                        {base_select_cols},
+                        ROW_NUMBER() OVER (PARTITION BY dataset ORDER BY created_at DESC) AS newest_rank
+                    FROM ingest_runs
+                    WHERE dataset IN ({placeholders}) AND market = ?{reason_clause}
+                )
+                SELECT
+                    {base_select_cols},
+                    'latest' AS sample_bucket
+                FROM ranked
+                WHERE newest_rank <= ?
+                ORDER BY dataset, created_at DESC
+                """,
+                [*selected_datasets, normalized_market, *reason_params, sample_count],
+            ).fetchdf()
+        else:
+            df = con.execute(
+                f"""
+                SELECT
+                    {base_select_cols}
+                FROM ingest_runs
+                WHERE dataset IN ({placeholders}) AND market = ?{reason_clause}
+                ORDER BY created_at DESC
+                LIMIT ?
+                """,
+                [*selected_datasets, normalized_market, *reason_params, limit],
+            ).fetchdf()
     finally:
         con.close()
 
@@ -2436,9 +2581,47 @@ def read_investor_flow_run_history(
         return df
 
     def _pct(row: "pd.Series") -> float:
+        if str(row.get("dataset", "")).strip() == "macro_data":
+            alias_pct = _macro_alias_completion_pct(
+                market=normalized_market,
+                provider=str(row.get("provider", "") or ""),
+                requested_start=str(row.get("requested_start", "") or ""),
+                requested_end=str(row.get("requested_end", "") or ""),
+            )
+            if alias_pct is not None:
+                return alias_pct
         pred = int(row["predicted_requests"] or 0)
         proc = int(row["processed_requests"] or 0)
         return round(proc / pred * 100, 1) if pred > 0 else 0.0
 
     df["completion_pct"] = df.apply(_pct, axis=1)
+    df["failed_days"] = df["failed_days_json"].apply(
+        lambda value: [
+            str(item).strip()
+            for item in _deserialize_json(value, [])
+            if str(item).strip()
+        ]
+    )
+    df["failed_codes"] = df["failed_codes_json"].apply(
+        lambda value: {
+            str(key).strip(): str(item).strip()
+            for key, item in _deserialize_json(value, {}).items()
+            if str(key).strip()
+        }
+    )
+    df = df.drop(columns=["failed_days_json", "failed_codes_json"], errors="ignore")
     return df
+
+
+def read_investor_flow_run_history(
+    *,
+    market: str = "KR",
+    limit: int = 15,
+) -> "pd.DataFrame":
+    """Return the last *limit* ingest_runs rows for investor_flow as a DataFrame."""
+    history = read_collection_run_history(
+        market=market,
+        limit=limit,
+        datasets=[INVESTOR_FLOW_DATASET],
+    )
+    return history.drop(columns=["dataset"], errors="ignore")
