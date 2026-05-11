@@ -46,6 +46,42 @@
 - Remaining risks:
   매크로 refresh 버튼은 provider drift 안전성을 위해 orchestration range를 계속 120개월로 넘긴다. 실제 provider 호출량 감소는 기존 `sync_provider_macro()`의 alias별 cache/coverage 판단에 의존한다.
 
+# 2026-05-11 - Slow Investor Flow Day Collector
+
+## Goal
+- KRX 수급 endpoint를 바로 재시도하지 않고, 다음 실행 때 차단 위험을 낮추는 하루치 저속 수집기를 추가한다.
+- 기본 실행은 dry-run이어야 하며, `--execute` 없이는 KRX 네트워크 요청을 하지 않는다.
+- 수집은 ticker 단위로 재개 가능해야 하고, `ACCESS_DENIED` 감지 시 즉시 중단해야 한다.
+
+## Checklist
+- [x] 기존 수급 collector/warehouse 저장 경계 확인
+- [x] 저속 하루 수집 CLI 추가
+- [x] dry-run, sector 필터, ticker limit, resume state 구현
+- [x] access-denied 즉시 중단 및 partial state 보존 구현
+- [x] 단위 테스트 추가
+- [x] py_compile 및 focused pytest 검증
+- [x] 결과/리스크 기록
+
+## Review
+- Changed files:
+  `scripts/collect_investor_flow_day_slow.py`
+  `tests/test_collect_investor_flow_day_slow.py`
+  `tasks/todo.md`
+- Implementation:
+  새 CLI는 기본 dry-run이라 `--execute` 없이는 KRX 요청을 하지 않는다.
+  cached sector constituent snapshot만 사용해 구성종목 live lookup을 피한다.
+  ticker 단위로 raw rows를 `data/runtime/investor_flow_slow/.../raw.parquet`에 spool하고 `state.json`으로 완료/실패 ticker를 보존한다.
+  `ACCESS_DENIED`로 분류되는 실패는 즉시 중단하며 실패 상태를 저장한다.
+  전체 섹터/전체 ticker가 완주된 경우에만 기존 operational warehouse writer를 호출한다. `--sectors export`, `--sector-codes`, `--max-tickers` 같은 부분 수집은 cursor를 갱신하지 않는다.
+- Verification:
+  `python -m py_compile scripts\collect_investor_flow_day_slow.py tests\test_collect_investor_flow_day_slow.py` -> passed
+  `python -m pytest -q tests/test_collect_investor_flow_day_slow.py` -> `4 passed`
+  `python scripts\collect_investor_flow_day_slow.py --date 20260422 --sectors export --max-tickers 2` -> dry-run only, `planned_tickers_this_run=2`, `processed_requests=0`
+  `git diff --check -- scripts/collect_investor_flow_day_slow.py tests/test_collect_investor_flow_day_slow.py tasks/todo.md` -> passed with line-ending warning for `tasks/todo.md`
+- Remaining risks:
+  이 변경은 차단 회피가 아니라 요청량/속도/재개성을 개선하는 실행 경로다.
+  실제 `--execute`는 현재 cooldown 이후에만 사용해야 하며, KRX가 계속 403을 반환하면 즉시 중단된다.
+
 # 2026-05-06 - KRX Investor Flow Persistent Cooldown
 
 ## Goal
