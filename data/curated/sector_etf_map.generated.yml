@@ -1,0 +1,24 @@
+metadata:
+  generated_at: "2026-05-13"
+  note: "Generated ETF execution overlay. config/sector_map.yml remains the macro regime authority."
+  sources:
+    - "K-ETF/KODEX product pages for 117700, 266370"
+    - "Samsung KODEX ETF lineup for 102970, 117700, 266370"
+mappings:
+  "5052":
+    sector_name: "KRX 건설"
+    etfs:
+      - code: "117700"
+        name: "KODEX 건설"
+  "5054":
+    sector_name: "KRX 증권"
+    etfs:
+      - code: "102970"
+        name: "KODEX 증권"
+      - code: "157500"
+        name: "TIGER 증권"
+  "5064":
+    sector_name: "KRX 정보기술"
+    etfs:
+      - code: "266370"
+        name: "KODEX IT"

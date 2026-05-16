@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import pandas as pd
 import streamlit as st
 
-from config.markets import load_market_configs
+from config.markets import get_market_profile, load_market_configs
 from config.theme import THEME_SESSION_KEY, get_theme_mode
 from src.dashboard import data as dashboard_data_module
 from src.dashboard.analysis import (
@@ -80,11 +80,19 @@ from src.dashboard.tabs import (
     resolve_dashboard_page_title,
 )
 from src.dashboard.types import AnalysisWindow, DashboardContext, DashboardDataBundle
-from src.macro.series_utils import extract_macro_series
+from src.macro.series_utils import (
+    build_enabled_sector_export_aliases,
+    build_sector_trade_proxy_lens,
+    extract_kr_export_growth_yoy,
+    extract_macro_series,
+    extract_trade_indicators,
+    is_macro_alias_enabled,
+)
 from src.data_sources.warehouse import (
     read_market_prices,
     read_active_index_dimension,
 )
+from src.data_sources.theme_lens import get_theme_lens_artifact_key
 from src.data_sources.stock_sector_lookup import resolve_stock_to_sector
 from src.ui.copy import ALL_ACTION_KEY, DEFAULT_UI_LOCALE, normalize_locale
 from src.ui.components import (
@@ -250,9 +258,25 @@ def _build_navigation_pages() -> dict[str, list]:
 st.navigation(_build_navigation_pages(), position="sidebar", expanded=True).run()
 
 
+def _config_cache_token(market_id: str) -> tuple[tuple[str, float], ...]:
+    profile = get_market_profile(market_id)
+    paths = [
+        profile.settings_base_path,
+        profile.sector_map_path,
+        profile.macro_series_path,
+    ]
+    if profile.settings_override_path is not None:
+        paths.append(profile.settings_override_path)
+    return tuple(
+        (str(path), path.stat().st_mtime if path.exists() else 0.0)
+        for path in paths
+    )
+
+
 @st.cache_data(ttl=3600)
-def _load_config(market_id: str) -> tuple[dict, dict, dict, object]:
+def _load_config(market_id: str, config_cache_token: tuple[tuple[str, float], ...]) -> tuple[dict, dict, dict, object]:
     """Load YAML config files. Cached for 1 hour."""
+    del config_cache_token
     return load_market_configs(market_id)
 
 
@@ -263,7 +287,10 @@ if str(st.session_state.get("market_id", selected_market_id)).strip().upper() !=
     invalidate_dashboard_caches("all")
 else:
     st.session_state["market_id"] = selected_market_id
-settings, sector_map, macro_series_cfg, market_profile = _load_config(selected_market_id)
+settings, sector_map, macro_series_cfg, market_profile = _load_config(
+    selected_market_id,
+    _config_cache_token(selected_market_id),
+)
 CACHE_TTL = int(settings.get("cache_ttl", 21600))
 CURATED_SECTOR_PRICES_PATH = Path(
     "data/curated/sector_prices_us.parquet" if selected_market_id == "US" else "data/curated/sector_prices.parquet"
@@ -420,6 +447,7 @@ runtime_payload: dict[str, object] = {}
 try:
     prices_key = context.price_artifact_key
     macro_key = context.macro_artifact_key
+    theme_lens_key = get_theme_lens_artifact_key()
     params = {
         "epsilon": float(st.session_state["epsilon"]),
         "rs_ma_period": rs_ma_period,
@@ -444,6 +472,7 @@ try:
         context.price_cache_token,
         context.price_artifact_key,
         context.investor_flow_artifact_key,
+        theme_lens_key,
         epsilon=float(st.session_state["epsilon"]),
         rs_ma_period=rs_ma_period,
         ma_fast=ma_fast,
@@ -469,6 +498,8 @@ try:
     investor_flow_fresh = bool(runtime_payload["investor_flow_fresh"])
     investor_flow_detail = dict(runtime_payload["investor_flow_detail"])
     investor_flow_frame = runtime_payload["investor_flow_frame"]
+    theme_lens_status = str(runtime_payload.get("theme_lens_status", "UNAVAILABLE"))
+    theme_lens_rows = list(runtime_payload.get("theme_lens_rows", []))
     data_status = {"price": price_status, "macro": macro_status}
     data_load_ok = True
 except Exception as exc:
@@ -492,6 +523,8 @@ except Exception as exc:
     investor_flow_fresh = False
     investor_flow_detail = {}
     investor_flow_frame = pd.DataFrame()
+    theme_lens_status = "UNAVAILABLE"
+    theme_lens_rows = []
     data_status = {"price": price_status, "macro": macro_status}
 finally:
     if data_load_ok:
@@ -560,6 +593,17 @@ is_provisional = any(getattr(signal, "is_provisional", False) for signal in sign
 
 growth_val: float | None = None
 inflation_val: float | None = None
+export_growth_val: float | None = None
+trade_indicators: dict[str, float] = {}
+sector_export_trends: dict[str, float] = {}
+sector_export_history: dict[str, pd.Series] = {}
+sector_export_aliases = build_enabled_sector_export_aliases(sector_map, macro_series_cfg)
+has_sector_export_indicators = bool(sector_export_aliases)
+has_trade_indicators = any(
+    is_macro_alias_enabled(macro_series_cfg, alias)
+    for alias in ("trade_exports_yoy", "trade_imports_yoy")
+)
+sector_trade_lens: list[dict[str, object]] = []
 fx_change: float | None = None
 if not macro_df.empty:
     growth_series = extract_macro_series(macro_df, macro_series_cfg, "leading_index")
@@ -568,9 +612,20 @@ if not macro_df.empty:
     inflation_series = extract_macro_series(macro_df, macro_series_cfg, "cpi_yoy")
     if not inflation_series.empty:
         inflation_val = float(inflation_series.iloc[-1])
+    if context.market_id == "KR":
+        export_growth_val = extract_kr_export_growth_yoy(macro_df, macro_series_cfg)
+    trade_indicators = extract_trade_indicators(macro_df, macro_series_cfg)
+    for sector_name, export_alias in sector_export_aliases.items():
+        sector_export_series = extract_macro_series(macro_df, macro_series_cfg, export_alias)
+        sector_export_yoy = sector_export_series.pct_change(12).dropna() * 100 if len(sector_export_series) >= 13 else pd.Series(dtype=float)
+        if not sector_export_yoy.empty:
+            sector_export_trends[sector_name] = float(sector_export_yoy.iloc[-1])
+            sector_export_history[sector_name] = sector_export_yoy
     fx_series = extract_macro_series(macro_df, macro_series_cfg, str(settings.get("fx_series_alias", "usdkrw")))
     if len(fx_series) >= 2:
         fx_change = float((fx_series.iloc[-1] / fx_series.iloc[-2] - 1) * 100)
+if context.market_id == "US" and (trade_indicators or has_trade_indicators):
+    sector_trade_lens = build_sector_trade_proxy_lens(sector_map, trade_indicators)
 
 dashboard_query_date_label = context.market_end_date.strftime("%Y-%m-%d")
 dashboard_data_date_label = market_data_reference_date or dashboard_query_date_label
@@ -835,6 +890,13 @@ if selected_dashboard_page == "overview":
         lookup_status=str(st.session_state.get("stock_lookup_status", "")),
         lookup_message=str(st.session_state.get("stock_lookup_message", "")),
         lookup_display_model=build_stock_lookup_display_model(st.session_state.get("stock_lookup_result"), sector_map),
+        export_growth_val=export_growth_val,
+        trade_indicators=trade_indicators,
+        sector_export_trends=sector_export_trends,
+        sector_export_history=sector_export_history,
+        sector_trade_lens=sector_trade_lens,
+        has_trade_indicators=has_trade_indicators,
+        has_sector_export_indicators=has_sector_export_indicators,
         locale=context.ui_locale,
         is_mobile=mobile_client,
     )
@@ -871,6 +933,12 @@ bundle = DashboardDataBundle(
     yield_curve_status=yield_curve_status,
     growth_val=growth_val,
     inflation_val=inflation_val,
+    export_growth_val=export_growth_val,
+    trade_indicators=dict(trade_indicators),
+    sector_trade_lens=list(sector_trade_lens),
+    sector_export_trends=dict(sector_export_trends),
+    sector_export_history=dict(sector_export_history),
+    has_sector_export_indicators=has_sector_export_indicators,
     fx_change=fx_change,
     price_warm_status=dict(price_warm_status),
     price_cache_case=price_cache_case,
@@ -897,6 +965,8 @@ bundle = DashboardDataBundle(
     investor_flow_detail=dict(investor_flow_detail),
     shared_flow_summary_map=shared_flow_summary_map,
     investor_flow_refresh_notice=investor_flow_refresh_notice,
+    theme_lens_status=theme_lens_status,
+    theme_lens_rows=theme_lens_rows,
 )
 
 if selected_dashboard_page == "research":
@@ -916,6 +986,8 @@ elif selected_dashboard_page != "overview":
         investor_flow_frame=bundle.investor_flow_frame,
         investor_flow_detail=bundle.investor_flow_detail,
         shared_flow_summary_map=bundle.shared_flow_summary_map,
+        theme_lens_status=bundle.theme_lens_status,
+        theme_lens_rows=bundle.theme_lens_rows,
         sector_map=sector_map,
         ui_locale=context.ui_locale,
         selected_page_id=selected_dashboard_page,

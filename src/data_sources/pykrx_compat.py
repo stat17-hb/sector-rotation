@@ -44,6 +44,7 @@ _BROWSER_UA = (
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/122.0.0.0 Safari/537.36"
 )
+PYKRX_SHARED_SESSION_TIMEOUT = 15
 
 
 class KRXAccessDeniedError(RuntimeError):
@@ -353,7 +354,12 @@ def ensure_pykrx_transport_compat() -> None:
             headers.setdefault("User-Agent", _BROWSER_UA)
             headers.setdefault("X-Requested-With", "XMLHttpRequest")
             headers.setdefault("Origin", "https://data.krx.co.kr")
-            return session.post(self.url, headers=headers, data=params)
+            return session.post(
+                self.url,
+                headers=headers,
+                data=params,
+                timeout=PYKRX_SHARED_SESSION_TIMEOUT,
+            )
 
         def _shared_get_read(self, **params):
             session = _get_shared_session()
@@ -361,7 +367,12 @@ def ensure_pykrx_transport_compat() -> None:
             headers.setdefault("Referer", KRX_REFERER)
             headers.setdefault("User-Agent", _BROWSER_UA)
             headers.setdefault("X-Requested-With", "XMLHttpRequest")
-            return session.get(self.url, headers=headers, params=params)
+            return session.get(
+                self.url,
+                headers=headers,
+                params=params,
+                timeout=PYKRX_SHARED_SESSION_TIMEOUT,
+            )
 
         webio.Post.read = _shared_post_read
         webio.Get.read = _shared_get_read

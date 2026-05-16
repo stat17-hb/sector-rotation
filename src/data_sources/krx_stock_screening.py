@@ -7,6 +7,7 @@ and returns a ranked list of buy candidates.
 Fallback behaviour:
 - Weekend / API unavailable → returns empty list with status="UNAVAILABLE"
 - Cache hit (< TTL) → returns cached result with status="CACHED"
+- Expired cache hit when live fetch is skipped/unavailable → returns cached result with status="STALE_CACHE"
 - Live fetch success → returns scored list with status="LIVE"
 """
 from __future__ import annotations
@@ -16,7 +17,7 @@ import math
 import pickle
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Literal
+from typing import Any, Callable, Literal
 
 import pandas as pd
 
@@ -24,11 +25,14 @@ from src.data_sources.krx_constituents import candidate_reference_dates, lookup_
 
 logger = logging.getLogger(__name__)
 
-DataStatus = Literal["LIVE", "CACHED", "UNAVAILABLE"]
+DataStatus = Literal["LIVE", "CACHED", "STALE_CACHE", "UNAVAILABLE"]
+ScreeningProgressCallback = Callable[[dict[str, Any]], None]
 CACHE_PATH = Path("data/curated/stock_screening_cache.pkl")
 ETF_CONTEXT_CACHE_PATH = Path("data/curated/stock_screening_etf_context_cache.pkl")
 CACHE_TTL_HOURS = 24
 MAX_STOCKS_PER_SECTOR = 15
+STOCK_PRICE_LOOKBACK_DAYS = 365
+MIN_STOCK_HISTORY_ROWS_FOR_200DMA = 200
 ETF_LIQUIDITY_LOOKBACK_DAYS = 20
 ETF_HISTORY_BUFFER_DAYS = 45
 ETF_MIN_AVG_TRADING_VALUE = 300_000_000
@@ -44,6 +48,7 @@ def load_screened_stocks(
     settings: dict | None = None,
     force_refresh: bool = False,
     allow_live_fetch: bool = True,
+    progress_callback: ScreeningProgressCallback | None = None,
 ) -> tuple[DataStatus, list[dict]]:
     """Load momentum-screened stocks for Strong Buy sectors.
 
@@ -52,7 +57,9 @@ def load_screened_stocks(
         benchmark_code: KOSPI benchmark code (default "1001").
         settings: Dashboard settings dict (rs_ma_period, rsi_period, etc.).
         force_refresh: Bypass cache and re-fetch.
-        allow_live_fetch: When false, return only an existing cache hit and skip live KRX/pykrx calls.
+        allow_live_fetch: When false, skip live KRX/pykrx calls and allow the
+            last successful cache as a stale fallback.
+        progress_callback: Optional callback receiving refresh progress events.
 
     Returns:
         (status, rows) where each row is a dict with scoring fields.
@@ -66,16 +73,25 @@ def load_screened_stocks(
             return "CACHED", cached
 
     if not allow_live_fetch:
+        cached = _read_cache(strong_buy_sectors, allow_stale=True)
+        if cached is not None:
+            return "STALE_CACHE", cached
         return "UNAVAILABLE", []
 
     try:
-        rows = _fetch_and_score(strong_buy_sectors, benchmark_code, settings or {})
+        rows = _fetch_and_score(strong_buy_sectors, benchmark_code, settings or {}, progress_callback=progress_callback)
         if rows:
             _write_cache(strong_buy_sectors, rows)
             return "LIVE", rows
+        cached = _read_cache(strong_buy_sectors, allow_stale=True)
+        if cached is not None:
+            return "STALE_CACHE", cached
         return "UNAVAILABLE", []
     except Exception as exc:
         logger.warning("Stock screening failed: %s", exc)
+        cached = _read_cache(strong_buy_sectors, allow_stale=True)
+        if cached is not None:
+            return "STALE_CACHE", cached
         return "UNAVAILABLE", []
 
 
@@ -133,6 +149,7 @@ def _fetch_and_score(
     sectors: list[dict],
     benchmark_code: str,
     settings: dict,
+    progress_callback: ScreeningProgressCallback | None = None,
 ) -> list[dict]:
     """Fetch constituent stocks for each sector and apply momentum scoring."""
     import pykrx.stock as stock
@@ -141,7 +158,7 @@ def _fetch_and_score(
     ensure_pykrx_transport_compat()
 
     trade_date = _last_business_day()
-    start_date = (datetime.strptime(trade_date, "%Y%m%d") - timedelta(days=120)).strftime("%Y%m%d")
+    start_date = (datetime.strptime(trade_date, "%Y%m%d") - timedelta(days=STOCK_PRICE_LOOKBACK_DAYS)).strftime("%Y%m%d")
 
     # Fetch benchmark
     benchmark_df = stock.get_index_ohlcv_by_date(start_date, trade_date, benchmark_code)
@@ -156,7 +173,7 @@ def _fetch_and_score(
     ma_fast = int(settings.get("ma_fast", 20))
     ma_slow = int(settings.get("ma_slow", 60))
 
-    rows: list[dict] = []
+    sector_tickers: list[tuple[str, str, list[str]]] = []
     for sector in sectors:
         sector_code = str(sector["code"])
         sector_name = sector["name"]
@@ -166,8 +183,29 @@ def _fetch_and_score(
         if not tickers:
             logger.info("No constituents for sector %s (%s)", sector_code, sector_name)
             continue
+        sector_tickers.append((sector_code, sector_name, tickers[:MAX_STOCKS_PER_SECTOR]))
 
-        for ticker in tickers[:MAX_STOCKS_PER_SECTOR]:
+    total_tickers = sum(len(tickers) for _, _, tickers in sector_tickers)
+    if progress_callback is not None:
+        progress_callback({"stage": "start", "current": 0, "total": total_tickers})
+
+    rows: list[dict] = []
+    processed_tickers = 0
+    for sector_code, sector_name, tickers in sector_tickers:
+        for ticker in tickers:
+            processed_tickers += 1
+            if progress_callback is not None:
+                progress_callback(
+                    {
+                        "stage": "ticker",
+                        "current": processed_tickers,
+                        "total": total_tickers,
+                        "ticker": ticker,
+                        "sector_code": sector_code,
+                        "sector_name": sector_name,
+                    }
+                )
+
             try:
                 row = _score_stock(
                     stock=stock,
@@ -186,6 +224,9 @@ def _fetch_and_score(
                     rows.append(row)
             except Exception as exc:
                 logger.debug("Skipping ticker %s: %s", ticker, exc)
+
+    if progress_callback is not None:
+        progress_callback({"stage": "done", "current": processed_tickers, "total": total_tickers})
 
     return sorted(rows, key=lambda r: r.get("rs", 0), reverse=True)
 
@@ -467,6 +508,104 @@ def _to_numeric(series: pd.Series) -> pd.Series:
     return pd.to_numeric(cleaned, errors="coerce")
 
 
+def _parse_yyyymmdd(value: str) -> pd.Timestamp:
+    digits = str(value).strip().replace("-", "")
+    if len(digits) != 8 or not digits.isdigit():
+        return pd.Timestamp(value).normalize()
+    return pd.Timestamp(f"{digits[:4]}-{digits[4:6]}-{digits[6:]}").normalize()
+
+
+def _normalize_stock_ohlcv_frame(
+    raw: pd.DataFrame,
+    *,
+    ticker: str,
+    ticker_name: str,
+) -> pd.DataFrame:
+    if raw is None or raw.empty:
+        return pd.DataFrame()
+
+    column_map = {
+        "시가": "open",
+        "고가": "high",
+        "저가": "low",
+        "종가": "close",
+        "거래량": "volume",
+        "open": "open",
+        "high": "high",
+        "low": "low",
+        "close": "close",
+        "volume": "volume",
+        "Open": "open",
+        "High": "high",
+        "Low": "low",
+        "Close": "close",
+        "Volume": "volume",
+    }
+    normalized = pd.DataFrame(index=pd.DatetimeIndex(raw.index).normalize())
+    for source_column, target_column in column_map.items():
+        if source_column in raw.columns and target_column not in normalized.columns:
+            normalized[target_column] = pd.to_numeric(raw[source_column], errors="coerce")
+
+    if "close" not in normalized.columns and len(raw.columns) >= 4:
+        normalized["close"] = pd.to_numeric(raw.iloc[:, 3], errors="coerce")
+    if "volume" not in normalized.columns and len(raw.columns) >= 5:
+        normalized["volume"] = pd.to_numeric(raw.iloc[:, 4], errors="coerce")
+    if "close" not in normalized.columns:
+        return pd.DataFrame()
+
+    normalized["ticker"] = str(ticker)
+    normalized["ticker_name"] = str(ticker_name or ticker)
+    return normalized.sort_index().dropna(subset=["close"])
+
+
+def _cached_stock_ohlcv_is_usable(frame: pd.DataFrame, *, end: str) -> bool:
+    if frame is None or frame.empty or "close" not in frame.columns:
+        return False
+    close = pd.to_numeric(frame["close"], errors="coerce").dropna()
+    if len(close) < MIN_STOCK_HISTORY_ROWS_FOR_200DMA:
+        return False
+    latest_date = pd.Timestamp(frame.index.max()).normalize()
+    requested_end = _parse_yyyymmdd(end)
+    return latest_date >= requested_end - pd.Timedelta(days=10)
+
+
+def _load_stock_ohlcv_cached_or_live(
+    stock_module,
+    *,
+    ticker: str,
+    start: str,
+    end: str,
+) -> pd.DataFrame:
+    from src.data_sources.warehouse import read_stock_ohlcv, upsert_stock_ohlcv
+
+    cached = read_stock_ohlcv([ticker], start, end, market="KR")
+    cached = cached[cached["ticker"].astype(str) == str(ticker)] if not cached.empty else cached
+    if _cached_stock_ohlcv_is_usable(cached, end=end):
+        return cached
+
+    ticker_name = ""
+    try:
+        ticker_name = str(stock_module.get_market_ticker_name(ticker) or ticker)
+    except Exception:
+        ticker_name = str(ticker)
+
+    try:
+        live_raw = stock_module.get_market_ohlcv_by_date(start, end, ticker)
+        live = _normalize_stock_ohlcv_frame(live_raw, ticker=ticker, ticker_name=ticker_name)
+    except Exception as exc:
+        logger.debug("Stock OHLCV live fetch failed for %s: %s", ticker, exc)
+        live = pd.DataFrame()
+
+    if not live.empty:
+        try:
+            upsert_stock_ohlcv(live, provider="PYKRX", market="KR")
+        except Exception as exc:
+            logger.debug("Stock OHLCV warehouse upsert failed for %s: %s", ticker, exc)
+        return live
+
+    return cached if cached is not None else pd.DataFrame()
+
+
 def _get_constituents(stock_module, trade_date: str, sector_code: str) -> list[str]:
     """Get constituent ticker codes for a sector index."""
     lookup = lookup_index_constituents(
@@ -492,22 +631,33 @@ def _score_stock(
     ma_slow: int,
 ) -> dict | None:
     """Fetch OHLCV and compute momentum score for one stock."""
-    from src.indicators.momentum import compute_rs, compute_rs_ma, is_rs_strong, is_trend_positive
+    from src.indicators.momentum import compute_price_above_sma, compute_rs, compute_rs_ma, is_rs_strong, is_trend_positive
     from src.indicators.rsi import compute_rsi
 
-    df = stock.get_market_ohlcv_by_date(start_date, trade_date, ticker)
+    df = _load_stock_ohlcv_cached_or_live(
+        stock,
+        ticker=ticker,
+        start=start_date,
+        end=trade_date,
+    )
     if df is None or df.empty:
         return None
 
-    close_col = "종가" if "종가" in df.columns else df.columns[3]
+    close_col = "close" if "close" in df.columns else "종가" if "종가" in df.columns else df.columns[3]
     close = df[close_col].copy()
     close.index = pd.to_datetime(close.index)
     close = close.sort_index().dropna()
 
-    if len(close) < ma_slow:
+    if len(close) < max(ma_slow, MIN_STOCK_HISTORY_ROWS_FOR_200DMA):
         return None
 
-    name = stock.get_market_ticker_name(ticker) or ticker
+    if "ticker_name" in df.columns and df["ticker_name"].dropna().astype(str).str.strip().any():
+        name = str(df["ticker_name"].dropna().astype(str).iloc[-1]).strip() or ticker
+    else:
+        try:
+            name = stock.get_market_ticker_name(ticker) or ticker
+        except Exception:
+            name = ticker
 
     # RS
     rs_series = compute_rs(close, bench_close)
@@ -521,6 +671,7 @@ def _score_stock(
 
     # SMA trend
     trend_ok = bool(is_trend_positive(close, fast=ma_fast, slow=ma_slow))
+    above_200dma = bool(compute_price_above_sma(close, window=200))
 
     # RSI
     rsi_series = compute_rsi(close, period=rsi_period)
@@ -537,6 +688,8 @@ def _score_stock(
             alerts.append("과열")
         elif rsi_val <= 30:
             alerts.append("과매도")
+    if not above_200dma:
+        alerts.append("200DMA 하회")
 
     # Score: pass both filters = top candidate
     momentum_ok = rs_strong and trend_ok
@@ -550,6 +703,7 @@ def _score_stock(
         "rs_ma": round(rs_ma_val, 4),
         "rs_strong": rs_strong,
         "trend_ok": trend_ok,
+        "above_200dma": above_200dma,
         "momentum_ok": momentum_ok,
         "rsi": round(rsi_val, 1) if not math.isnan(rsi_val) else None,
         "ret_1m": round(ret_1m, 1) if ret_1m is not None else None,
@@ -585,7 +739,7 @@ def _etf_context_cache_key(sectors: list[dict], etf_map: dict[str, list[dict]]) 
     return "|".join(items)
 
 
-def _read_cache(sectors: list[dict]) -> list[dict] | None:
+def _read_cache(sectors: list[dict], *, allow_stale: bool = False) -> list[dict] | None:
     if not CACHE_PATH.exists():
         return None
     try:
@@ -594,10 +748,11 @@ def _read_cache(sectors: list[dict]) -> list[dict] | None:
         if cached.get("key") != _cache_key(sectors):
             return None
         age_hours = (datetime.now() - cached["ts"]).total_seconds() / 3600
-        if age_hours > CACHE_TTL_HOURS:
+        if age_hours > CACHE_TTL_HOURS and not allow_stale:
             return None
         return cached["rows"]
-    except Exception:
+    except Exception as exc:
+        logger.debug("Screening cache read failed: %s", exc)
         return None
 
 
@@ -622,7 +777,8 @@ def _read_etf_context_cache(sectors: list[dict], etf_map: dict[str, list[dict]])
         if age_hours > CACHE_TTL_HOURS:
             return None
         return cached["rows"]
-    except Exception:
+    except Exception as exc:
+        logger.debug("ETF context cache read failed: %s", exc)
         return None
 
 

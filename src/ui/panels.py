@@ -2,8 +2,17 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+import math
 
 from src.ui.base import *
+
+
+STATUS_BADGE_LABELS = {
+    "error": "오류",
+    "warning": "주의",
+    "info": "안내",
+    "success": "정상",
+}
 def _render_card_html(
     *,
     eyebrow: str,
@@ -54,7 +63,7 @@ def render_page_header(
     )
     pills_html = (
         '<div class="page-shell__meta">'
-        '<div class="page-shell__meta-eyebrow">market context</div>'
+        '<div class="page-shell__meta-eyebrow">시장 컨텍스트</div>'
         f'<div class="page-shell__pills">{pill_markup}</div>'
         "</div>"
         if pill_markup
@@ -83,6 +92,7 @@ def render_status_strip(banner: Mapping[str, object] | None) -> None:
         return
 
     tone = str(banner.get("level", "info")).strip().lower() or "info"
+    badge_label = STATUS_BADGE_LABELS.get(tone, "안내")
     title = str(banner.get("title", "")).strip()
     message = str(banner.get("message", "")).strip()
     details = [str(item).strip() for item in banner.get("details", []) if str(item).strip()]
@@ -97,7 +107,7 @@ def render_status_strip(banner: Mapping[str, object] | None) -> None:
         (
             '<div class="status-strip" '
             f'data-tone="{html.escape(tone)}">'
-            f'<div class="status-strip__badge">{html.escape(tone.upper())}</div>'
+            f'<div class="status-strip__badge">{html.escape(badge_label)}</div>'
             '<div class="status-strip__body">'
             f'<div class="status-strip__title">{html.escape(title)}</div>'
             f'<div class="status-strip__message">{html.escape(message)}</div>'
@@ -411,6 +421,8 @@ def _format_overview_pct(value: object, *, decimals: int = 2) -> str:
 
 def _series_change_pct(series: pd.Series, periods: int = 1) -> float | None:
     clean = pd.to_numeric(series, errors="coerce").dropna()
+    if isinstance(clean.index, pd.DatetimeIndex):
+        clean = clean.sort_index()
     if len(clean) <= periods:
         return None
     previous = float(clean.iloc[-(periods + 1)])
@@ -433,24 +445,24 @@ def _build_overview_market_cards(
     current_regime: str,
     price_status: str,
     macro_status: str,
+    export_growth_val: float | None = None,
+    trade_indicators: Mapping[str, float] | None = None,
+    has_trade_indicators: bool = False,
 ) -> list[str]:
     cards: list[str] = []
     preferred = [benchmark_label]
     preferred.extend(str(label).strip() for label in reference_index_labels or [])
-    preferred.extend(
-        str(getattr(signal, "sector_name", "")).strip()
-        for signal in sorted(signals, key=signal_display_sort_key)[:2]
-    )
     labels: list[str] = []
     for label in preferred:
         if label and label in prices_wide.columns and label not in labels:
             labels.append(label)
 
     market_card_limit = 1 + len([label for label in reference_index_labels or [] if str(label).strip()])
-    market_card_limit = max(2, market_card_limit)
     for label in labels[:market_card_limit]:
         series = prices_wide[label]
         latest = pd.to_numeric(series, errors="coerce").dropna()
+        if isinstance(latest.index, pd.DatetimeIndex):
+            latest = latest.sort_index()
         value = latest.iloc[-1] if not latest.empty else None
         change = _series_change_pct(series)
         tone = "positive" if (change or 0.0) >= 0 else "negative"
@@ -459,7 +471,7 @@ def _build_overview_market_cards(
             f'<div class="overview-market-card__label">{html.escape(label)}</div>'
             '<div class="overview-market-card__metric-row">'
             f'<div class="overview-market-card__value">{html.escape(_format_overview_number(value))}</div>'
-            f'<div class="overview-market-card__change" data-tone="{tone}">{html.escape(_format_overview_pct(change))}</div>'
+            f'<div class="overview-market-card__change" data-tone="{tone}">1D {html.escape(_format_overview_pct(change))}</div>'
             "</div>"
             "</div>"
         )
@@ -469,6 +481,18 @@ def _build_overview_market_cards(
         ("시장 데이터", price_status),
         ("매크로", macro_status),
     ]
+    if export_growth_val is not None:
+        status_items.append(("수출 전년비", _format_overview_pct(export_growth_val, decimals=1)))
+    trade = dict(trade_indicators or {})
+    if trade or has_trade_indicators:
+        exports_yoy = _safe_float(trade.get("exports_yoy"))
+        imports_yoy = _safe_float(trade.get("imports_yoy"))
+        pulse_parts: list[str] = []
+        if exports_yoy is not None:
+            pulse_parts.append(f"수출 {_format_overview_pct(exports_yoy, decimals=1)}")
+        if imports_yoy is not None:
+            pulse_parts.append(f"수입 {_format_overview_pct(imports_yoy, decimals=1)}")
+        status_items.append(("미국 수출입", " / ".join(pulse_parts) if pulse_parts else "데이터 없음"))
     cards.append(
         '<div class="overview-market-card overview-market-card--status">'
         + "".join(
@@ -482,28 +506,96 @@ def _build_overview_market_cards(
     return cards
 
 
-def _build_overview_sector_frame(signals: Sequence, *, sort_key: str) -> pd.DataFrame:
+def _render_sector_trade_lens(
+    sector_trade_lens: Sequence[Mapping[str, object]] | None,
+    *,
+    limit: int = 6,
+) -> None:
+    source_rows = [dict(row) for row in (sector_trade_lens or [])]
+    rows = [
+        row
+        for row in source_rows
+        if _safe_float(row.get("value")) is not None
+    ]
+    if not rows:
+        return
+
+    cards: list[str] = []
+    for row in rows[:limit]:
+        value = _safe_float(row.get("value"))
+        value_text = _format_overview_pct(value, decimals=1) if value is not None else "N/A"
+        tone = html.escape(str(row.get("tone") or "neutral"))
+        cards.append(
+            '<div class="overview-market-card overview-market-card--metric">'
+            '<div class="overview-market-card__label">'
+            f'{html.escape(str(row.get("sector") or ""))}'
+            "</div>"
+            '<div class="overview-market-card__metric-row">'
+            f'<div class="overview-market-card__value">{html.escape(str(row.get("status") or ""))}</div>'
+            f'<div class="overview-market-card__change" data-tone="{tone}">{html.escape(value_text)}</div>'
+            "</div>"
+            '<div class="overview-sector-subtext">'
+            f'{html.escape(str(row.get("exposure_label") or ""))} · '
+            f'{html.escape(str(row.get("driver") or ""))} · '
+            f'{html.escape(str(row.get("basis") or ""))}'
+            "</div>"
+            "</div>"
+        )
+
+    omitted_count = max(0, len(source_rows) - len(rows))
+    omitted_copy = (
+        f" · 직접 해석 제한 섹터 {omitted_count}개 제외"
+        if omitted_count
+        else ""
+    )
+    st.markdown(
+        '<section class="overview-reference-shell">'
+        '<div class="overview-section-title">미국 수출입 섹터 렌즈</div>'
+        '<div class="overview-command-surface__copy">'
+        '총량 proxy입니다. 섹터별 직접 무역 데이터가 아니며 점수 산식에는 반영하지 않습니다.'
+        f'{html.escape(omitted_copy)}'
+        '</div>'
+        f'<div class="overview-market-grid">{"".join(cards)}</div>'
+        '</section>',
+        unsafe_allow_html=True,
+    )
+
+
+def _build_overview_sector_frame(
+    signals: Sequence,
+    *,
+    sort_key: str,
+    sector_export_trends: Mapping[str, float] | None = None,
+    has_sector_export_indicators: bool = True,
+) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
+    export_trends = {
+        str(sector_name): value
+        for sector_name, value in (sector_export_trends or {}).items()
+    } if has_sector_export_indicators else {}
     for rank, signal in enumerate(sorted(signals, key=signal_display_sort_key), start=1):
         if str(getattr(signal, "action", "N/A")) == "N/A":
             continue
+        sector_name = str(getattr(signal, "sector_name", ""))
         rs_gap = _rs_divergence_pct(signal)
         ret_1m = _pct_value(getattr(signal, "returns", {}).get("1M"))
         ret_3m = _pct_value(getattr(signal, "returns", {}).get("3M"))
         mom_score = _safe_float(getattr(signal, "mom_percentile", None))
         if mom_score is None:
             mom_score = rs_gap
-        rows.append(
-            {
-                "순위": rank,
-                "섹터": str(getattr(signal, "sector_name", "")),
-                "모멘텀 점수": mom_score,
-                "상대강도": rs_gap,
-                "1M": ret_1m,
-                "3M": ret_3m,
-                "액션": format_action_label(str(getattr(signal, "action", "N/A"))),
-            }
-        )
+        export_basis = _sector_export_display_label(sector_name) if sector_name in export_trends else ""
+        row: dict[str, object] = {
+            "순위": rank,
+            "섹터": sector_name,
+            "모멘텀 점수": mom_score,
+            "상대강도": rs_gap,
+            "1M": ret_1m,
+            "3M": ret_3m,
+            "액션": format_action_label(str(getattr(signal, "action", "N/A"))),
+        }
+        if has_sector_export_indicators:
+            row["수출 기준"] = export_basis
+        rows.append(row)
     frame = pd.DataFrame(rows)
     if frame.empty:
         return frame
@@ -517,7 +609,27 @@ def _build_overview_sector_frame(signals: Sequence, *, sort_key: str) -> pd.Data
     return frame
 
 
-def _render_overview_sector_table(frame: pd.DataFrame) -> None:
+_SECTOR_EXPORT_DISPLAY_LABELS: Mapping[str, str] = {
+    "KOSPI200 정보기술": "IT 수출",
+    "KRX 반도체": "반도체 수출",
+    "KRX 에너지화학": "화학제품 수출",
+    "KRX 철강": "철강 수출",
+    "KOSPI200 경기소비재": "자동차 수출",
+    "KRX 산업재": "기계·장비 수출",
+    "KRX 헬스케어": "의약품 수출",
+}
+
+
+def _sector_export_display_label(sector_name: str) -> str:
+    return _SECTOR_EXPORT_DISPLAY_LABELS.get(str(sector_name), "")
+
+
+def _format_export_trace_name(sector_name: str) -> str:
+    basis = _sector_export_display_label(sector_name)
+    return basis or sector_name
+
+
+def _render_overview_sector_table(frame: pd.DataFrame, *, has_sector_export_indicators: bool = True) -> None:
     if frame.empty:
         st.info("표시할 섹터 신호가 없습니다.")
         return
@@ -525,10 +637,15 @@ def _render_overview_sector_table(frame: pd.DataFrame) -> None:
     for _, row in frame.head(12).iterrows():
         ret_3m = _safe_float(row.get("3M"))
         ret_tone = "positive" if (ret_3m or 0.0) >= 0 else "negative"
+        sector_name = str(row["섹터"])
+        export_basis = str(row.get("수출 기준") or "")
+        sector_cell = html.escape(sector_name)
+        if has_sector_export_indicators and export_basis:
+            sector_cell += f'<span class="overview-sector-subtext">수출 기준: {html.escape(export_basis)}</span>'
         rows.append(
             "<tr>"
             f"<td>{int(row['순위'])}</td>"
-            f"<td>{html.escape(str(row['섹터']))}</td>"
+            f"<td>{sector_cell}</td>"
             f"<td>{html.escape(_format_overview_number(row.get('모멘텀 점수'), decimals=2))}</td>"
             f"<td>{html.escape(_format_overview_number(row.get('상대강도'), decimals=2))}</td>"
             f'<td data-tone="{ret_tone}">{html.escape(_format_overview_pct(row.get("3M"), decimals=2))}</td>'
@@ -556,6 +673,8 @@ def _build_overview_trend_figure(
 ) -> go.Figure:
     template = get_plotly_template(theme_mode)
     tokens = get_theme_tokens(theme_mode)
+    chart_tokens = get_chart_tokens(theme_mode)
+    colorway = list(chart_tokens["colorway"])
     fig = go.Figure()
     if prices_wide.empty:
         fig.update_layout(**template, title="섹터 상대강도 추이")
@@ -565,7 +684,8 @@ def _build_overview_trend_figure(
     visible = prices_wide.tail(days).copy()
     candidates = [benchmark_label]
     candidates.extend(str(getattr(signal, "sector_name", "")) for signal in sorted(signals, key=signal_display_sort_key)[:5])
-    for label in dict.fromkeys(item for item in candidates if item in visible.columns):
+    line_end_annotations: list[dict[str, object]] = []
+    for trace_index, label in enumerate(dict.fromkeys(item for item in candidates if item in visible.columns)):
         series = pd.to_numeric(visible[label], errors="coerce").dropna()
         if series.empty:
             continue
@@ -573,6 +693,8 @@ def _build_overview_trend_figure(
         if base == 0:
             continue
         normalized = series / base
+        color = str(colorway[trace_index % len(colorway)])
+        line_color = str(chart_tokens["muted_lines"][0]) if label == benchmark_label else color
         fig.add_trace(
             go.Scatter(
                 x=normalized.index,
@@ -580,12 +702,30 @@ def _build_overview_trend_figure(
                 mode="lines",
                 name=label,
                 line={
+                    "color": line_color,
                     "width": 1.35 if label == benchmark_label else 2.15,
                     "dash": "dot" if label == benchmark_label else "solid",
                 },
                 opacity=0.68 if label == benchmark_label else 0.96,
                 hovertemplate="%{fullData.name}<br>%{x|%Y-%m-%d}<br>%{y:.3f}<extra></extra>",
             )
+        )
+        line_end_annotations.append(
+            {
+                "x": normalized.index[-1],
+                "y": float(normalized.iloc[-1]),
+                "text": f"{label} {normalized.iloc[-1]:.2f}",
+                "xref": "x",
+                "yref": "y",
+                "showarrow": False,
+                "xanchor": "left",
+                "xshift": 8,
+                "font": {"size": 11, "color": line_color},
+                "bgcolor": chart_tokens["legend_bg"],
+                "bordercolor": line_color,
+                "borderwidth": 1,
+                "borderpad": 2,
+            }
         )
     if not fig.data:
         fig.add_annotation(
@@ -597,15 +737,173 @@ def _build_overview_trend_figure(
             showarrow=False,
             font={"size": 13, "color": tokens["text"]},
         )
+    _stagger_line_end_annotations(line_end_annotations)
     fig.update_layout(**template)
     fig.update_layout(
         title="섹터 상대강도 추이 (vs 기준값 1.0)",
-        height=318,
-        margin={"l": 34, "r": 18, "t": 42, "b": 58},
-        legend={"orientation": "h", "x": 0.0, "y": -0.18, "xanchor": "left"},
+        height=348,
+        margin={"l": 34, "r": 138, "t": 42, "b": 68},
+        hovermode="x unified",
+        legend={"orientation": "h", "x": 0.0, "y": -0.24, "xanchor": "left"},
+        annotations=line_end_annotations,
     )
-    fig.update_yaxes(tickformat=".2f", title="")
-    fig.update_xaxes(title="")
+    fig.add_hline(y=1.0, line_width=1, line_dash="dot", line_color=chart_tokens["axis"])
+    fig.update_yaxes(tickformat=".2f", title="", fixedrange=True)
+    fig.update_xaxes(
+        title="",
+        tickformat="%b\n%Y",
+        dtick="M1",
+        showspikes=True,
+        spikemode="across",
+        spikecolor=chart_tokens["axis"],
+        spikethickness=1,
+    )
+    return fig
+
+
+def _stagger_line_end_annotations(annotations: list[dict[str, object]]) -> None:
+    numeric_annotations: list[tuple[float, dict[str, object]]] = []
+    for annotation in annotations:
+        try:
+            numeric_annotations.append((float(annotation["y"]), annotation))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if len(numeric_annotations) < 2:
+        return
+
+    values = [value for value, _ in numeric_annotations]
+    threshold = max((max(values) - min(values)) * 0.045, 0.025)
+    offsets = [0, -12, 12, -24, 24, -36, 36]
+    cluster: list[dict[str, object]] = []
+    previous_value: float | None = None
+
+    for value, annotation in sorted(numeric_annotations, key=lambda item: item[0], reverse=True):
+        if previous_value is None or abs(value - previous_value) <= threshold:
+            cluster.append(annotation)
+        else:
+            for index, clustered_annotation in enumerate(cluster):
+                clustered_annotation["yshift"] = offsets[index % len(offsets)]
+            cluster = [annotation]
+        previous_value = value
+
+    for index, clustered_annotation in enumerate(cluster):
+        clustered_annotation["yshift"] = offsets[index % len(offsets)]
+
+
+def _to_month_timestamp(value: object) -> pd.Timestamp | object:
+    try:
+        if isinstance(value, pd.Period):
+            return value.to_timestamp()
+        return pd.Period(value, freq="M").to_timestamp()
+    except Exception:
+        return value
+
+
+def _build_sector_export_trend_figure(
+    *,
+    sector_export_history: Mapping[str, pd.Series] | None,
+    signals: Sequence,
+    theme_mode: str,
+    window_months: int = 24,
+) -> go.Figure:
+    template = get_plotly_template(theme_mode)
+    tokens = get_theme_tokens(theme_mode)
+    chart_tokens = get_chart_tokens(theme_mode)
+    colorway = list(chart_tokens["colorway"])
+    fig = go.Figure()
+    history = sector_export_history or {}
+    if not history:
+        fig.update_layout(**template, title="섹터별 수출 YoY 월별 추이")
+        fig.add_annotation(
+            text="표시할 섹터별 수출 시계열이 없습니다.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 13, "color": tokens["text"]},
+        )
+        return fig
+
+    ordered_names = [
+        str(getattr(signal, "sector_name", "")).strip()
+        for signal in sorted(signals, key=signal_display_sort_key)
+        if str(getattr(signal, "sector_name", "")).strip() in history
+    ]
+    ordered_names.extend(sector_name for sector_name in history if sector_name not in ordered_names)
+
+    line_end_annotations: list[dict[str, object]] = []
+    for trace_index, sector_name in enumerate(dict.fromkeys(ordered_names).keys()):
+        series = pd.to_numeric(history.get(sector_name), errors="coerce").dropna()
+        if series.empty:
+            continue
+        visible = series.tail(max(1, int(window_months)))
+        x_values = [_to_month_timestamp(idx) for idx in visible.index]
+        month_labels = [pd.Timestamp(value).strftime("%Y-%m") if isinstance(value, pd.Timestamp) else str(value) for value in x_values]
+        color = str(colorway[trace_index % len(colorway)])
+        trace_name = _format_export_trace_name(sector_name)
+        fig.add_trace(
+            go.Scatter(
+                x=x_values,
+                y=visible.values,
+                mode="lines+markers",
+                name=trace_name,
+                line={"color": color, "width": 2.1},
+                marker={"color": color, "size": 5.5, "line": {"color": chart_tokens["background"], "width": 1}},
+                customdata=[[sector_name, month_label] for month_label in month_labels],
+                hovertemplate="%{fullData.name}<br>%{customdata[0]}<br>%{customdata[1]}<br>수출 YoY %{y:.1f}%<extra></extra>",
+            )
+        )
+        line_end_annotations.append(
+            {
+                "x": x_values[-1],
+                "y": float(visible.iloc[-1]),
+                "text": f"{trace_name} {visible.iloc[-1]:.0f}%",
+                "xref": "x",
+                "yref": "y",
+                "showarrow": False,
+                "xanchor": "left",
+                "xshift": 8,
+                "font": {"size": 11, "color": color},
+                "bgcolor": chart_tokens["legend_bg"],
+                "bordercolor": color,
+                "borderwidth": 1,
+                "borderpad": 2,
+            }
+        )
+
+    if not fig.data:
+        fig.add_annotation(
+            text="표시할 섹터별 수출 시계열이 없습니다.",
+            x=0.5,
+            y=0.5,
+            xref="paper",
+            yref="paper",
+            showarrow=False,
+            font={"size": 13, "color": tokens["text"]},
+        )
+
+    _stagger_line_end_annotations(line_end_annotations)
+    fig.update_layout(**template)
+    fig.update_layout(
+        title="섹터별 수출 YoY 월별 추이",
+        height=330,
+        margin={"l": 34, "r": 138, "t": 42, "b": 72},
+        hovermode="x unified",
+        legend={"orientation": "h", "x": 0.0, "y": -0.30, "xanchor": "left"},
+        annotations=line_end_annotations,
+    )
+    fig.add_hline(y=0, line_width=1, line_dash="dot", line_color=chart_tokens["axis"])
+    fig.update_yaxes(title="", ticksuffix="%", fixedrange=True)
+    fig.update_xaxes(
+        title="",
+        tickformat="%b\n%Y",
+        dtick="M1",
+        showspikes=True,
+        spikemode="across",
+        spikecolor=chart_tokens["axis"],
+        spikethickness=1,
+    )
     return fig
 
 
@@ -638,29 +936,976 @@ def _render_overview_heatmap(signals: Sequence) -> None:
 
 def _render_overview_mobile_decision_strip(frame: pd.DataFrame) -> None:
     """Render a compact mobile-only top-sector strip before secondary controls."""
-    if frame.empty:
+    candidates = [
+        {
+            "sector_name": str(row.get("섹터", "")),
+            "decision": "검토 후보",
+            "reason_parts": [],
+            "invalidation": "",
+            "action": str(row.get("액션", "")),
+            "metrics": [
+                ("3M", _format_overview_pct(row.get("3M"))),
+            ],
+        }
+        for _, row in frame.head(3).iterrows()
+        if str(row.get("섹터", "")).strip()
+    ]
+    _render_overview_review_candidates(candidates, compact=True)
+
+
+_COMPOSITE_REVIEW_CANDIDATE_POLICY = "COMPOSITE_REVIEW_CANDIDATE"
+_OVERVIEW_REVIEW_GROUPS = ("buy", "sell")
+_OVERVIEW_REVIEW_GROUP_LABELS = {
+    "buy": "매수 검토 후보",
+    "sell": "매도 검토 후보",
+}
+_OVERVIEW_REVIEW_GROUP_DESCRIPTIONS = {
+    "buy": "상방 proxy와 복합점수가 우세한 신규/증액 검토 대상입니다.",
+    "sell": "보유 여부와 무관하게 하방 proxy나 약화 근거가 우세한 축소/매도 검토 대상입니다.",
+}
+_FLOW_STATES_WITH_SCORE = {"supportive", "neutral", "adverse"}
+
+
+def _overview_candidate_clamp(value: float, lower: float = 0.0, upper: float = 100.0) -> float:
+    return max(lower, min(upper, float(value)))
+
+
+def _overview_candidate_is_finite(value: object) -> bool:
+    try:
+        return math.isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
+
+
+def _overview_candidate_momentum_score(signal: object) -> float:
+    mom_percentile = getattr(signal, "mom_percentile", None)
+    if _overview_candidate_is_finite(mom_percentile):
+        return _overview_candidate_clamp(float(mom_percentile))
+
+    mom_score = getattr(signal, "mom_score", None)
+    if _overview_candidate_is_finite(mom_score):
+        mom_score_float = float(mom_score)
+        if 0.0 <= mom_score_float <= 1.0:
+            return _overview_candidate_clamp(mom_score_float * 100.0)
+
+    boolean_scores = [
+        100.0 if bool(getattr(signal, "momentum_strong", False)) else 0.0,
+        100.0 if bool(getattr(signal, "trend_ok", False)) else 0.0,
+        100.0 if bool(getattr(signal, "rs_strong", False)) else 0.0,
+    ]
+    return sum(boolean_scores) / len(boolean_scores)
+
+
+def _overview_candidate_macro_score(signal: object) -> tuple[float, bool, list[str]]:
+    warnings: list[str] = []
+    macro_fit = bool(getattr(signal, "macro_fit", False))
+    macro_fit_score = 60.0 if macro_fit else 35.0
+    if not macro_fit:
+        warnings.append("매크로 약점")
+
+    rank = getattr(signal, "sector_fit_rank", None)
+    total = getattr(signal, "sector_fit_total", None)
+    if _overview_candidate_is_finite(rank) and _overview_candidate_is_finite(total):
+        rank_float = float(rank)
+        total_float = float(total)
+        if total_float > 1.0:
+            sector_fit_score = _overview_candidate_clamp(
+                100.0 * (total_float - rank_float) / (total_float - 1.0)
+            )
+            return (0.5 * macro_fit_score) + (0.5 * sector_fit_score), True, warnings
+
+    warnings.append("실증 적합도 없음")
+    return macro_fit_score, False, warnings
+
+
+def _overview_candidate_flow_score(signal: object) -> tuple[float, bool, list[str]]:
+    warnings: list[str] = []
+    flow_state = str(getattr(signal, "flow_state", "") or "").strip().lower()
+    raw_flow_score = getattr(signal, "flow_score", None)
+    if flow_state not in _FLOW_STATES_WITH_SCORE:
+        warnings.append("수급 신호 없음")
+        return 50.0, False, warnings
+    if not _overview_candidate_is_finite(raw_flow_score):
+        warnings.append("수급 점수 중립")
+        return 50.0, True, warnings
+
+    flow_score = _overview_candidate_clamp(50.0 + _overview_candidate_clamp(float(raw_flow_score), -2.0, 2.0) * 25.0)
+    if flow_state == "adverse":
+        warnings.append("수급 약점")
+    return flow_score, True, warnings
+
+
+def _overview_candidate_neutral_score(value: object, neutral: float = 50.0) -> float:
+    if not _overview_candidate_is_finite(value):
+        return neutral
+    return _overview_candidate_clamp(float(value))
+
+
+def _overview_candidate_rs_gap_score(signal: object) -> float:
+    rs_gap = _rs_divergence_pct(signal)
+    if not _overview_candidate_is_finite(rs_gap):
+        return 50.0
+    return _overview_candidate_clamp(50.0 + _overview_candidate_clamp(float(rs_gap), -10.0, 10.0) * 5.0)
+
+
+def _overview_candidate_rs_change_score(signal: object) -> float:
+    rs_change = getattr(signal, "rs_change_pct", None)
+    if not _overview_candidate_is_finite(rs_change):
+        return 50.0
+    return _overview_candidate_clamp(50.0 + _overview_candidate_clamp(float(rs_change), -10.0, 10.0) * 5.0)
+
+
+def _overview_candidate_risk_alert_score(signal: object) -> float:
+    score = 35.0
+    alerts = {str(item) for item in getattr(signal, "alerts", []) or []}
+    if "Overheat" in alerts:
+        score += 15.0
+    if "FX Shock" in alerts:
+        score += 10.0
+
+    volatility = getattr(signal, "volatility_20d", None)
+    if _overview_candidate_is_finite(volatility):
+        vol = float(volatility)
+        if vol >= 0.30:
+            score += 15.0
+        elif vol >= 0.20:
+            score += 10.0
+
+    mdd_3m = getattr(signal, "mdd_3m", None)
+    if _overview_candidate_is_finite(mdd_3m):
+        mdd = float(mdd_3m)
+        if mdd <= -0.20:
+            score += 20.0
+        elif mdd <= -0.12:
+            score += 10.0
+
+    return _overview_candidate_clamp(score)
+
+
+def _overview_candidate_flow_risk(signal: object) -> float:
+    flow_state = str(getattr(signal, "flow_state", "") or "").strip().lower()
+    if flow_state == "supportive":
+        return 25.0
+    if flow_state == "adverse":
+        return 75.0
+    return 50.0
+
+
+def _overview_candidate_proxy_bundle(
+    signal: object,
+    *,
+    momentum_score: float,
+    macro_score: float,
+    flow_score: float,
+) -> dict[str, object]:
+    momentum = _overview_candidate_neutral_score(momentum_score)
+    macro = _overview_candidate_neutral_score(macro_score)
+    flow = _overview_candidate_neutral_score(flow_score)
+    rs_gap_score = _overview_candidate_rs_gap_score(signal)
+    rs_change_score = _overview_candidate_rs_change_score(signal)
+    trend_ok = bool(getattr(signal, "trend_ok", False))
+    trend_score = 100.0 if trend_ok else 25.0
+    trend_risk = 20.0 if trend_ok else 80.0
+    flow_risk = _overview_candidate_flow_risk(signal)
+    risk_alert_score = _overview_candidate_risk_alert_score(signal)
+
+    upside_proxy = (
+        (0.35 * momentum)
+        + (0.20 * rs_gap_score)
+        + (0.15 * rs_change_score)
+        + (0.15 * trend_score)
+        + (0.10 * macro)
+        + (0.05 * flow)
+    )
+    downside_proxy = (
+        (0.30 * (100.0 - momentum))
+        + (0.20 * (100.0 - rs_gap_score))
+        + (0.15 * (100.0 - rs_change_score))
+        + (0.15 * trend_risk)
+        + (0.10 * (100.0 - macro))
+        + (0.05 * flow_risk)
+        + (0.05 * risk_alert_score)
+    )
+    edge_proxy = upside_proxy - downside_proxy
+    flow_state = str(getattr(signal, "flow_state", "") or "").strip().lower()
+
+    if edge_proxy >= 25.0 and trend_ok and momentum >= 65.0:
+        turning_point_state = "Continuation up"
+    elif edge_proxy >= 10.0 and rs_change_score >= 65.0 and rs_gap_score >= 45.0:
+        turning_point_state = "Bullish turn"
+    elif edge_proxy <= -10.0 and (rs_change_score <= 35.0 or rs_gap_score <= 40.0 or flow_state == "adverse"):
+        turning_point_state = "Bearish turn"
+    elif edge_proxy <= -25.0 and not trend_ok and momentum <= 40.0:
+        turning_point_state = "Continuation down"
+    else:
+        turning_point_state = "Neutral"
+
+    bullish_evidence: list[str] = []
+    bearish_evidence: list[str] = []
+    if momentum >= 65.0:
+        bullish_evidence.append("모멘텀 우위")
+    elif momentum <= 40.0:
+        bearish_evidence.append("모멘텀 약화")
+    if rs_gap_score >= 60.0:
+        bullish_evidence.append("RS 상방")
+    elif rs_gap_score <= 40.0:
+        bearish_evidence.append("RS 하방")
+    if rs_change_score >= 65.0:
+        bullish_evidence.append("RS 개선")
+    elif rs_change_score <= 35.0:
+        bearish_evidence.append("RS 둔화")
+    if trend_ok:
+        bullish_evidence.append("추세 확인")
+    else:
+        bearish_evidence.append("추세 훼손")
+    if macro >= 60.0:
+        bullish_evidence.append("국면 근거")
+    elif macro <= 40.0:
+        bearish_evidence.append("국면 약점")
+    if flow_state == "supportive":
+        bullish_evidence.append("수급 보강")
+    elif flow_state == "adverse":
+        bearish_evidence.append("수급 역풍")
+    if risk_alert_score >= 60.0:
+        bearish_evidence.append("리스크 확대")
+
+    return {
+        "upside_proxy": _overview_candidate_clamp(upside_proxy),
+        "downside_proxy": _overview_candidate_clamp(downside_proxy),
+        "edge_proxy": edge_proxy,
+        "turning_point_state": turning_point_state,
+        "bullish_evidence": bullish_evidence[:4],
+        "bearish_evidence": bearish_evidence[:4],
+        "rs_gap_score": rs_gap_score,
+        "rs_change_score": rs_change_score,
+        "risk_alert_score": risk_alert_score,
+    }
+
+
+def _overview_candidate_type(
+    *,
+    momentum_score: float,
+    macro_score: float,
+    flow_score: float,
+    warnings: Sequence[str],
+) -> str:
+    if any("약점" in warning for warning in warnings):
+        return "충돌 신호"
+    if flow_score >= max(momentum_score, macro_score) and flow_score >= 65.0:
+        return "수급 보강"
+    if macro_score >= momentum_score:
+        return "매크로 주도"
+    return "모멘텀 주도"
+
+
+def _format_overview_candidate_score(value: object) -> str:
+    score = _safe_float(value)
+    if score is None or not math.isfinite(score):
+        return "N/A"
+    return f"{score:.1f}"
+
+
+def _format_overview_candidate_edge(value: object) -> str:
+    score = _safe_float(value)
+    if score is None or not math.isfinite(score):
+        return "N/A"
+    return f"{score:+.1f}"
+
+
+def _build_overview_review_candidate_projection(
+    signal: object,
+    *,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> dict[str, object] | None:
+    if str(getattr(signal, "action", "N/A")) == "N/A":
+        return None
+
+    momentum_score = _overview_candidate_momentum_score(signal)
+    macro_score, macro_available, macro_warnings = _overview_candidate_macro_score(signal)
+    flow_score, flow_available, flow_warnings = _overview_candidate_flow_score(signal)
+    candidate_score = (0.45 * momentum_score) + (0.35 * macro_score) + (0.20 * flow_score)
+    warnings = list(dict.fromkeys([*macro_warnings, *flow_warnings]))
+    candidate_type = _overview_candidate_type(
+        momentum_score=momentum_score,
+        macro_score=macro_score,
+        flow_score=flow_score,
+        warnings=warnings,
+    )
+    proxy_bundle = _overview_candidate_proxy_bundle(
+        signal,
+        momentum_score=momentum_score,
+        macro_score=macro_score,
+        flow_score=flow_score,
+    )
+
+    thesis = describe_signal_decision(signal, [], locale=locale)
+    edge_proxy = float(proxy_bundle["edge_proxy"])
+    reason_parts = [
+        f"변곡 {proxy_bundle['turning_point_state']}",
+        f"엣지 {_format_overview_candidate_edge(edge_proxy)}",
+    ]
+    evidence = list(proxy_bundle["bullish_evidence"] if edge_proxy >= 0 else proxy_bundle["bearish_evidence"])
+    reason_parts.extend(str(item) for item in evidence[:2])
+    if len(reason_parts) < 3:
+        reason_parts.extend(_decision_card_parts(thesis.get("reason"), limit=1))
+    if len(reason_parts) < 3:
+        reason_parts.extend(warnings[: 3 - len(reason_parts)])
+    metrics = [
+        ("상방 proxy", _format_overview_candidate_score(proxy_bundle["upside_proxy"])),
+        ("하방 proxy", _format_overview_candidate_score(proxy_bundle["downside_proxy"])),
+        ("엣지 proxy", _format_overview_candidate_edge(edge_proxy)),
+        ("변곡", str(proxy_bundle["turning_point_state"])),
+        ("복합점수", _format_overview_candidate_score(candidate_score)),
+    ]
+
+    return {
+        "sector_name": str(getattr(signal, "sector_name", "")).strip(),
+        "decision": str(thesis.get("decision", "")),
+        "reason_parts": reason_parts,
+        "invalidation": str(thesis.get("invalidation", "")),
+        "action": str(getattr(signal, "action", "N/A")),
+        "action_policy": str(getattr(signal, "action_policy", "")),
+        "candidate_policy": _COMPOSITE_REVIEW_CANDIDATE_POLICY,
+        "candidate_score": candidate_score,
+        "momentum_score": momentum_score,
+        "macro_score": macro_score,
+        "flow_score": flow_score,
+        "macro_available": macro_available,
+        "flow_available": flow_available,
+        "candidate_type": candidate_type,
+        "warnings": warnings,
+        "upside_proxy": proxy_bundle["upside_proxy"],
+        "downside_proxy": proxy_bundle["downside_proxy"],
+        "edge_proxy": edge_proxy,
+        "turning_point_state": proxy_bundle["turning_point_state"],
+        "bullish_evidence": proxy_bundle["bullish_evidence"],
+        "bearish_evidence": proxy_bundle["bearish_evidence"],
+        "metrics": metrics,
+    }
+
+
+def _build_overview_review_candidates(
+    signals: Sequence,
+    sector_frame: pd.DataFrame,
+    *,
+    limit: int = 3,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> list[dict[str, object]]:
+    """Build first-screen review candidates from composite signal projections."""
+    if sector_frame.empty:
+        return []
+
+    sectors_in_frame = {
+        str(row.get("섹터", "")).strip()
+        for _, row in sector_frame.iterrows()
+        if str(row.get("섹터", "")).strip()
+    }
+    candidates: list[dict[str, object]] = []
+    for signal in signals:
+        sector_name = str(getattr(signal, "sector_name", "")).strip()
+        if sector_name not in sectors_in_frame:
+            continue
+        candidate = _build_overview_review_candidate_projection(signal, locale=locale)
+        if candidate is not None:
+            candidates.append(candidate)
+
+    candidates.sort(
+        key=lambda candidate: (
+            -float(candidate.get("candidate_score", 0.0)),
+            -float(candidate.get("momentum_score", 0.0)),
+            str(candidate.get("sector_name", "")),
+        )
+    )
+    return candidates[:limit]
+
+
+def _overview_review_candidate_group(candidate: Mapping[str, object]) -> str | None:
+    action = str(candidate.get("action", "") or "")
+    edge_proxy = _sector_momentum_safe_float(candidate.get("edge_proxy"), default=0.0)
+    turning_point_state = str(candidate.get("turning_point_state", "") or "")
+    if action == "Avoid" or edge_proxy < 0.0 or turning_point_state == "Bearish turn":
+        return "sell"
+    if action == "Strong Buy" or edge_proxy > 0.0 or turning_point_state in {"Bullish turn", "Continuation up"}:
+        return "buy"
+    return None
+
+
+def _overview_review_group_sort_key(group_key: str, candidate: Mapping[str, object]) -> tuple[object, ...]:
+    sector_name = str(candidate.get("sector_name", ""))
+    momentum_score = _sector_momentum_safe_float(candidate.get("momentum_score"), default=0.0)
+    candidate_score = _sector_momentum_safe_float(candidate.get("candidate_score"), default=0.0)
+    edge_proxy = _sector_momentum_safe_float(candidate.get("edge_proxy"), default=0.0)
+    downside_proxy = _sector_momentum_safe_float(candidate.get("downside_proxy"), default=0.0)
+    if group_key == "sell":
+        return (-downside_proxy, edge_proxy, -momentum_score, sector_name)
+    return (-candidate_score, -edge_proxy, -momentum_score, sector_name)
+
+
+def _build_overview_review_candidate_groups(
+    signals: Sequence,
+    sector_frame: pd.DataFrame,
+    *,
+    limit_per_group: int = 3,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> dict[str, list[dict[str, object]]]:
+    """Build directional first-screen review candidates from composite projections."""
+    groups: dict[str, list[dict[str, object]]] = {key: [] for key in _OVERVIEW_REVIEW_GROUPS}
+    if sector_frame.empty:
+        return groups
+
+    sectors_in_frame = {
+        str(row.get("섹터", "")).strip()
+        for _, row in sector_frame.iterrows()
+        if str(row.get("섹터", "")).strip()
+    }
+    for signal in signals:
+        sector_name = str(getattr(signal, "sector_name", "")).strip()
+        if sector_name not in sectors_in_frame:
+            continue
+        candidate = _build_overview_review_candidate_projection(signal, locale=locale)
+        if candidate is None:
+            continue
+        group_key = _overview_review_candidate_group(candidate)
+        if group_key is None:
+            continue
+        candidate = dict(candidate)
+        candidate["review_side"] = group_key
+        candidate["review_side_label"] = _OVERVIEW_REVIEW_GROUP_LABELS[group_key]
+        groups[group_key].append(candidate)
+
+    for group_key, candidates in groups.items():
+        candidates.sort(key=lambda candidate: _overview_review_group_sort_key(group_key, candidate))
+        groups[group_key] = candidates[:limit_per_group]
+    return groups
+
+
+def _render_review_candidate_card(
+    candidate: Mapping[str, object],
+    *,
+    rank: int | None = None,
+    compact: bool = False,
+    metric_limit: int = 5,
+    risk_flag: bool = False,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> str:
+    action = str(candidate.get("action", "N/A"))
+    action_tone = _action_tone(action)
+    reason_parts = [str(part) for part in candidate.get("reason_parts", []) if str(part).strip()]
+    reason_chips = "".join(_render_decision_card_chip(part, tone="neutral") for part in reason_parts[:3])
+    metrics = [
+        (str(label), str(value))
+        for label, value in candidate.get("metrics", [])
+        if str(label).strip() and str(value).strip()
+    ]
+    metrics_html = "".join(
+        (
+            '<span class="overview-review-card__metric">'
+            f"<strong>{html.escape(label)}</strong>{html.escape(value)}"
+            "</span>"
+        )
+        for label, value in metrics[:metric_limit]
+    )
+    rank_html = f'<span class="overview-review-card__rank">{rank}</span>' if rank is not None else ""
+    risk_chip = _render_decision_card_chip("추가 위험", tone="warning") if risk_flag else ""
+    invalidation = str(candidate.get("invalidation", "")).strip()
+    invalidation_html = (
+        '<div class="overview-review-card__invalidation">'
+        f'<span>{html.escape(get_ui_text("decision_card_invalidation", locale))}</span>'
+        f"<strong>{html.escape(invalidation)}</strong>"
+        "</div>"
+        if invalidation and not compact
+        else ""
+    )
+    return (
+        '<article class="overview-review-card">'
+        '<div class="overview-review-card__topline">'
+        f"{rank_html}"
+        f'{_render_decision_card_chip(str(candidate.get("decision", "검토 후보")), tone=action_tone)}'
+        f"{risk_chip}"
+        "</div>"
+        f'<div class="overview-review-card__sector">{html.escape(str(candidate.get("sector_name", "")))}</div>'
+        f'<div class="overview-review-card__reasons">{reason_chips}</div>'
+        f'<div class="overview-review-card__metrics">{metrics_html}</div>'
+        f"{invalidation_html}"
+        "</article>"
+    )
+
+
+def _render_overview_candidate_group_section(
+    group_key: str,
+    candidates: Sequence[Mapping[str, object]],
+    *,
+    compact: bool,
+    locale: UiLocale,
+) -> str:
+    label = _OVERVIEW_REVIEW_GROUP_LABELS.get(group_key, "검토 후보")
+    description = _OVERVIEW_REVIEW_GROUP_DESCRIPTIONS.get(group_key, "현재 기준에 맞는 검토 후보입니다.")
+    cards = "".join(
+        _render_review_candidate_card(candidate, rank=rank, compact=compact, locale=locale)
+        for rank, candidate in enumerate(candidates[:3], start=1)
+    )
+    if not cards:
+        cards = (
+            '<div class="empty-state-card">'
+            "<h4>표시할 후보 없음</h4>"
+            "<p>현재 조건에 맞는 섹터가 없습니다.</p>"
+            "</div>"
+        )
+    return (
+        '<section class="overview-review-candidates__group" '
+        f'data-review-side="{html.escape(group_key)}">'
+        '<div class="overview-review-candidates__header">'
+        "<div>"
+        f'<div class="overview-section-title">{html.escape(label)}</div>'
+        f'<div class="overview-command-surface__copy">{html.escape(description)}</div>'
+        "</div>"
+        f'<span class="overview-review-candidates__basis">{len(candidates[:3])}개 · proxy 근거 기준</span>'
+        "</div>"
+        f'<div class="overview-review-candidates__grid">{cards}</div>'
+        "</section>"
+    )
+
+
+def _render_overview_review_candidates(
+    candidates: Sequence[Mapping[str, object]] | Mapping[str, Sequence[Mapping[str, object]]],
+    *,
+    compact: bool = False,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> None:
+    """Render the first-screen sector review candidate strip without mutating state."""
+    if isinstance(candidates, Mapping):
+        grouped_candidates = {
+            key: list(candidates.get(key, []))
+            for key in _OVERVIEW_REVIEW_GROUPS
+        }
+        if not any(grouped_candidates.values()):
+            st.markdown(
+                (
+                    '<section class="overview-review-candidates" data-empty="true">'
+                    '<div class="overview-review-candidates__header">'
+                    '<div>'
+                    '<div class="overview-section-title">검토 후보</div>'
+                    '<div class="overview-command-surface__copy">현재 복합 검토 기준에 맞는 섹터 후보가 없습니다.</div>'
+                    '</div>'
+                    '</div>'
+                    '</section>'
+                ),
+                unsafe_allow_html=True,
+            )
+            return
+
+        sections = "".join(
+            _render_overview_candidate_group_section(
+                group_key,
+                grouped_candidates[group_key],
+                compact=compact,
+                locale=locale,
+            )
+            for group_key in _OVERVIEW_REVIEW_GROUPS
+        )
+        st.markdown(
+            (
+                '<section class="overview-review-candidates" data-grouped="true">'
+                '<div class="overview-review-candidates__header">'
+                '<div>'
+                '<div class="overview-section-title">검토 후보</div>'
+                '<div class="overview-command-surface__copy">'
+                '상방/하방 proxy는 보정 확률이 아니라 근거 점수입니다. '
+                '복합점수와 수급은 랭킹 보조이며 canonical action policy는 바꾸지 않습니다.'
+                '</div>'
+                '</div>'
+                f'<span class="overview-review-candidates__basis">{sum(len(items[:3]) for items in grouped_candidates.values())}개 · proxy 근거 기준</span>'
+                '</div>'
+                f'{sections}'
+                '</section>'
+            ),
+            unsafe_allow_html=True,
+        )
         return
 
-    tiles: list[str] = []
-    for _, row in frame.head(3).iterrows():
-        ret_3m = _safe_float(row.get("3M"))
-        tone = "positive" if (ret_3m or 0.0) >= 0 else "negative"
-        tiles.append(
-            '<div class="overview-decision-tile">'
-            f'<span>{html.escape(str(row.get("섹터", "")))}</span>'
-            f'<strong data-tone="{tone}">{html.escape(_format_overview_pct(ret_3m))}</strong>'
-            "</div>"
+    if not candidates:
+        st.markdown(
+            (
+                '<section class="overview-review-candidates" data-empty="true">'
+                '<div class="overview-review-candidates__header">'
+                '<div>'
+                '<div class="overview-section-title">검토 후보</div>'
+                '<div class="overview-command-surface__copy">현재 복합 검토 기준에 맞는 섹터 후보가 없습니다.</div>'
+                '</div>'
+                '</div>'
+                '</section>'
+            ),
+            unsafe_allow_html=True,
+        )
+        return
+
+    card_html: list[str] = []
+    for rank, candidate in enumerate(candidates[:3], start=1):
+        card_html.append(_render_review_candidate_card(candidate, rank=rank, compact=compact, locale=locale))
+
+    st.markdown(
+        (
+            '<section class="overview-review-candidates">'
+            '<div class="overview-review-candidates__header">'
+            '<div>'
+            '<div class="overview-section-title">검토 후보</div>'
+            '<div class="overview-command-surface__copy">'
+            '상방/하방 proxy는 보정 확률이 아니라 근거 점수입니다. '
+            '복합점수와 수급은 랭킹 보조이며 canonical action policy는 바꾸지 않습니다.'
+            '</div>'
+            '</div>'
+            f'<span class="overview-review-candidates__basis">{html.escape(str(len(card_html)))}개 · proxy 근거 기준</span>'
+            '</div>'
+            f'<div class="overview-review-candidates__grid">{"".join(card_html)}</div>'
+            '</section>'
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def _render_sector_momentum_board_card(candidate: Mapping[str, object]) -> str:
+    return _render_review_candidate_card(
+        candidate,
+        metric_limit=4,
+        risk_flag=bool(candidate.get("risk_flag")),
+    )
+
+
+_SECTOR_MOMENTUM_BOARD_LABELS: dict[str, str] = {
+    "new_review": "신규/증액 검토",
+    "held_monitor": "보유 모니터링",
+    "held_reduce": "보유 축소/주의",
+    "inflection": "변곡 감시",
+}
+
+_SECTOR_MOMENTUM_BOARD_DESCRIPTIONS: dict[str, str] = {
+    "new_review": "모멘텀과 추세가 함께 통과한 신규 검토 후보입니다.",
+    "held_monitor": "보유 Watch 중 독립 위험 근거가 없는 유지/모니터링 대상입니다.",
+    "held_reduce": "보유 섹터 중 추가 위험 근거가 확인된 축소/주의 대상입니다.",
+    "inflection": "RS 변화와 proxy 변곡 상태가 새로 강해지거나 약해지는 섹터입니다.",
+}
+
+_SECTOR_MOMENTUM_BOARD_ORDER = ("new_review", "held_monitor", "held_reduce", "inflection")
+
+
+def _sector_momentum_safe_float(value: object, default: float = 0.0) -> float:
+    parsed = _safe_float(value)  # type: ignore[arg-type]
+    if parsed is None or not math.isfinite(parsed):
+        return default
+    return float(parsed)
+
+
+def _sector_momentum_high_risk(signal: object) -> bool:
+    mdd_3m = _sector_momentum_safe_float(getattr(signal, "mdd_3m", None), default=0.0)
+    volatility_20d = _sector_momentum_safe_float(getattr(signal, "volatility_20d", None), default=0.0)
+    return bool(mdd_3m <= -0.15 or volatility_20d >= 0.30)
+
+
+def _sector_momentum_has_independent_risk(signal: object, candidate: Mapping[str, object]) -> bool:
+    alerts = list(getattr(signal, "alerts", []) or [])
+    flow_state = str(getattr(signal, "flow_state", "") or "").strip().lower()
+    edge_proxy = _sector_momentum_safe_float(candidate.get("edge_proxy"), default=0.0)
+    return bool(alerts or flow_state == "adverse" or edge_proxy < 0.0 or _sector_momentum_high_risk(signal))
+
+
+def _sector_momentum_is_held(signal: object, held_sectors: Sequence[str] | None) -> bool:
+    return is_signal_held(signal, held_sectors)
+
+
+def _sector_momentum_board_for_candidate(
+    signal: object,
+    candidate: Mapping[str, object],
+    held_sectors: Sequence[str] | None,
+) -> str | None:
+    action = str(getattr(signal, "action", "N/A") or "N/A")
+    held = _sector_momentum_is_held(signal, held_sectors)
+    independent_risk = _sector_momentum_has_independent_risk(signal, candidate)
+    if held and action in {"Avoid", "N/A"}:
+        return "held_reduce"
+    if held and action == "Watch":
+        return "held_reduce" if independent_risk else "held_monitor"
+    if (
+        action == "Strong Buy"
+        and bool(getattr(signal, "momentum_core_pass", False))
+        and bool(getattr(signal, "trend_ok", False))
+    ):
+        return "new_review"
+
+    turning_point_state = str(candidate.get("turning_point_state", "") or "")
+    if turning_point_state in {"Bullish turn", "Bearish turn"}:
+        return "inflection"
+    rs_change_pct = _sector_momentum_safe_float(getattr(signal, "rs_change_pct", None), default=0.0)
+    mom_percentile = _sector_momentum_safe_float(getattr(signal, "mom_percentile", None), default=0.0)
+    if action in {"Watch", "Hold"} and rs_change_pct >= 2.0 and mom_percentile >= 40.0:
+        return "inflection"
+    if action in {"Strong Buy", "Hold"} and (rs_change_pct <= -2.0 or not bool(getattr(signal, "trend_ok", True))):
+        return "inflection"
+    return None
+
+
+def _build_sector_momentum_na_candidate(
+    signal: object,
+    held_sectors: Sequence[str] | None,
+    *,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> dict[str, object]:
+    thesis = describe_signal_decision(signal, held_sectors, locale=locale)
+    reason_parts = _decision_card_parts(thesis.get("reason"), limit=2)
+    reason_parts.insert(0, "데이터 확인")
+    metrics = [
+        ("상방 proxy", "N/A"),
+        ("하방 proxy", "N/A"),
+        ("엣지 proxy", "N/A"),
+        ("변곡", "N/A"),
+    ]
+    return {
+        "sector_name": str(getattr(signal, "sector_name", "")).strip(),
+        "decision": str(thesis.get("decision", "")),
+        "reason_parts": reason_parts,
+        "invalidation": str(thesis.get("invalidation", "")),
+        "action": "N/A",
+        "action_policy": str(getattr(signal, "action_policy", "")),
+        "candidate_policy": "SECTOR_MOMENTUM_NA_DATA_CHECK",
+        "candidate_score": 0.0,
+        "momentum_score": 0.0,
+        "macro_score": 0.0,
+        "flow_score": 0.0,
+        "macro_available": False,
+        "flow_available": False,
+        "candidate_type": "데이터 확인",
+        "warnings": list(getattr(signal, "alerts", []) or []),
+        "upside_proxy": float("nan"),
+        "downside_proxy": float("nan"),
+        "edge_proxy": 0.0,
+        "turning_point_state": "N/A",
+        "bullish_evidence": [],
+        "bearish_evidence": list(getattr(signal, "alerts", []) or []),
+        "metrics": metrics,
+    }
+
+
+def _sector_momentum_candidate_sort_key(board_key: str, candidate: Mapping[str, object]) -> tuple[object, ...]:
+    edge_proxy = _sector_momentum_safe_float(candidate.get("edge_proxy"), default=0.0)
+    momentum_score = _sector_momentum_safe_float(candidate.get("momentum_score"), default=0.0)
+    candidate_score = _sector_momentum_safe_float(candidate.get("candidate_score"), default=0.0)
+    sector_name = str(candidate.get("sector_name", ""))
+    if board_key == "new_review":
+        return (-momentum_score, -candidate_score, sector_name)
+    if board_key in {"held_monitor", "held_reduce"}:
+        return (edge_proxy, -momentum_score, sector_name)
+    if board_key == "inflection":
+        return (-abs(edge_proxy), -momentum_score, sector_name)
+    return (-candidate_score, sector_name)
+
+
+def _build_sector_momentum_decision_boards(
+    signals: Sequence,
+    held_sectors: Sequence[str] | None = None,
+    *,
+    limit_per_board: int = 4,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> dict[str, list[dict[str, object]]]:
+    """Group signals into decision boards using the existing overview proxy projection."""
+    boards: dict[str, list[dict[str, object]]] = {key: [] for key in _SECTOR_MOMENTUM_BOARD_ORDER}
+    for signal in signals:
+        candidate = _build_overview_review_candidate_projection(signal, locale=locale)
+        if (
+            candidate is None
+            and str(getattr(signal, "action", "N/A") or "N/A") == "N/A"
+            and _sector_momentum_is_held(signal, held_sectors)
+        ):
+            candidate = _build_sector_momentum_na_candidate(signal, held_sectors, locale=locale)
+        if candidate is None:
+            continue
+        board_key = _sector_momentum_board_for_candidate(signal, candidate, held_sectors)
+        if board_key is None:
+            continue
+        candidate = dict(candidate)
+        candidate["board_key"] = board_key
+        candidate["held"] = _sector_momentum_is_held(signal, held_sectors)
+        candidate["risk_flag"] = _sector_momentum_has_independent_risk(signal, candidate)
+        candidate["high_risk"] = _sector_momentum_high_risk(signal)
+        boards[board_key].append(candidate)
+
+    for board_key, candidates in boards.items():
+        candidates.sort(key=lambda candidate: _sector_momentum_candidate_sort_key(board_key, candidate))
+        boards[board_key] = candidates[:limit_per_board]
+    return boards
+
+
+def render_sector_momentum_decision_boards(
+    signals: Sequence,
+    *,
+    held_sectors: Sequence[str] | None = None,
+    limit_per_board: int = 4,
+    locale: UiLocale = DEFAULT_UI_LOCALE,
+) -> None:
+    """Render decision-first boards for the sector momentum tab."""
+    boards = _build_sector_momentum_decision_boards(
+        signals,
+        held_sectors=held_sectors,
+        limit_per_board=limit_per_board,
+        locale=locale,
+    )
+    sections: list[str] = []
+    for board_key in _SECTOR_MOMENTUM_BOARD_ORDER:
+        candidates = boards[board_key]
+        if candidates:
+            cards = "".join(_render_sector_momentum_board_card(candidate) for candidate in candidates)
+        else:
+            cards = (
+                '<div class="empty-state-card">'
+                "<h4>표시할 후보 없음</h4>"
+                "<p>현재 조건에 맞는 섹터가 없습니다.</p>"
+                "</div>"
+            )
+        sections.append(
+            (
+                '<section class="overview-review-candidates sector-momentum-board">'
+                '<div class="overview-review-candidates__header">'
+                "<div>"
+                f'<div class="overview-section-title">{html.escape(_SECTOR_MOMENTUM_BOARD_LABELS[board_key])}</div>'
+                f'<div class="overview-command-surface__copy">{html.escape(_SECTOR_MOMENTUM_BOARD_DESCRIPTIONS[board_key])}</div>'
+                "</div>"
+                f'<span class="overview-review-candidates__basis">{len(candidates)}개 · proxy 근거 기준</span>'
+                "</div>"
+                f'<div class="overview-review-candidates__grid">{cards}</div>'
+                "</section>"
+            )
         )
 
     st.markdown(
-        '<div class="overview-mobile-decision-strip">'
-        '<div class="overview-mobile-decision-strip__label">상위 섹터</div>'
-        '<div class="overview-mobile-decision-strip__grid">'
-        + "".join(tiles)
-        + "</div>"
-        "</div>",
+        (
+            '<section class="sector-momentum-decision-boards">'
+            '<div class="overview-review-candidates__header">'
+            "<div>"
+            '<div class="overview-section-title">의사결정 보드</div>'
+            '<div class="overview-command-surface__copy">'
+            "상방/하방 proxy는 보정 확률이 아니라 근거 점수입니다. "
+            "이 보드는 기존 candidate projection을 재사용하며 canonical action policy는 바꾸지 않습니다."
+            "</div>"
+            "</div>"
+            "</div>"
+            f'{"".join(sections)}'
+            "</section>"
+        ),
         unsafe_allow_html=True,
     )
+
+
+def _theme_lens_return_label(value: object) -> str:
+    numeric = _safe_float(value)
+    if numeric is None or not math.isfinite(numeric):
+        return "N/A"
+    return f"{numeric * 100:+.2f}%"
+
+
+def _theme_lens_basis_label(row: Mapping[str, object]) -> str:
+    basis_items = row.get("classification_basis") or []
+    labels: list[str] = []
+    if isinstance(basis_items, Sequence) and not isinstance(basis_items, (str, bytes)):
+        for item in basis_items:
+            if not isinstance(item, Mapping):
+                continue
+            provider = str(item.get("provider", "")).strip()
+            label = str(item.get("label", "")).strip()
+            if provider and label:
+                labels.append(f"{provider}: {label}")
+            elif provider:
+                labels.append(provider)
+            elif label:
+                labels.append(label)
+    return " / ".join(labels[:2]) if labels else "테마 분류"
+
+
+def _theme_lens_etf_label(row: Mapping[str, object]) -> str:
+    etfs = row.get("representative_etfs") or []
+    labels: list[str] = []
+    if isinstance(etfs, Sequence) and not isinstance(etfs, (str, bytes)):
+        for item in etfs:
+            if not isinstance(item, Mapping):
+                continue
+            code = str(item.get("code", "")).strip()
+            name = str(item.get("name", "")).strip()
+            if code and name:
+                labels.append(f"{name} ({code})")
+            elif code:
+                labels.append(code)
+    return " / ".join(labels[:3]) if labels else "대표 ETF 없음"
+
+
+def render_theme_lens_panel(
+    rows: Sequence[Mapping[str, object]] | None,
+    *,
+    status: str = "UNAVAILABLE",
+    show_refresh_button: bool = False,
+) -> bool:
+    """Render the KR theme lens as a non-authoritative ETF proxy support layer."""
+    theme_rows = list(rows or [])
+    status_label = str(status or "UNAVAILABLE").strip().upper() or "UNAVAILABLE"
+    summary = f"{len(theme_rows)}개 테마 · {status_label}"
+    st.markdown(
+        (
+            '<section class="sector-momentum-decision-boards theme-lens-panel">'
+            '<div class="overview-review-candidates__header">'
+            "<div>"
+            '<div class="overview-section-title">테마 렌즈</div>'
+            '<div class="overview-command-surface__copy">'
+            "전력, 조선, 원자력, 로봇, 방산, 우주항공, 화장품을 대표 ETF 가격 기반 proxy로만 확인합니다. "
+            "canonical sector action과 macro-regime scoring에는 반영하지 않습니다."
+            "</div>"
+            "</div>"
+            f'<span class="overview-review-candidates__basis">{html.escape(summary)}</span>'
+            "</div>"
+            "</section>"
+        ),
+        unsafe_allow_html=True,
+    )
+    clicked = st.button("테마 ETF 갱신", key="theme_lens_refresh") if show_refresh_button else False
+
+    if not theme_rows:
+        st.markdown(
+            '<div class="empty-state-card">'
+            "<h4>테마 proxy 데이터 없음</h4>"
+            "<p>테마 설정 또는 대표 ETF 가격 캐시를 확인해 주세요.</p>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+        return clicked
+
+    display = pd.DataFrame(
+        [
+            {
+                "테마": str(row.get("theme_name", "")),
+                "상태": str(row.get("status", "")),
+                "대표 ETF": _theme_lens_etf_label(row),
+                "기준일": str(row.get("latest_date", "")) or "N/A",
+                "1D": _theme_lens_return_label(row.get("return_1d")),
+                "1M": _theme_lens_return_label(row.get("return_1m")),
+                "3M": _theme_lens_return_label(row.get("return_3m")),
+                "분류 근거": _theme_lens_basis_label(row),
+                "주의": str(row.get("warning", "")),
+            }
+            for row in theme_rows
+        ]
+    )
+    st.dataframe(
+        display,
+        hide_index=True,
+        width="stretch",
+        column_config={
+            "테마": st.column_config.TextColumn("테마", width="medium"),
+            "상태": st.column_config.TextColumn("상태", width="small"),
+            "대표 ETF": st.column_config.TextColumn("대표 ETF", width="large"),
+            "기준일": st.column_config.TextColumn("기준일", width="small"),
+            "1D": st.column_config.TextColumn("1D", width="small"),
+            "1M": st.column_config.TextColumn("1M", width="small"),
+            "3M": st.column_config.TextColumn("3M", width="small"),
+            "분류 근거": st.column_config.TextColumn("분류 근거", width="large"),
+            "주의": st.column_config.TextColumn("주의", width="medium"),
+        },
+    )
+    return clicked
 
 
 def render_toss_overview_dashboard(
@@ -679,6 +1924,13 @@ def render_toss_overview_dashboard(
     lookup_status: str = "",
     lookup_message: str = "",
     lookup_display_model: Mapping[str, Any] | None = None,
+    export_growth_val: float | None = None,
+    trade_indicators: Mapping[str, float] | None = None,
+    sector_trade_lens: Sequence[Mapping[str, object]] | None = None,
+    sector_export_trends: Mapping[str, float] | None = None,
+    sector_export_history: Mapping[str, pd.Series] | None = None,
+    has_trade_indicators: bool = False,
+    has_sector_export_indicators: bool = True,
     locale: UiLocale = DEFAULT_UI_LOCALE,
     is_mobile: bool = False,
 ) -> tuple[str, bool]:
@@ -691,12 +1943,20 @@ def render_toss_overview_dashboard(
         current_regime=current_regime,
         price_status=price_status,
         macro_status=macro_status,
+        export_growth_val=export_growth_val,
+        trade_indicators=trade_indicators,
+        has_trade_indicators=has_trade_indicators,
     )
 
     lookup_query = str(lookup_query_value or "")
     lookup_submitted = False
     sort_key = "모멘텀 점수"
-    sector_frame = _build_overview_sector_frame(signals, sort_key=sort_key)
+    sector_frame = _build_overview_sector_frame(
+        signals,
+        sort_key=sort_key,
+        sector_export_trends=sector_export_trends,
+        has_sector_export_indicators=has_sector_export_indicators,
+    )
     with st.container(border=True):
         st.markdown(
             '<section class="overview-reference-shell overview-command-surface">'
@@ -710,8 +1970,28 @@ def render_toss_overview_dashboard(
             '</section>',
             unsafe_allow_html=True,
         )
+        _render_sector_trade_lens(sector_trade_lens, limit=6 if not is_mobile else 3)
         if is_mobile:
-            _render_overview_mobile_decision_strip(sector_frame)
+            _render_overview_review_candidates(
+                _build_overview_review_candidate_groups(
+                    signals,
+                    sector_frame,
+                    limit_per_group=3,
+                    locale=locale,
+                ),
+                compact=True,
+                locale=locale,
+            )
+        else:
+            _render_overview_review_candidates(
+                _build_overview_review_candidate_groups(
+                    signals,
+                    sector_frame,
+                    limit_per_group=3,
+                    locale=locale,
+                ),
+                locale=locale,
+            )
         lookup_context = st.expander("종목-섹터 조회", expanded=False) if is_mobile else nullcontext()
         with lookup_context:
             with st.form("overview_stock_lookup_form"):
@@ -778,17 +2058,26 @@ def render_toss_overview_dashboard(
             with filter_col_2:
                 compare_basis = st.selectbox("비교 기준", options=["벤치마크 대비", "절대 수익률"], index=0)
             with filter_col_3:
-                sort_key = st.selectbox("정렬 기준", options=["모멘텀 점수", "수익률(3M)", "상대강도"], index=0)
+                sort_options = ["모멘텀 점수", "수익률(3M)", "상대강도"]
+                sort_key = st.selectbox("정렬 기준", options=sort_options, index=0)
             with filter_col_4:
                 sector_group = st.selectbox("섹터 그룹", options=["WICS 대분류", "전체"], index=0)
     del compare_basis, sector_group, sector_map
 
-    sector_frame = _build_overview_sector_frame(signals, sort_key=str(sort_key))
+    sector_frame = _build_overview_sector_frame(
+        signals,
+        sort_key=str(sort_key),
+        sector_export_trends=sector_export_trends,
+        has_sector_export_indicators=has_sector_export_indicators,
+    )
     left_col, right_col = st.columns([1.08, 2.08], gap="medium")
     with left_col:
         with st.container(border=True):
             st.markdown('<div class="overview-section-title">섹터 모멘텀 & 상대강도</div>', unsafe_allow_html=True)
-            _render_overview_sector_table(sector_frame)
+            _render_overview_sector_table(
+                sector_frame,
+                has_sector_export_indicators=has_sector_export_indicators,
+            )
     with right_col:
         with st.container(border=True):
             st.markdown('<div class="overview-section-title">섹터 상대강도 추이</div>', unsafe_allow_html=True)
@@ -800,6 +2089,15 @@ def render_toss_overview_dashboard(
                 theme_mode=theme_mode,
             )
             st.plotly_chart(fig, width="stretch")
+        if has_sector_export_indicators:
+            with st.container(border=True):
+                st.markdown('<div class="overview-section-title">섹터별 수출 YoY 월별 추이</div>', unsafe_allow_html=True)
+                export_fig = _build_sector_export_trend_figure(
+                    sector_export_history=sector_export_history,
+                    signals=signals,
+                    theme_mode=theme_mode,
+                )
+                st.plotly_chart(export_fig, width="stretch")
         with st.container(border=True):
             st.markdown('<div class="overview-section-title">상위/하위 섹터 변화 (3M)</div>', unsafe_allow_html=True)
             _render_overview_heatmap(signals)
@@ -950,6 +2248,8 @@ def render_decision_hero(
     regime_is_confirmed: bool,
     growth_val: float | None = None,
     inflation_val: float | None = None,
+    export_growth_val: float | None = None,
+    trade_indicators: Mapping[str, float] | None = None,
     fx_change: float | None = None,
     fx_label: str = "USD/KRW move",
     is_provisional: bool = False,
@@ -989,13 +2289,22 @@ def render_decision_hero(
         )
 
     fx_numeric = _safe_float(fx_change)
-    hero_metrics = "".join(
-        [
-            _hero_metric(get_ui_text("hero_leading_index", locale), growth_val, "p"),
-            _hero_metric(get_ui_text("hero_cpi_yoy", locale), inflation_val, "%"),
-            _hero_metric(fx_label, fx_numeric, "%"),
-        ]
-    )
+    trade = dict(trade_indicators or {})
+    metric_items = [
+        _hero_metric(get_ui_text("hero_leading_index", locale), growth_val, "p"),
+        _hero_metric(get_ui_text("hero_cpi_yoy", locale), inflation_val, "%"),
+    ]
+    if trade:
+        metric_items.extend(
+            [
+                _hero_metric(get_ui_text("hero_trade_exports_yoy", locale), _safe_float(trade.get("exports_yoy")), "%"),
+                _hero_metric(get_ui_text("hero_trade_imports_yoy", locale), _safe_float(trade.get("imports_yoy")), "%"),
+            ]
+        )
+    else:
+        metric_items.append(_hero_metric(get_ui_text("hero_export_growth", locale), export_growth_val, "%"))
+    metric_items.append(_hero_metric(fx_label, fx_numeric, "%"))
+    hero_metrics = "".join(metric_items)
 
     st.markdown(
         (
@@ -1017,6 +2326,8 @@ def render_macro_tile(
     regime: str,
     growth_val: float | None = None,
     inflation_val: float | None = None,
+    export_growth_val: float | None = None,
+    trade_indicators: Mapping[str, float] | None = None,
     fx_change: float | None = None,
     fx_label: str = "USD/KRW move",
     is_provisional: bool = False,
@@ -1029,6 +2340,8 @@ def render_macro_tile(
         regime_is_confirmed=regime != "Indeterminate",
         growth_val=growth_val,
         inflation_val=inflation_val,
+        export_growth_val=export_growth_val,
+        trade_indicators=trade_indicators,
         fx_change=fx_change,
         fx_label=fx_label,
         is_provisional=is_provisional,

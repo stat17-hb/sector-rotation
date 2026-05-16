@@ -28,6 +28,10 @@ from src.data_sources.warehouse import (
     read_active_index_dimension,
     read_market_prices,
 )
+from src.data_sources.theme_lens import (
+    get_theme_lens_artifact_key,
+    load_theme_lens_cache_only,
+)
 from src.ui.data_status import (
     resolve_dashboard_status_banner,
     resolve_price_cache_banner_case,
@@ -1061,6 +1065,20 @@ def _cached_investor_flow(
 
 
 @st.cache_data(ttl=CACHE_TTL)
+def _cached_theme_lens(
+    market_id_arg: str,
+    market_end_date_str: str,
+    theme_lens_artifact_key: tuple,
+) -> tuple[str, list[dict[str, Any]]]:
+    """Load KR theme lens rows from warehouse cache only."""
+    _ = theme_lens_artifact_key
+    normalized_market = str(market_id_arg or market_id).strip().upper() or market_id
+    if normalized_market != "KR":
+        return "UNAVAILABLE", []
+    return load_theme_lens_cache_only(asof_date=market_end_date_str)
+
+
+@st.cache_data(ttl=CACHE_TTL)
 def _cached_macro(market_id_arg: str, macro_cache_token: str, market_end_date_str: str):
     """Fetch or load macro data. Keyed by config + API key fingerprint token."""
     end_ym = str(market_end_date_str)[:6]
@@ -1439,6 +1457,7 @@ def load_dashboard_runtime_data(
     price_cache_token: str,
     price_artifact_key: tuple,
     flow_artifact_key: tuple = (),
+    theme_lens_artifact_key: tuple = (),
     *,
     epsilon: float = 0.0,
     rs_ma_period: int = 20,
@@ -1529,6 +1548,12 @@ def load_dashboard_runtime_data(
             flow_profile=flow_profile,
         )
         flow_display_fresh = flow_fresh and not bool(flow_detail.get("warehouse_write_skipped"))
+        resolved_theme_lens_key = theme_lens_artifact_key or get_theme_lens_artifact_key()
+        theme_lens_status, theme_lens_rows = _cached_theme_lens(
+            normalized_market,
+            market_end_date_str,
+            resolved_theme_lens_key,
+        )
         shared_flow_summary_map = (
             _compute_shared_flow_summary_map(
                 sector_flow,
@@ -1562,6 +1587,9 @@ def load_dashboard_runtime_data(
             "investor_flow_detail": dict(flow_detail),
             "investor_flow_frame": sector_flow,
             "shared_flow_summary_map": shared_flow_summary_map,
+            "theme_lens_status": theme_lens_status,
+            "theme_lens_rows": list(theme_lens_rows),
+            "theme_lens_artifact_key": resolved_theme_lens_key,
         }
         _emit_progress(
             progress_callback,

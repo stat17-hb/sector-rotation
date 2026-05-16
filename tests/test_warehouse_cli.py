@@ -92,6 +92,77 @@ def test_get_dataset_artifact_key_survives_external_read_only_connection():
     assert artifact_key[2:] == ("20240131", "LIVE", "20240131")
 
 
+def test_read_dataset_data_bounds_returns_actual_stored_ranges():
+    market_frame = pd.DataFrame(
+        {
+            "index_code": ["1001", "1001"],
+            "index_name": ["KOSPI", "KOSPI"],
+            "close": [2700.0, 2710.0],
+        },
+        index=pd.to_datetime(["2026-05-01", "2026-05-03"]),
+    )
+    warehouse.upsert_market_prices(market_frame, provider="OPENAPI")
+    warehouse.upsert_macro_dimension(
+        [
+            {
+                "series_alias": "base_rate",
+                "provider": "ECOS",
+                "provider_series_id": "722Y001/0101000",
+                "enabled": True,
+            }
+        ]
+    )
+    macro_frame = pd.DataFrame(
+        {
+            "value": [3.5, 3.5],
+            "source": ["ECOS", "ECOS"],
+            "fetched_at": [pd.Timestamp("2026-05-10T00:00:00Z")] * 2,
+            "is_provisional": [False, False],
+        },
+        index=pd.period_range("2026-03", "2026-04", freq="M"),
+    )
+    warehouse.upsert_macro_series_frame(
+        series_alias="base_rate",
+        provider="ECOS",
+        provider_series_id="722Y001/0101000",
+        frame=macro_frame,
+    )
+    sector_frame = pd.DataFrame(
+        {
+            "sector_code": ["5044", "5044"],
+            "sector_name": ["KRX 반도체", "KRX 반도체"],
+            "investor_type": ["외국인", "외국인"],
+            "buy_amount": [1200, 1300],
+            "sell_amount": [800, 900],
+            "net_buy_amount": [400, 400],
+            "net_flow_ratio": [0.2, 0.2],
+        },
+        index=pd.to_datetime(["2026-04-08", "2026-04-10"]),
+    )
+    warehouse.upsert_investor_flow_sector(sector_frame, provider="PYKRX_UNOFFICIAL")
+
+    assert warehouse.read_dataset_data_bounds("market_prices") == {
+        "min_trade_date": "20260501",
+        "max_trade_date": "20260503",
+        "row_count": 2,
+    }
+    assert warehouse.read_dataset_data_bounds("macro_data") == {
+        "min_period_month": "20260331",
+        "max_period_month": "20260430",
+        "row_count": 2,
+    }
+    assert warehouse.read_dataset_data_bounds("macro_data", provider="ECOS") == {
+        "min_period_month": "20260331",
+        "max_period_month": "20260430",
+        "row_count": 2,
+    }
+    assert warehouse.read_dataset_data_bounds("investor_flow") == {
+        "min_trade_date": "20260408",
+        "max_trade_date": "20260410",
+        "row_count": 2,
+    }
+
+
 def test_read_collection_run_history_returns_market_macro_and_flow_runs():
     warehouse.ensure_warehouse_schema()
     seed_runs = [
@@ -131,7 +202,7 @@ def test_read_collection_run_history_returns_market_macro_and_flow_runs():
     assert "dataset" not in flow_history.columns
 
 
-def test_read_collection_run_history_uses_macro_alias_completion_rate():
+def test_read_collection_run_history_uses_macro_alias_month_completion_rate():
     warehouse.ensure_warehouse_schema()
     warehouse.upsert_macro_dimension(
         [
@@ -190,7 +261,32 @@ def test_read_collection_run_history_uses_macro_alias_completion_rate():
     history = warehouse.read_collection_run_history(market="KR", limit=15)
 
     assert history["dataset"].tolist() == ["macro_data"]
-    assert history["completion_pct"].tolist() == [50.0]
+    assert history["completion_pct"].tolist() == [83.3]
+
+
+def test_read_collection_run_history_does_not_zero_partial_rows_without_request_counters():
+    warehouse.ensure_warehouse_schema()
+    warehouse.record_ingest_run(
+        dataset="investor_flow",
+        reason="manual_refresh",
+        provider="KRX_UNOFFICIAL",
+        requested_start="20260401",
+        requested_end="20260410",
+        status="LIVE",
+        coverage_complete=False,
+        failed_days=[],
+        failed_codes={},
+        delta_keys=["5044"],
+        row_count=20,
+        predicted_requests=0,
+        processed_requests=0,
+        created_at=datetime(2026, 5, 10, 1, 0, tzinfo=timezone.utc),
+    )
+
+    history = warehouse.read_collection_run_history(market="KR", limit=15)
+
+    assert history["dataset"].tolist() == ["investor_flow"]
+    assert pd.isna(history["completion_pct"].iloc[0])
 
 
 def test_read_collection_run_history_filters_reasons_before_sampling():

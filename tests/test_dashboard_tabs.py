@@ -44,7 +44,7 @@ def test_render_decision_first_sections_orders_main_canvas(monkeypatch):
     monkeypatch.setattr(
         tabs,
         "render_decision_hero",
-        lambda **kwargs: calls.append("hero"),
+        lambda **kwargs: calls.append("hero") or shared_maps.append({"export_growth_val": kwargs.get("export_growth_val")}),
     )
     monkeypatch.setattr(
         tabs,
@@ -72,6 +72,7 @@ def test_render_decision_first_sections_orders_main_canvas(monkeypatch):
         regime_is_confirmed=True,
         growth_val=100.0,
         inflation_val=2.0,
+        export_growth_val=7.5,
         fx_change=1.0,
         fx_label="FX move",
         is_provisional=False,
@@ -93,7 +94,7 @@ def test_render_decision_first_sections_orders_main_canvas(monkeypatch):
 
     assert calls == ["hero", "status", "flow", "boards", "analysis"]
     assert result == ["Sector A"]
-    assert shared_maps == [shared_flow_summary_map]
+    assert shared_maps == [{"export_growth_val": 7.5}, shared_flow_summary_map]
     assert sigma_windows == [(15, 45)]
 
 
@@ -270,7 +271,17 @@ def test_resolve_dashboard_page_title_uses_current_market_and_page_label():
     assert tabs.resolve_dashboard_page_title("quality", "US") == "US 대시보드"
 
 
+def test_format_sidebar_status_chip_escapes_values_and_marks_attention():
+    chip = tabs._format_sidebar_status_chip("시장<script>", "STALE<")
+
+    assert "sidebar-status-chip--attention" in chip
+    assert "시장&lt;script&gt;" in chip
+    assert "STALE&lt;" in chip
+
+
 def test_render_sidebar_controls_returns_runtime_controls_without_page_radio(monkeypatch):
+    markdown_calls: list[str] = []
+    button_labels: list[str] = []
     monkeypatch.setattr(
         tabs.st,
         "session_state",
@@ -284,6 +295,7 @@ def test_render_sidebar_controls_returns_runtime_controls_without_page_radio(mon
     )
 
     monkeypatch.setattr(tabs.st, "radio", _fail_st_tabs)
+    monkeypatch.setattr(tabs.st, "markdown", lambda text, **_kwargs: markdown_calls.append(str(text)))
     monkeypatch.setattr(tabs.st, "title", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tabs.st, "caption", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tabs.st, "subheader", lambda *_args, **_kwargs: None)
@@ -296,7 +308,7 @@ def test_render_sidebar_controls_returns_runtime_controls_without_page_radio(mon
     monkeypatch.setattr(tabs.st, "columns", lambda *_args, **_kwargs: [_DummyContext(), _DummyContext()])
     monkeypatch.setattr(tabs.st, "slider", lambda _label, *, value, **_kwargs: value)
     monkeypatch.setattr(tabs.st, "form_submit_button", lambda *_args, **_kwargs: False)
-    monkeypatch.setattr(tabs.st, "button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(tabs.st, "button", lambda label, **_kwargs: (button_labels.append(str(label)), False)[1])
 
     result = tabs.render_sidebar_controls(
         market_id="KR",
@@ -314,10 +326,16 @@ def test_render_sidebar_controls_returns_runtime_controls_without_page_radio(mon
     )
 
     assert result == (date(2026, 4, 26), "foreign_lead", False, False, False)
+    assert any("KR 섹터 콘솔" in call for call in markdown_calls)
+    assert any("데이터 운용" in call for call in markdown_calls)
+    assert any("sidebar-status-chip--ready" in call for call in markdown_calls)
+    assert any("분석 기준" in call for call in markdown_calls)
+    assert any("수급 해석" in call for call in markdown_calls)
+    assert button_labels == ["시장데이터 갱신", "매크로데이터 갱신", tabs.get_ui_text("flow_refresh_button", "ko")]
 
 
 def test_render_sidebar_controls_hides_kr_flow_profile_for_us(monkeypatch):
-    subheaders: list[str] = []
+    markdown_calls: list[str] = []
     session_state = {
         "epsilon": 0.1,
         "price_years": 3,
@@ -328,9 +346,10 @@ def test_render_sidebar_controls_hides_kr_flow_profile_for_us(monkeypatch):
     monkeypatch.setattr(tabs.st, "session_state", session_state)
 
     monkeypatch.setattr(tabs.st, "radio", _fail_st_tabs)
+    monkeypatch.setattr(tabs.st, "markdown", lambda text, **_kwargs: markdown_calls.append(str(text)))
     monkeypatch.setattr(tabs.st, "title", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tabs.st, "caption", lambda *_args, **_kwargs: None)
-    monkeypatch.setattr(tabs.st, "subheader", lambda text, **_kwargs: subheaders.append(str(text)))
+    monkeypatch.setattr(tabs.st, "subheader", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(tabs.st, "toggle", lambda *_args, value=False, **_kwargs: value)
     monkeypatch.setattr(tabs.st, "selectbox", lambda _label, *, options, index=0, **_kwargs: list(options)[index])
     monkeypatch.setattr(tabs.st, "date_input", lambda *_args, value, **_kwargs: value)
@@ -358,7 +377,8 @@ def test_render_sidebar_controls_hides_kr_flow_profile_for_us(monkeypatch):
     )
 
     assert result == (date(2026, 4, 26), "foreign_lead", False, False, False)
-    assert tabs.get_ui_text("flow_profile_label", "ko") not in subheaders
+    assert not any("수급 해석" in call for call in markdown_calls)
+    assert not any("투자자 수급" in call for call in markdown_calls)
 
 
 def test_render_dashboard_tabs_routes_flow_page_for_kr_and_us(monkeypatch):
@@ -683,6 +703,117 @@ def test_render_summary_tab_uses_top_pick_and_filtered_inputs_separately(monkeyp
         filtered_signals,
         {"theme_mode": "dark", "locale": "ko"},
     )]
+
+
+def test_render_all_signals_tab_renders_decision_boards_before_ledger(monkeypatch):
+    calls: list[str] = []
+    frames: list[dict[str, object]] = []
+
+    monkeypatch.setattr(tabs, "render_research_page_frame", lambda **kwargs: calls.append("frame") or frames.append(kwargs))
+    monkeypatch.setattr(tabs, "render_sector_momentum_decision_boards", lambda *_args, **_kwargs: calls.append("decision_boards"))
+    monkeypatch.setattr(tabs, "render_theme_lens_panel", lambda *_args, **_kwargs: calls.append("theme_lens") or False)
+    monkeypatch.setattr(tabs, "render_panel_header", lambda **kwargs: calls.append(f"panel:{kwargs.get('title')}"))
+    monkeypatch.setattr(tabs, "render_signal_table", lambda *_args, **_kwargs: calls.append("signal_table"))
+    monkeypatch.setattr(tabs.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tabs.st, "expander", lambda *_args, **_kwargs: _DummyContext())
+    monkeypatch.setattr(tabs.st, "markdown", lambda *_args, **_kwargs: None)
+
+    tabs.render_all_signals_tab(
+        tab=_DummyContext(),
+        signals=[],
+        filter_action_global="__ALL__",
+        filter_regime_only_global=False,
+        current_regime="Recovery",
+        held_sectors=[],
+        position_mode="all",
+        show_alerted_only=False,
+        theme_mode="dark",
+        settings={},
+        etf_map={},
+        ui_locale="ko",
+    )
+
+    assert calls[:5] == ["frame", "decision_boards", "theme_lens", "panel:전체 섹터 신호 원장", "signal_table"]
+    assert frames[0]["title"] == "섹터 액션 보드"
+    assert "신규 검토" in frames[0]["description"]
+
+
+def test_render_all_signals_tab_hides_theme_lens_for_us(monkeypatch):
+    calls: list[str] = []
+
+    monkeypatch.setattr(tabs, "render_research_page_frame", lambda **_kwargs: calls.append("frame"))
+    monkeypatch.setattr(tabs, "render_sector_momentum_decision_boards", lambda *_args, **_kwargs: calls.append("decision_boards"))
+    monkeypatch.setattr(tabs, "render_theme_lens_panel", lambda *_args, **_kwargs: calls.append("theme_lens") or False)
+    monkeypatch.setattr(tabs, "render_panel_header", lambda **kwargs: calls.append(f"panel:{kwargs.get('title')}"))
+    monkeypatch.setattr(tabs, "render_signal_table", lambda *_args, **_kwargs: calls.append("signal_table"))
+    monkeypatch.setattr(tabs.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tabs.st, "expander", lambda *_args, **_kwargs: _DummyContext())
+    monkeypatch.setattr(tabs.st, "markdown", lambda *_args, **_kwargs: None)
+
+    tabs.render_all_signals_tab(
+        tab=_DummyContext(),
+        signals=[],
+        filter_action_global="__ALL__",
+        filter_regime_only_global=False,
+        current_regime="Recovery",
+        held_sectors=[],
+        position_mode="all",
+        show_alerted_only=False,
+        theme_mode="dark",
+        settings={},
+        etf_map={},
+        market_id="US",
+        ui_locale="ko",
+    )
+
+    assert "theme_lens" not in calls
+
+
+def test_render_all_signals_tab_uses_live_theme_snapshot(monkeypatch):
+    calls: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        tabs.st,
+        "session_state",
+        {
+            "_theme_lens_live_snapshot": {
+                "status": "LIVE",
+                "rows": [{"theme_name": "조선", "status": "LIVE"}],
+            }
+        },
+    )
+    monkeypatch.setattr(tabs, "render_research_page_frame", lambda **_kwargs: None)
+    monkeypatch.setattr(tabs, "render_sector_momentum_decision_boards", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tabs, "render_theme_lens_panel", lambda rows, **kwargs: calls.append({"rows": rows, **kwargs}) or False)
+    monkeypatch.setattr(tabs, "render_panel_header", lambda **_kwargs: None)
+    monkeypatch.setattr(tabs, "render_signal_table", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tabs.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(tabs.st, "expander", lambda *_args, **_kwargs: _DummyContext())
+    monkeypatch.setattr(tabs.st, "markdown", lambda *_args, **_kwargs: None)
+
+    tabs.render_all_signals_tab(
+        tab=_DummyContext(),
+        signals=[],
+        filter_action_global="__ALL__",
+        filter_regime_only_global=False,
+        current_regime="Recovery",
+        held_sectors=[],
+        position_mode="all",
+        show_alerted_only=False,
+        theme_mode="dark",
+        settings={},
+        etf_map={},
+        theme_lens_status="UNAVAILABLE",
+        theme_lens_rows=[],
+        ui_locale="ko",
+    )
+
+    assert calls == [
+        {
+            "rows": [{"theme_name": "조선", "status": "LIVE"}],
+            "status": "LIVE",
+            "show_refresh_button": True,
+        }
+    ]
 
 
 def test_render_analysis_canvas_adds_research_context_header(monkeypatch):
@@ -1408,6 +1539,85 @@ def test_render_monitoring_tab_uses_runtime_flow_snapshot_when_warehouse_history
     assert dataframes[-1]["요청범위"].tolist() == ["20251211 ~ 20260410"]
 
 
+def test_format_collection_overview_splits_macro_providers():
+    history = pd.DataFrame(
+        [
+            {
+                "created_at": pd.Timestamp("2026-05-12T13:31:49Z"),
+                "dataset": "macro_data",
+                "provider": "ECOS",
+                "requested_start": "201606",
+                "requested_end": "202605",
+                "status": "LIVE",
+                "coverage_complete": False,
+                "failed_days": [],
+                "failed_codes": {},
+                "aborted": False,
+                "completion_pct": 99.9,
+                "row_count": 1302,
+            },
+            {
+                "created_at": pd.Timestamp("2026-05-12T13:31:51Z"),
+                "dataset": "macro_data",
+                "provider": "KOSIS",
+                "requested_start": "201606",
+                "requested_end": "202605",
+                "status": "LIVE",
+                "coverage_complete": False,
+                "failed_days": [],
+                "failed_codes": {},
+                "aborted": False,
+                "completion_pct": 81.0,
+                "row_count": 475,
+            },
+        ]
+    )
+
+    rows = tabs._format_collection_overview_rows(
+        statuses={"macro_data": {"status": "LIVE", "provider": "KOSIS"}},
+        history=history,
+        bounds={
+            "macro_data:ECOS": {"min_period_month": "20160531", "max_period_month": "20260531", "row_count": 1302},
+            "macro_data:KOSIS": {"min_period_month": "20160331", "max_period_month": "20260430", "row_count": 475},
+        },
+        dataset_order=["macro_data"],
+    )
+
+    assert rows["provider"].tolist() == ["KOSIS", "ECOS"]
+    assert rows["보유기간"].tolist() == ["2016-03 ~ 2026-04", "2016-05 ~ 2026-05"]
+    assert rows["실패/주의"].tolist() == ["요청 범위 일부 미충족 (81.0%)", "요청 범위 일부 미충족 (99.9%)"]
+
+
+def test_format_collection_overview_shows_partial_rows_when_completion_unknown():
+    history = pd.DataFrame(
+        [
+            {
+                "created_at": pd.Timestamp("2026-05-12T13:31:49Z"),
+                "dataset": "investor_flow",
+                "provider": "PYKRX_UNOFFICIAL",
+                "requested_start": "20260401",
+                "requested_end": "20260410",
+                "status": "LIVE",
+                "coverage_complete": False,
+                "failed_days": [],
+                "failed_codes": {},
+                "aborted": False,
+                "completion_pct": float("nan"),
+                "row_count": 20,
+            },
+        ]
+    )
+
+    rows = tabs._format_collection_overview_rows(
+        statuses={"investor_flow": {"status": "LIVE", "provider": "PYKRX_UNOFFICIAL"}},
+        history=history,
+        bounds={"investor_flow": {"min_trade_date": "20260401", "max_trade_date": "20260410", "row_count": 20}},
+        dataset_order=["investor_flow"],
+    )
+
+    assert rows["실패/주의"].tolist() == ["부분 수집 데이터 있음 (20건)"]
+
+
 def test_render_monitoring_tab_shows_dataset_sample_history(monkeypatch):
     dataframe_payloads: list[pd.DataFrame] = []
     header_titles: list[str] = []
@@ -1485,10 +1695,26 @@ def test_render_monitoring_tab_shows_dataset_sample_history(monkeypatch):
 
     tabs.render_monitoring_tab(tab=_DummyTab(), market_id="KR", ui_locale="ko")
 
-    assert "데이터 수집 이력 샘플" in header_titles
+    assert "최근 수집 실행 로그" in header_titles
     assert {"시장데이터", "매크로데이터", "수급데이터"}.issubset(set(header_titles))
     assert len(dataframe_payloads) == 4
     expected_columns = [
+        "데이터",
+        "상태",
+        "마지막 갱신",
+        "보유기간",
+        "최근 요청",
+        "실패/주의",
+        "provider",
+        "저장행수",
+    ]
+    overview_table = dataframe_payloads[0]
+    assert overview_table.columns.tolist() == expected_columns
+    assert overview_table["데이터"].tolist() == ["시장데이터", "매크로데이터", "수급데이터"]
+    assert overview_table["최근 요청"].tolist()[0] == "2026-05-01 ~ 2026-05-05"
+    assert overview_table["실패/주의"].tolist() == ["없음", "없음", "없음"]
+    market_sample = dataframe_payloads[1]
+    assert market_sample.columns.tolist() == [
         "수집일시",
         "요청범위",
         "상태",
@@ -1499,10 +1725,6 @@ def test_render_monitoring_tab_shows_dataset_sample_history(monkeypatch):
         "provider",
         "저장행수",
     ]
-    status_table = dataframe_payloads[0]
-    assert status_table["데이터"].tolist() == ["시장데이터", "매크로데이터", "수급데이터"]
-    market_sample = dataframe_payloads[1]
-    assert market_sample.columns.tolist() == expected_columns
     assert len(market_sample) == 10
     assert pd.to_datetime(market_sample["수집일시"]).tolist() == sorted(
         pd.to_datetime(market_sample["수집일시"]).tolist(),
@@ -1514,6 +1736,7 @@ def test_cached_monitoring_data_reads_manual_refresh_history(monkeypatch):
     calls: list[dict[str, object]] = []
 
     monkeypatch.setattr(warehouse, "read_dataset_status", lambda dataset, market: {})
+    monkeypatch.setattr(warehouse, "read_dataset_data_bounds", lambda dataset, market: {})
 
     def _fake_history(**kwargs):
         calls.append(kwargs)
@@ -1692,6 +1915,8 @@ def test_render_screening_tab_initial_render_uses_cache_only_loaders(monkeypatch
 def test_render_screening_tab_refresh_allows_live_loaders(monkeypatch):
     load_kwargs: list[dict[str, object]] = []
     etf_kwargs: list[dict[str, object]] = []
+    progress_labels: list[str] = []
+    progress_values: list[int] = []
 
     class _DummyTab:
         def __enter__(self):
@@ -1706,6 +1931,19 @@ def test_render_screening_tab_refresh_allows_live_loaders(monkeypatch):
 
         def __exit__(self, exc_type, exc, tb):
             return False
+
+    class _DummyPlaceholder:
+        def caption(self, text):
+            progress_labels.append(str(text))
+
+        def progress(self, value, text=None):
+            progress_values.append(int(value))
+            if text:
+                progress_labels.append(str(text))
+            return self
+
+        def empty(self):
+            progress_labels.append("empty")
 
     stock_row = {
         "ticker": "005930",
@@ -1735,12 +1973,25 @@ def test_render_screening_tab_refresh_allows_live_loaders(monkeypatch):
         "note": "",
     }
 
+    def _load_screened_stocks(**kwargs):
+        load_kwargs.append(kwargs)
+        progress_callback = kwargs.get("progress_callback")
+        assert callable(progress_callback)
+        progress_callback({"stage": "start", "current": 0, "total": 2})
+        progress_callback(
+            {
+                "stage": "ticker",
+                "current": 1,
+                "total": 2,
+                "ticker": "005930",
+                "sector_name": "KRX 반도체",
+            }
+        )
+        progress_callback({"stage": "done", "current": 2, "total": 2})
+        return ("LIVE", [stock_row])
+
     monkeypatch.setattr(tabs, "render_panel_header", lambda **kwargs: None)
-    monkeypatch.setattr(
-        screening_mod,
-        "load_screened_stocks",
-        lambda **kwargs: (load_kwargs.append(kwargs) or ("LIVE", [stock_row])),
-    )
+    monkeypatch.setattr(screening_mod, "load_screened_stocks", _load_screened_stocks)
     monkeypatch.setattr(
         screening_mod,
         "load_representative_etf_context",
@@ -1751,6 +2002,8 @@ def test_render_screening_tab_refresh_allows_live_loaders(monkeypatch):
     monkeypatch.setattr(tabs.st, "toggle", lambda *args, **kwargs: True)
     monkeypatch.setattr(tabs.st, "columns", lambda spec: [_DummyContainer() for _ in range(len(spec))])
     monkeypatch.setattr(tabs.st, "spinner", lambda *args, **kwargs: _DummyContainer())
+    monkeypatch.setattr(tabs.st, "empty", lambda: _DummyPlaceholder())
+    monkeypatch.setattr(tabs.st, "progress", lambda value, text=None: _DummyPlaceholder().progress(value, text=text))
     monkeypatch.setattr(tabs.st, "dataframe", lambda *args, **kwargs: None)
     monkeypatch.setattr(tabs.st, "download_button", lambda *args, **kwargs: None)
     monkeypatch.setattr(tabs.st, "markdown", lambda *args, **kwargs: None)
@@ -1765,5 +2018,9 @@ def test_render_screening_tab_refresh_allows_live_loaders(monkeypatch):
 
     assert load_kwargs[-1]["force_refresh"] is True
     assert load_kwargs[-1]["allow_live_fetch"] is True
+    assert load_kwargs[-1]["progress_callback"] is not None
     assert etf_kwargs[-1]["force_refresh"] is True
     assert etf_kwargs[-1]["allow_live_fetch"] is True
+    assert any("갱신 대상 총 2종목 중 1번째 처리 중: 005930 · KRX 반도체" in label for label in progress_labels)
+    assert 50 in progress_values
+    assert 100 in progress_values

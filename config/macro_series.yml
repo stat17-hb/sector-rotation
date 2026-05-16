@@ -27,6 +27,78 @@ ecos:
       - "0000001"
     label: "USD/KRW"
     unit: "KRW"
+  export_amount:
+    enabled: true
+    stat_code: "901Y118"
+    cycle: "M"
+    item_code: "T002"
+    item_codes:
+      - "T002"
+    label: "Exports"
+    unit: "USD"
+  export_it:
+    enabled: true
+    stat_code: "403Y001"
+    cycle: "M"
+    item_code: "309AA"
+    item_codes:
+      - "309AA"
+    label: "IT Export Value Index"
+    unit: "index"
+  export_semiconductor:
+    enabled: true
+    stat_code: "403Y001"
+    cycle: "M"
+    item_code: "30911AA"
+    item_codes:
+      - "30911AA"
+    label: "Semiconductor Export Value Index"
+    unit: "index"
+  export_chemicals:
+    enabled: true
+    stat_code: "403Y001"
+    cycle: "M"
+    item_code: "305AA"
+    item_codes:
+      - "305AA"
+    label: "Chemicals Export Value Index"
+    unit: "index"
+  export_steel:
+    enabled: true
+    stat_code: "403Y001"
+    cycle: "M"
+    item_code: "3071AA"
+    item_codes:
+      - "3071AA"
+    label: "Steel Export Value Index"
+    unit: "index"
+  export_auto:
+    enabled: true
+    stat_code: "403Y001"
+    cycle: "M"
+    item_code: "3121AA"
+    item_codes:
+      - "3121AA"
+    label: "Auto Export Value Index"
+    unit: "index"
+  export_machinery:
+    enabled: true
+    stat_code: "403Y001"
+    cycle: "M"
+    item_code: "311AA"
+    item_codes:
+      - "311AA"
+    label: "Machinery Export Value Index"
+    unit: "index"
+  export_pharma:
+    enabled: true
+    stat_code: "403Y001"
+    cycle: "M"
+    item_code: "3054AA"
+    item_codes:
+      - "3054AA"
+    label: "Pharma Export Value Index"
+    unit: "index"
 
 # KOSIS Open API (Statistics Korea)
 kosis:

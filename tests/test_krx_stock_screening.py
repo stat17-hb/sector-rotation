@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import sys
+import types
+from datetime import datetime, timedelta
+
 import pandas as pd
 
 from src.data_sources.krx_constituents import ConstituentLookupResult
@@ -90,6 +94,101 @@ def test_load_screened_stocks_cache_only_returns_cached_rows(monkeypatch, tmp_pa
 
     assert status == "CACHED"
     assert rows == cached_rows
+
+
+def test_load_screened_stocks_cache_only_returns_stale_rows(monkeypatch, tmp_path):
+    cache_path = tmp_path / "screening_cache.pkl"
+    monkeypatch.setattr(screening, "CACHE_PATH", cache_path)
+    cached_rows = [{"ticker": "005930", "name": "삼성전자"}]
+    sectors = [{"code": "5044", "name": "KRX 반도체"}]
+    screening._write_cache(sectors, cached_rows)
+    cached = screening.pickle.load(open(cache_path, "rb"))
+    cached["ts"] = datetime.now() - timedelta(hours=screening.CACHE_TTL_HOURS + 1)
+    screening.pickle.dump(cached, open(cache_path, "wb"))
+    monkeypatch.setattr(
+        screening,
+        "_fetch_and_score",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("live fetch should not run")),
+    )
+
+    status, rows = screening.load_screened_stocks(
+        strong_buy_sectors=sectors,
+        allow_live_fetch=False,
+    )
+
+    assert status == "STALE_CACHE"
+    assert rows == cached_rows
+
+
+def test_load_screened_stocks_live_failure_falls_back_to_stale_rows(monkeypatch, tmp_path):
+    cache_path = tmp_path / "screening_cache.pkl"
+    monkeypatch.setattr(screening, "CACHE_PATH", cache_path)
+    cached_rows = [{"ticker": "005930", "name": "삼성전자"}]
+    sectors = [{"code": "5044", "name": "KRX 반도체"}]
+    screening._write_cache(sectors, cached_rows)
+    cached = screening.pickle.load(open(cache_path, "rb"))
+    cached["ts"] = datetime.now() - timedelta(hours=screening.CACHE_TTL_HOURS + 1)
+    screening.pickle.dump(cached, open(cache_path, "wb"))
+    monkeypatch.setattr(
+        screening,
+        "_fetch_and_score",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("KRX unavailable")),
+    )
+
+    status, rows = screening.load_screened_stocks(
+        strong_buy_sectors=sectors,
+        force_refresh=True,
+        allow_live_fetch=True,
+    )
+
+    assert status == "STALE_CACHE"
+    assert rows == cached_rows
+
+
+def test_fetch_and_score_reports_ticker_progress(monkeypatch):
+    fake_stock = types.ModuleType("pykrx.stock")
+    fake_pykrx = types.ModuleType("pykrx")
+    fake_pykrx.stock = fake_stock
+    monkeypatch.setitem(sys.modules, "pykrx", fake_pykrx)
+    monkeypatch.setitem(sys.modules, "pykrx.stock", fake_stock)
+
+    fake_compat = types.ModuleType("src.data_sources.pykrx_compat")
+    fake_compat.ensure_pykrx_transport_compat = lambda: None
+    monkeypatch.setitem(sys.modules, "src.data_sources.pykrx_compat", fake_compat)
+
+    fake_stock.get_index_ohlcv_by_date = lambda *args, **kwargs: pd.DataFrame(
+        {"종가": [100.0, 101.0, 102.0]},
+        index=pd.date_range("2026-04-01", periods=3, freq="B"),
+    )
+    monkeypatch.setattr(screening, "_last_business_day", lambda: "20260403")
+    monkeypatch.setattr(
+        screening,
+        "_get_constituents",
+        lambda stock_module, trade_date, sector_code: ["005930", "000660"] if sector_code == "5044" else ["035420"],
+    )
+
+    def _score_stock(**kwargs):
+        return {"ticker": kwargs["ticker"], "rs": 1.0}
+
+    monkeypatch.setattr(screening, "_score_stock", _score_stock)
+    events: list[dict[str, object]] = []
+
+    rows = screening._fetch_and_score(
+        [
+            {"code": "5044", "name": "KRX 반도체"},
+            {"code": "5046", "name": "KRX 인터넷"},
+        ],
+        benchmark_code="1001",
+        settings={},
+        progress_callback=events.append,
+    )
+
+    assert [row["ticker"] for row in rows] == ["005930", "000660", "035420"]
+    assert events[0] == {"stage": "start", "current": 0, "total": 3}
+    ticker_events = [event for event in events if event["stage"] == "ticker"]
+    assert [event["current"] for event in ticker_events] == [1, 2, 3]
+    assert [event["ticker"] for event in ticker_events] == ["005930", "000660", "035420"]
+    assert events[-1] == {"stage": "done", "current": 3, "total": 3}
 
 
 def test_load_representative_etf_context_cache_only_skips_live_fetch_on_cache_miss(monkeypatch, tmp_path):
@@ -246,3 +345,88 @@ def test_normalize_etf_snapshot_tolerates_missing_listed_shares():
     assert list(normalized.index) == ["396500"]
     assert float(normalized.loc["396500", "nav"]) == 10200.0
     assert pd.isna(normalized.loc["396500", "listed_shares"])
+
+
+def test_load_stock_ohlcv_uses_cached_warehouse_rows(monkeypatch):
+    index = pd.bdate_range("2025-05-01", periods=230)
+    cached = pd.DataFrame(
+        {
+            "ticker": ["005930"] * len(index),
+            "ticker_name": ["삼성전자"] * len(index),
+            "open": [100.0 + i for i in range(len(index))],
+            "high": [101.0 + i for i in range(len(index))],
+            "low": [99.0 + i for i in range(len(index))],
+            "close": [100.0 + i for i in range(len(index))],
+            "volume": [1_000_000] * len(index),
+        },
+        index=index,
+    )
+    screening_start = index.min().strftime("%Y%m%d")
+    screening_end = index.max().strftime("%Y%m%d")
+
+    from src.data_sources import warehouse
+
+    warehouse.upsert_stock_ohlcv(cached, provider="PYKRX", market="KR")
+
+    class _NoLiveStockModule:
+        def get_market_ohlcv_by_date(self, *args, **kwargs):
+            raise AssertionError("live stock OHLCV should not run on usable cache")
+
+        def get_market_ticker_name(self, *args, **kwargs):
+            raise AssertionError("live ticker name should not run on usable cache")
+
+    loaded = screening._load_stock_ohlcv_cached_or_live(
+        _NoLiveStockModule(),
+        ticker="005930",
+        start=screening_start,
+        end=screening_end,
+    )
+
+    assert len(loaded) == len(cached)
+    assert loaded["close"].iloc[-1] == cached["close"].iloc[-1]
+
+
+def test_score_stock_computes_200dma_from_one_year_cached_history():
+    index = pd.bdate_range("2025-05-01", periods=230)
+    cached = pd.DataFrame(
+        {
+            "ticker": ["005930"] * len(index),
+            "ticker_name": ["삼성전자"] * len(index),
+            "open": [100.0 + i for i in range(len(index))],
+            "high": [101.0 + i for i in range(len(index))],
+            "low": [99.0 + i for i in range(len(index))],
+            "close": [100.0 + i for i in range(len(index))],
+            "volume": [1_000_000] * len(index),
+        },
+        index=index,
+    )
+    from src.data_sources import warehouse
+
+    warehouse.upsert_stock_ohlcv(cached, provider="PYKRX", market="KR")
+    bench_close = pd.Series([90.0 + i * 0.1 for i in range(len(index))], index=index)
+
+    class _NoLiveStockModule:
+        def get_market_ohlcv_by_date(self, *args, **kwargs):
+            raise AssertionError("live stock OHLCV should not run on usable cache")
+
+        def get_market_ticker_name(self, *args, **kwargs):
+            raise AssertionError("live ticker name should not run on usable cache")
+
+    row = screening._score_stock(
+        stock=_NoLiveStockModule(),
+        ticker="005930",
+        sector_code="5044",
+        sector_name="KRX 반도체",
+        start_date=index.min().strftime("%Y%m%d"),
+        trade_date=index.max().strftime("%Y%m%d"),
+        bench_close=bench_close,
+        rs_ma_period=20,
+        rsi_period=14,
+        ma_fast=20,
+        ma_slow=60,
+    )
+
+    assert row is not None
+    assert row["above_200dma"] is True
+    assert row["trend_ok"] is True
+    assert row["name"] == "삼성전자"

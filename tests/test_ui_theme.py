@@ -187,6 +187,12 @@ def test_inject_css_reflects_table_tokens(monkeypatch):
     assert "--gdg-bg-header" in rendered[0]
     assert "[data-testid=\"stHeader\"]" in rendered[0]
     assert "[data-testid=\"stDecoration\"]" in rendered[0]
+    assert "[data-testid=\"stAppDeployButton\"]" in rendered[0]
+    assert "[aria-label=\"Deploy\"]" in rendered[0]
+    assert "display: block !important" in rendered[0]
+    assert "min-height: 3rem !important" in rendered[0]
+    assert "[data-testid=\"stSidebarCollapsedControl\"]" in rendered[0]
+    assert "[data-testid=\"stSidebarCollapseButton\"]" in rendered[0]
 
 
 def test_inject_css_includes_new_dashboard_layout_classes(monkeypatch):
@@ -203,11 +209,21 @@ def test_inject_css_includes_new_dashboard_layout_classes(monkeypatch):
     css = rendered[0]
     assert ".page-shell" in css
     assert "[data-testid=\"stSidebarNav\"]" in css
+    assert ".sidebar-workspace" in css
+    assert ".sidebar-ops-panel" in css
+    assert ".sidebar-status-chip" in css
+    assert ".sidebar-section-label" in css
+    assert "[data-testid=\"stIconMaterial\"]" in css
+    assert "[data-testid=\"stSidebarNav\"] [data-testid=\"stIconMaterial\"]" in css
+    assert "[data-testid=\"collapsedControl\"]" in css
+    assert "[data-testid=\"stBaseButton-header\"]" in css
+    assert "[data-testid=\"stBaseButton-headerNoPadding\"]" in css
+    assert "[aria-expanded=\"false\"] [data-testid=\"stSidebarCollapseButton\"]" in css
     assert "[data-testid=\"stVerticalBlockBorderWrapper\"]" in css
     assert ".status-strip" in css
     assert ".command-bar" in css
     assert ".research-page-frame" in css
-    assert ".overview-mobile-decision-strip" in css
+    assert ".overview-review-candidates" in css
     assert ".research-page-frame__summary" in css
     assert ".top-bar-summary" in css
     assert ".analysis-toolbar" in css
@@ -232,10 +248,10 @@ def test_light_theme_matches_refined_finance_palette():
     light_ui = get_ui_tokens("light")
 
     assert light_ui["background"] == "#F7F9FC"
-    assert light_ui["foreground"] == "#1B2433"
-    assert light_ui["primary"] == "#2567C8"
-    assert light_ui["card_alt"] == "#F0F4F9"
-    assert light_ui["sidebar_bg"] == "#F4F7FB"
+    assert light_ui["foreground"] == "#1E2734"
+    assert light_ui["primary"] == "#2B64B8"
+    assert light_ui["card_alt"] == "#F1F4F8"
+    assert light_ui["sidebar_bg"] == "#F5F7FA"
 
 
 def test_streamlit_config_matches_light_theme_tokens():

@@ -201,6 +201,7 @@ def _default_macro_export_path(market: str) -> Path:
 _READ_SCHEMA_REQUIREMENTS: dict[str, frozenset[str]] = {
     "dim_index": frozenset({"market", "index_code", "index_name", "taxonomy_kind", "taxonomy_label"}),
     "fact_krx_index_daily": frozenset({"market", "trade_date", "index_code", "close"}),
+    "fact_kr_stock_ohlcv_daily": frozenset({"market", "trade_date", "ticker", "close"}),
     "fact_investor_flow_daily": frozenset({"market", "trade_date", "ticker", "investor_type"}),
     "fact_investor_flow_sector_daily": frozenset({"market", "trade_date", "sector_code", "investor_type"}),
     "dim_macro_series": frozenset({"market", "series_alias"}),
@@ -551,6 +552,24 @@ def ensure_warehouse_schema(connection: duckdb.DuckDBPyConnection | None = None)
                 provider VARCHAR NOT NULL,
                 loaded_at TIMESTAMPTZ NOT NULL,
                 PRIMARY KEY (market, trade_date, ticker, investor_type)
+            )
+            """
+        )
+        con.execute(
+            """
+            CREATE TABLE IF NOT EXISTS fact_kr_stock_ohlcv_daily (
+                market VARCHAR NOT NULL,
+                trade_date DATE NOT NULL,
+                ticker VARCHAR NOT NULL,
+                ticker_name VARCHAR,
+                open DOUBLE,
+                high DOUBLE,
+                low DOUBLE,
+                close DOUBLE NOT NULL,
+                volume BIGINT,
+                provider VARCHAR NOT NULL,
+                loaded_at TIMESTAMPTZ NOT NULL,
+                PRIMARY KEY (market, trade_date, ticker)
             )
             """
         )
@@ -914,6 +933,150 @@ def get_market_latest_dates(index_codes: list[str], *, market: str = "KR") -> di
         for _, row in result.iterrows()
         if str(row["last_trade_date"]).strip()
     }
+
+
+def _stock_ohlcv_empty_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        columns=["ticker", "ticker_name", "open", "high", "low", "close", "volume", "provider"]
+    )
+
+
+def upsert_stock_ohlcv(frame: pd.DataFrame, *, provider: str, market: str = "KR") -> None:
+    """Persist KR stock OHLCV rows keyed by ticker/date."""
+    if frame.empty:
+        return
+
+    normalized_market = _normalize_market_id(market)
+    normalized = frame.copy()
+    normalized.index = pd.DatetimeIndex(normalized.index)
+    normalized = normalized.sort_index()
+    if "ticker" not in normalized.columns:
+        raise ValueError("stock OHLCV frame must include ticker")
+    if "close" not in normalized.columns:
+        raise ValueError("stock OHLCV frame must include close")
+    normalized["market"] = normalized_market
+    normalized["trade_date"] = normalized.index.normalize()
+    normalized["ticker"] = normalized["ticker"].astype(str)
+    if "ticker_name" not in normalized.columns:
+        normalized["ticker_name"] = normalized["ticker"]
+    normalized["ticker_name"] = normalized["ticker_name"].fillna(normalized["ticker"]).astype(str)
+    for column in ("open", "high", "low", "close"):
+        if column not in normalized.columns:
+            normalized[column] = pd.NA
+        normalized[column] = pd.to_numeric(normalized[column], errors="coerce")
+    if "volume" not in normalized.columns:
+        normalized["volume"] = pd.NA
+    normalized["volume"] = pd.to_numeric(normalized["volume"], errors="coerce").astype("Int64")
+    normalized["provider"] = str(provider or "").strip().upper() or "UNKNOWN"
+    normalized["loaded_at"] = _utc_now()
+    normalized = normalized.dropna(subset=["close"])
+    if normalized.empty:
+        return
+
+    payload = normalized[
+        [
+            "market",
+            "trade_date",
+            "ticker",
+            "ticker_name",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "provider",
+            "loaded_at",
+        ]
+    ]
+    con = _connect()
+    try:
+        ensure_warehouse_schema(con)
+        _register_frame(con, "stock_ohlcv_upsert", payload)
+        con.execute(
+            """
+            INSERT INTO fact_kr_stock_ohlcv_daily AS fact
+            SELECT
+                market,
+                CAST(trade_date AS DATE) AS trade_date,
+                ticker,
+                ticker_name,
+                open,
+                high,
+                low,
+                close,
+                volume,
+                provider,
+                loaded_at
+            FROM stock_ohlcv_upsert
+            ON CONFLICT (market, trade_date, ticker) DO UPDATE SET
+                ticker_name = excluded.ticker_name,
+                open = excluded.open,
+                high = excluded.high,
+                low = excluded.low,
+                close = excluded.close,
+                volume = excluded.volume,
+                provider = excluded.provider,
+                loaded_at = excluded.loaded_at
+            """
+        )
+    finally:
+        con.close()
+
+
+def read_stock_ohlcv(
+    tickers: list[str],
+    start: str,
+    end: str,
+    *,
+    market: str = "KR",
+) -> pd.DataFrame:
+    """Read cached KR stock OHLCV rows for the requested tickers/date window."""
+    if not warehouse_exists() or not tickers:
+        return _stock_ohlcv_empty_frame()
+
+    _ensure_schema_for_readers()
+    normalized_market = _normalize_market_id(market)
+    tickers_frame = pd.DataFrame({"ticker": [str(ticker) for ticker in tickers]})
+    start_date = _normalize_market_date(start)
+    end_date = _normalize_market_date(end)
+    con = _connect_ro()
+    try:
+        if not _table_exists(con, "fact_kr_stock_ohlcv_daily"):
+            return _stock_ohlcv_empty_frame()
+        _register_frame(con, "requested_stock_tickers", tickers_frame)
+        result = con.execute(
+            """
+            SELECT
+                fact.trade_date,
+                fact.ticker,
+                fact.ticker_name,
+                fact.open,
+                fact.high,
+                fact.low,
+                fact.close,
+                fact.volume,
+                fact.provider
+            FROM fact_kr_stock_ohlcv_daily AS fact
+            INNER JOIN requested_stock_tickers AS req
+                ON req.ticker = fact.ticker
+            WHERE fact.market = ?
+              AND fact.trade_date BETWEEN CAST(? AS DATE) AND CAST(? AS DATE)
+            ORDER BY fact.trade_date, fact.ticker
+            """,
+            [normalized_market, start_date, end_date],
+        ).df()
+    except duckdb.Error:
+        return _stock_ohlcv_empty_frame()
+    finally:
+        con.close()
+
+    if result.empty:
+        return _stock_ohlcv_empty_frame()
+    result["trade_date"] = pd.to_datetime(result["trade_date"])
+    result = result.set_index("trade_date").sort_index()
+    result["ticker"] = result["ticker"].astype(str)
+    result["ticker_name"] = result["ticker_name"].fillna(result["ticker"]).astype(str)
+    return result
 
 
 def is_market_coverage_complete(
@@ -2318,6 +2481,7 @@ def read_dataset_status(dataset: WarehouseDataset, *, market: str = "KR") -> dic
                 "abort_reason": str(run_row[10] or "").strip(),
                 "predicted_requests": int(run_row[11] or 0),
                 "processed_requests": int(run_row[12] or 0),
+                "created_at": run_row[13],
             }
         )
     if watermark_row is not None:
@@ -2328,7 +2492,71 @@ def read_dataset_status(dataset: WarehouseDataset, *, market: str = "KR") -> dic
             result.setdefault("end", "".join(ch for ch in watermark_key if ch.isdigit())[:8])
         result.setdefault("coverage_complete", bool(watermark_row[1]))
         result["watermark_key"] = watermark_key
+        result["updated_at"] = watermark_row[5]
     return result
+
+
+def read_dataset_data_bounds(
+    dataset: WarehouseDataset,
+    *,
+    market: str = "KR",
+    provider: str | None = None,
+) -> dict[str, Any]:
+    """Return actual stored date bounds and row count for one dashboard dataset."""
+    if not warehouse_exists():
+        return {}
+
+    _ensure_schema_for_readers()
+    normalized_market = _normalize_market_id(market)
+    dataset_key = str(dataset or "").strip()
+    if dataset_key == "market_prices":
+        table = "fact_krx_index_daily"
+        date_col = "trade_date"
+        start_key = "min_trade_date"
+        end_key = "max_trade_date"
+    elif dataset_key == "macro_data":
+        table = "fact_macro_monthly"
+        date_col = "period_month"
+        start_key = "min_period_month"
+        end_key = "max_period_month"
+    elif dataset_key == "investor_flow":
+        table = "fact_investor_flow_sector_daily"
+        date_col = "trade_date"
+        start_key = "min_trade_date"
+        end_key = "max_trade_date"
+    else:
+        return {}
+    provider_token = str(provider or "").strip().upper()
+    provider_clause = " AND provider = ?" if provider_token else ""
+    params: list[Any] = [normalized_market]
+    if provider_token:
+        params.append(provider_token)
+
+    con = _connect_ro()
+    try:
+        if not _table_exists(con, table):
+            return {}
+        row = con.execute(
+            f"""
+            SELECT
+                STRFTIME(MIN({date_col}), '%Y%m%d') AS min_date,
+                STRFTIME(MAX({date_col}), '%Y%m%d') AS max_date,
+                COUNT(*) AS row_count
+            FROM {table}
+            WHERE market = ?{provider_clause}
+            """,
+            params,
+        ).fetchone()
+    finally:
+        con.close()
+
+    if row is None:
+        return {}
+    return {
+        start_key: str(row[0] or "").strip(),
+        end_key: str(row[1] or "").strip(),
+        "row_count": int(row[2] or 0),
+    }
 
 
 def get_dataset_artifact_key(
@@ -2480,9 +2708,11 @@ def _macro_alias_completion_pct(
 
     if coverage.empty:
         return None
-    expected_count = len(expected_periods)
-    complete_aliases = int((coverage["covered_periods"].astype(int) == expected_count).sum())
-    return round(complete_aliases / len(coverage) * 100, 1)
+    expected_cells = len(expected_periods) * len(coverage)
+    if expected_cells <= 0:
+        return None
+    covered_cells = int(coverage["covered_periods"].astype(int).clip(lower=0).sum())
+    return round(min(covered_cells / expected_cells * 100, 100.0), 1)
 
 
 def read_collection_run_history(
@@ -2592,7 +2822,12 @@ def read_collection_run_history(
                 return alias_pct
         pred = int(row["predicted_requests"] or 0)
         proc = int(row["processed_requests"] or 0)
-        return round(proc / pred * 100, 1) if pred > 0 else 0.0
+        if pred > 0:
+            return round(proc / pred * 100, 1)
+        row_count = int(row["row_count"] or 0)
+        if row_count > 0:
+            return 100.0 if bool(row.get("coverage_complete", False)) else float("nan")
+        return 0.0
 
     df["completion_pct"] = df.apply(_pct, axis=1)
     df["failed_days"] = df["failed_days_json"].apply(

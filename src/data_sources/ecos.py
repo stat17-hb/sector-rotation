@@ -369,6 +369,62 @@ def load_ecos_macro(
                 "cycle": "M",
                 "enabled": True,
             },
+            "export_amount": {
+                "stat_code": "901Y118",
+                "item_code": "T002",
+                "item_codes": ["T002"],
+                "cycle": "M",
+                "enabled": True,
+            },
+            "export_it": {
+                "stat_code": "403Y001",
+                "item_code": "309AA",
+                "item_codes": ["309AA"],
+                "cycle": "M",
+                "enabled": True,
+            },
+            "export_semiconductor": {
+                "stat_code": "403Y001",
+                "item_code": "30911AA",
+                "item_codes": ["30911AA"],
+                "cycle": "M",
+                "enabled": True,
+            },
+            "export_chemicals": {
+                "stat_code": "403Y001",
+                "item_code": "305AA",
+                "item_codes": ["305AA"],
+                "cycle": "M",
+                "enabled": True,
+            },
+            "export_steel": {
+                "stat_code": "403Y001",
+                "item_code": "3071AA",
+                "item_codes": ["3071AA"],
+                "cycle": "M",
+                "enabled": True,
+            },
+            "export_auto": {
+                "stat_code": "403Y001",
+                "item_code": "3121AA",
+                "item_codes": ["3121AA"],
+                "cycle": "M",
+                "enabled": True,
+            },
+            "export_machinery": {
+                "stat_code": "403Y001",
+                "item_code": "311AA",
+                "item_codes": ["311AA"],
+                "cycle": "M",
+                "enabled": True,
+            },
+            "export_pharma": {
+                "stat_code": "403Y001",
+                "item_code": "3054AA",
+                "item_codes": ["3054AA"],
+                "cycle": "M",
+                "enabled": True,
+            },
         }
 
     def _fetch(alias: str, cfg: dict, provider_start: str, provider_end: str) -> pd.DataFrame:

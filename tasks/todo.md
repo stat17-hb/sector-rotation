@@ -1,3 +1,649 @@
+# 2026-05-16 - Sidebar Reopen Control Fix
+
+## Goal
+- 사이드바를 접은 뒤 다시 여는 버튼이 사라지는 문제를 고친다.
+- Streamlit header chrome은 계속 시각적으로 숨기되 collapsed sidebar control은 보이게 한다.
+- Sidebar navigation group의 material ligature가 `id_`처럼 잘려 보이지 않게 한다.
+
+## Checklist
+- [x] 원인 확인: `stHeader display:none`이 collapsed control까지 제거할 수 있음
+- [x] header를 0-height transparent layer로 바꾸고 collapsed control selector를 명시적으로 복구
+- [x] Deploy/toolbar chrome 재노출 방지
+- [x] sidebar nav 내부 material icon ligature 숨김
+- [x] `stSidebarCollapseButton`/`stBaseButton-headerNoPadding` visibility까지 복구
+- [x] collapsed 상태(`aria-expanded=false`)를 클릭 가능한 rail 상태로 보정
+- [x] focused verification
+
+## Review
+- Root cause:
+  Streamlit의 sidebar reopen control은 header chrome 계층에 붙어 있는데, 기존 CSS가 `stHeader`를 `display:none`으로 제거해 접은 뒤 다시 펼칠 버튼도 사라질 수 있었다.
+  실제 DOM에서는 접기/펼치기 버튼이 `stSidebarCollapseButton` 아래의 `stBaseButton-headerNoPadding`으로 생성되고, 이 노드가 `visibility:hidden` 상태를 가질 수 있었다.
+- Changed:
+  `stHeader`는 0-height transparent layer로 유지하고, `stSidebarCollapsedControl`/`collapsedControl`만 fixed button으로 보이게 했다.
+  접기/펼치기 버튼 부모와 실제 `headerNoPadding` 버튼을 함께 visible로 복구했다.
+  접힌 상태에서 sidebar가 완전히 offscreen으로 빠지지 않고 4.25rem rail만 남기도록 `aria-expanded=false` 상태 보정을 추가했다.
+  header를 살리면서 다시 노출된 Deploy/toolbar chrome은 별도 selector로 숨겼다.
+  nav group의 Streamlit material icon ligature는 렌더 실패 시 텍스트 조각으로 보이므로 sidebar nav 내부에서 숨겼다.
+- Verification:
+  `python -m py_compile src\ui\css.py tests\test_ui_theme.py` -> passed
+  `python -m pytest -q tests/test_ui_theme.py -k "inject_css_reflects_table_tokens or inject_css_includes_new_dashboard_layout_classes" --basetemp "$env:TEMP\pytest-sidebar-reopen-theme-2"` -> `2 passed, 15 deselected`
+  `python -m pytest -q tests/test_dashboard_tabs.py tests/test_ui_theme.py --basetemp "$env:TEMP\pytest-sidebar-reopen-final"` -> `56 passed`
+  `python scripts\capture_streamlit_screenshot.py --output .omx\artifacts\sidebar-reopen-control-20260516.png --app app.py --port 8519 --debug-port 9239 --url http://127.0.0.1:8519 --width 1440 --height 1024 --timeout 120 --min-text-len 300` -> passed
+  `git diff --check -- src/ui/css.py tests/test_ui_theme.py tasks/todo.md` -> passed with LF/CRLF warnings only
+
+# 2026-05-16 - Ralph Sidebar Operations Panel Redesign
+
+## Goal
+- Deep-interview spec에 따라 사이드바를 Streamlit 기본 패널이 아니라 투자 운영 패널처럼 재구성한다.
+- `expand_more` 텍스트/아이콘 겹침을 제거한다.
+- 데이터 갱신 동작과 disabled 조건은 유지한다.
+
+## Checklist
+- [x] deep-interview spec/context 로드 및 Ralph 상태 전환
+- [x] 데이터 상태/갱신을 상단 운영 영역으로 이동
+- [x] 분석 기준/수급 해석/모델 파라미터를 보조 영역으로 재배치
+- [x] Streamlit material icon/select overlap CSS 보강
+- [x] focused tests 및 visual verification
+- [x] architect/deslop/re-verification
+
+## Review
+- Changed:
+  사이드바를 `OPERATIONS / KR 섹터 콘솔`과 `데이터 운용` 패널 중심으로 재구성했다.
+  시장/매크로/수급 상태와 갱신 버튼을 사이드바 상단으로 올리고, 분석 기준/수급 해석/모델 파라미터는 보조 영역으로 낮췄다.
+  `expand_more` 계열 Streamlit material icon이 텍스트로 겹치지 않도록 icon box와 select 우측 여백을 고정했다.
+- Preserved:
+  기존 refresh button 호출, 반환 tuple 순서, `btn_states` disabled 조건, KR-only 수급 갱신 조건은 유지했다.
+- Verification:
+  `python -m py_compile src\dashboard\tabs.py src\ui\css.py tests\test_dashboard_tabs.py tests\test_ui_theme.py` -> passed
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "sidebar_controls or sidebar_status_chip" --basetemp "$env:TEMP\pytest-sidebar-ops-tabs"` -> `3 passed, 36 deselected`
+  `python -m pytest -q tests/test_ui_theme.py -k "inject_css_includes_new_dashboard_layout_classes" --basetemp "$env:TEMP\pytest-sidebar-ops-theme"` -> `1 passed, 16 deselected`
+  `python -m pytest -q tests/test_dashboard_tabs.py tests/test_ui_theme.py --basetemp "$env:TEMP\pytest-sidebar-ops-regression"` -> `56 passed`
+  `python scripts\capture_streamlit_screenshot.py --output .omx\artifacts\sidebar-ops-panel-20260516.png --app app.py --port 8517 --debug-port 9238 --url http://127.0.0.1:8517 --width 1440 --height 1024 --timeout 120 --min-text-len 300` -> passed, no visible `expand_more` overlap
+  Architect review -> APPROVED / CLEAR
+  Deslop pass -> no Ralph-owned masking fallback or cleanup edits needed
+  Post-deslop `python -m pytest -q tests/test_dashboard_tabs.py tests/test_ui_theme.py --basetemp "$env:TEMP\pytest-sidebar-ops-post-deslop"` -> `56 passed`
+  `git diff --check -- src/dashboard/tabs.py src/ui/css.py tests/test_dashboard_tabs.py tests/test_ui_theme.py tasks/todo.md` -> passed with LF/CRLF warnings only
+
+# 2026-05-16 - Sidebar UX Pass
+
+## Goal
+- Streamlit 기본 네비게이션은 유지하면서 사이드바의 작업 흐름을 더 잘 스캔되게 만든다.
+- 설정, 수급 프로필, 데이터 갱신을 명확한 그룹으로 분리한다.
+- 데이터/점수 산식/라우팅은 변경하지 않는다.
+
+## Checklist
+- [x] 현재 사이드바 렌더링과 CSS 계약 확인
+- [x] 사이드바 정보 구조와 상태 표시 개선
+- [x] 사이드바 전용 CSS 정리
+- [x] focused compile/test 검증
+- [x] 결과 기록
+
+## Review
+- Changed:
+  사이드바 상단에 `작업공간` 블록과 시장/매크로/수급 상태 칩을 추가했다.
+  기존 `실행 환경`/divider 중심 구조를 `분석 기준`, `수급 해석`, `데이터 갱신` 작업 그룹으로 재배치했다.
+  고급 설정 popover는 `모델 파라미터`로 좁히고, footer label은 별도 낮은 계층으로 내렸다.
+- CSS:
+  사이드바 nav와 workspace 사이를 얇은 divider로 분리했다.
+  상태 칩, 섹션 라벨, footer label의 density/weight/radius를 조정해 앱 UI 톤에 맞췄다.
+- Verification:
+  `python -m py_compile src\dashboard\tabs.py src\ui\css.py tests\test_dashboard_tabs.py tests\test_ui_theme.py` -> passed
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "sidebar_controls or sidebar_status_chip" --basetemp "$env:TEMP\pytest-sidebar-ux-tabs-2"` -> `3 passed, 36 deselected`
+  `python -m pytest -q tests/test_ui_theme.py -k "inject_css_includes_new_dashboard_layout_classes" --basetemp "$env:TEMP\pytest-sidebar-ux-theme"` -> `1 passed, 16 deselected`
+  `python -m pytest -q tests/test_dashboard_tabs.py tests/test_ui_theme.py --basetemp "$env:TEMP\pytest-sidebar-ux-regression-2"` -> `56 passed`
+  `python scripts\capture_streamlit_screenshot.py --output .omx\artifacts\sidebar-ux-desktop-20260516-fresh.png --app app.py --port 8516 --debug-port 9237 --url http://127.0.0.1:8516 --width 1440 --height 1024 --timeout 120 --min-text-len 300` -> passed
+  `git diff --check -- src/dashboard/tabs.py src/ui/css.py tests/test_dashboard_tabs.py tests/test_ui_theme.py tasks/todo.md` -> passed with LF/CRLF warnings only.
+
+# 2026-05-16 - Autopilot Sector Momentum Tab Decision Boards
+
+## Goal
+- 승인된 autoresearch 결과를 구현해 "섹터 모멘텀" 탭을 전체 원장 중심에서 decision board 중심으로 바꾼다.
+- 기존 overview proxy/candidate helper를 재사용하고 canonical action/action_policy는 변경하지 않는다.
+
+## Checklist
+- [x] autopilot context snapshot 작성
+- [x] ralplan PRD/test-spec/plan 작성
+- [x] signals 탭 decision board helper 구현
+- [x] signals 탭 상단 렌더링 연결
+- [x] focused verification
+- [x] code-review clean gate
+
+## Review
+- Plan artifacts:
+  `.omx/plans/prd-sector-momentum-tab-decision-upgrade-20260516.md`
+  `.omx/plans/test-spec-sector-momentum-tab-decision-upgrade-20260516.md`
+  `.omx/plans/ralplan-sector-momentum-tab-decision-upgrade-20260516.md`
+- Implementation:
+  `render_all_signals_tab()` 상단에 `의사결정 보드`를 추가했다.
+  board는 기존 overview candidate projection을 재사용하며 `신규/증액 검토`, `보유 모니터링`, `보유 축소/주의`, `변곡 감시` 4개 그룹으로 나눈다.
+  held `Watch`는 기본 모니터링으로 유지하고, alert/adverse flow/negative edge/high risk scalar가 있을 때만 축소/주의로 보낸다.
+- Verification:
+  `python -m py_compile src\ui\panels.py src\dashboard\tabs.py tests\test_ui_components.py tests\test_dashboard_tabs.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py -k "sector_momentum_decision_board or overview_review_candidate" --basetemp "$env:TEMP\pytest-sector-momentum-board-ui-2"` -> `8 passed, 83 deselected`
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "all_signals_tab or dashboard_page" --basetemp "$env:TEMP\pytest-sector-momentum-board-tabs-2"` -> `5 passed, 33 deselected`
+  `python -m pytest -q tests/test_ui_components.py tests/test_dashboard_tabs.py --basetemp "$env:TEMP\pytest-sector-momentum-board-regression"` -> `129 passed`
+  code-review cycle1 -> REQUEST CHANGES, held `N/A`가 기존 overview projection의 `N/A` 제외 조건 때문에 `보유 축소/주의`에서 누락되는 문제 발견.
+  cycle2 `python -m py_compile src\ui\panels.py src\dashboard\tabs.py tests\test_ui_components.py tests\test_dashboard_tabs.py` -> passed
+  cycle2 `python -m pytest -q tests/test_ui_components.py -k "sector_momentum_decision_board or overview_review_candidate" --basetemp "$env:TEMP\pytest-sector-momentum-board-ui-3"` -> `9 passed, 83 deselected`
+  cycle2 `python -m pytest -q tests/test_dashboard_tabs.py -k "all_signals_tab or dashboard_page" --basetemp "$env:TEMP\pytest-sector-momentum-board-tabs-3"` -> `5 passed, 33 deselected`
+  cycle2 `python -m pytest -q tests/test_ui_components.py tests/test_dashboard_tabs.py --basetemp "$env:TEMP\pytest-sector-momentum-board-regression-2"` -> `130 passed`
+  cycle2 post-format `python -m pytest -q tests/test_ui_components.py tests/test_dashboard_tabs.py --basetemp "$env:TEMP\pytest-sector-momentum-board-regression-3"` -> `130 passed`
+  code-review cycle2 -> APPROVE, architectural status CLEAR.
+
+# 2026-05-16 - KR 구성종목 캐시 만료 재발 방지
+
+## Goal
+- KR 구성종목 화면이 24시간 TTL 만료만으로 빈 화면을 표시하지 않게 한다.
+- 일반 렌더링은 라이브 호출을 막는 기존 정책을 유지하되, 마지막 성공 캐시가 있으면 저신뢰 캐시로 표시한다.
+
+## Checklist
+- [x] 구성종목 stale-cache fallback 구현
+- [x] UI 상태 라벨 추가
+- [x] 회귀 테스트 추가
+- [x] focused verification
+
+## Review
+- Result:
+  구성종목 캐시가 24시간 TTL을 넘었더라도 같은 Strong Buy 섹터 조합의 마지막 성공 결과가 있으면 `STALE_CACHE`로 반환한다.
+  일반 화면 렌더링은 여전히 라이브 KRX 호출을 하지 않지만, 만료 캐시가 있으면 빈 화면 대신 결과를 표시한다.
+  강제 갱신 중 KRX/pykrx 호출이 실패해도 마지막 성공 캐시가 있으면 `STALE_CACHE`로 fallback한다.
+  UI 상태 라벨은 `만료 캐시 · 갱신 권장`으로 표시한다.
+- Verification:
+  `python -m py_compile src\data_sources\krx_stock_screening.py src\dashboard\tabs.py tests\test_krx_stock_screening.py` -> passed
+  `python -m pytest -q tests/test_krx_stock_screening.py -k "cache_only or live_failure" --basetemp "$env:TEMP\pytest-kr-screening-stale-cache"` -> `6 passed, 10 deselected`
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "screening_tab" --basetemp "$env:TEMP\pytest-dashboard-screening-stale-cache"` -> `3 passed, 35 deselected`
+  `python -m pytest -q tests/test_krx_stock_screening.py --basetemp "$env:TEMP\pytest-kr-screening-all"` -> `16 passed`
+
+# 2026-05-16 - Autoresearch Sector Momentum Tab Decision Upgrade
+
+## Goal
+- "섹터 모멘텀" 탭이 전체 신호 원장이 아니라 신규 검토, 보유 축소, 변곡 감시를 먼저 답하는 투자 의사결정 화면이 되도록 개선안을 연구한다.
+- 기존 `SectorSignal`과 hybrid momentum 계약을 우선 재사용하고, 검증 전 확률 수치 포장은 피한다.
+
+## Checklist
+- [x] 현재 signals/charts 탭 구현과 `SectorSignal` 필드 확인
+- [x] 기존 momentum method comparison 및 probability/turning-point 연구 문서 확인
+- [x] 외부 섹터 모멘텀/로테이션 근거 확인
+- [x] autoresearch mission/sandbox/report 작성
+- [x] architect validation artifact 작성
+
+## Review
+- Research artifact:
+  `.omx/specs/autoresearch-sector-momentum-tab/report.md`
+- Working conclusion:
+  현재 탭의 병목은 모멘텀 산식 부재가 아니라 의사결정 표면의 우선순위다.
+  1차 개선은 새 모델 없이 기존 overview proxy helper를 재사용해 `신규/증액 검토`, `보유 모니터링`, `보유 축소/주의`, `변곡 감시` 보드를 먼저 보여주는 방향이 적절하다.
+- Validation:
+  Architect review cycle1 -> ITERATE, required existing overview proxy reuse and tighter held Watch semantics.
+  Architect review cycle2 -> ITERATE, required held Watch to remain monitor-by-default and not reduce on `trend_ok == false` alone.
+  Architect review cycle3 -> APPROVED.
+
+# 2026-05-16 - Autopilot Turning-Point Probability Dashboard Phase 1
+
+## Goal
+- 연구 문서의 "변곡점 + 상하방 확률" 방향을 구현 가능한 1차 대시보드 개선으로 반영한다.
+- calibrated probability 대신 명시적 proxy 근거를 기존 overview 후보 카드에 표시한다.
+- canonical action/action_policy는 변경하지 않는다.
+
+## Checklist
+- [x] autopilot context snapshot 작성
+- [x] ralplan PRD/test-spec/plan 작성
+- [x] architect ITERATE 반영 및 critic 승인
+- [x] Ralph 구현
+- [x] focused verification
+- [x] code-review clean gate
+
+## Review
+- Implementation:
+  overview 검토 후보 카드에 `상방`, `하방`, `엣지`, `변곡`, `복합점수`를 고정 순서로 표시한다.
+  값은 calibrated probability가 아니라 deterministic proxy이며, canonical `SectorSignal.action`과 `action_policy`는 변경하지 않았다.
+  `upside_proxy`, `downside_proxy`, `edge_proxy`, `turning_point_state`, bullish/bearish evidence를 candidate projection에 추가했다.
+- Verification:
+  `python -m py_compile src\ui\panels.py tests\test_ui_components.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py -k "overview_review_candidate" --basetemp "$env:TEMP\pytest-turning-point-ui-2"` -> `6 passed, 82 deselected`
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "overview or decision" --basetemp "$env:TEMP\pytest-turning-point-tabs"` -> `5 passed, 32 deselected`
+  `python -m pytest -q tests/test_ui_components.py --basetemp "$env:TEMP\pytest-turning-point-ui-post-deslop"` -> `88 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "overview or decision" --basetemp "$env:TEMP\pytest-turning-point-tabs-post-deslop"` -> `5 passed, 32 deselected`
+  cycle2 `python -m pytest -q tests/test_ui_components.py --basetemp "$env:TEMP\pytest-turning-point-ui-final"` -> `88 passed`
+  cycle2 `python -m pytest -q tests/test_dashboard_tabs.py -k "overview or decision" --basetemp "$env:TEMP\pytest-turning-point-tabs-final"` -> `5 passed, 32 deselected`
+  Ralph architect verification -> APPROVED
+  Code-review cycle1 -> code-reviewer APPROVE, architect WATCH
+  Code-review cycle2 -> code-reviewer APPROVE, architect CLEAR
+- Artifacts:
+  `.omx/context/turning-point-probability-dashboard-20260516T064820Z.md`
+  `.omx/plans/prd-turning-point-probability-dashboard-20260516.md`
+  `.omx/plans/test-spec-turning-point-probability-dashboard-20260516.md`
+  `.omx/plans/ralplan-turning-point-probability-dashboard-20260516.md`
+
+# 2026-05-16 - Turning-Point Probability Dashboard Research
+
+## Goal
+- 섹터 로테이션 대시보드를 "상승 확률이 높은 섹터 매수, 하락 확률이 높은 섹터 축소" 관점으로 재정의한다.
+- 현재 구현의 신호 구조를 확인하고, 변곡점 감지와 상하방 확률 중심의 개선안을 정리한다.
+
+## Checklist
+- [x] 현재 regime, momentum, flow, UI decision surface 확인
+- [x] 섹터 로테이션/모멘텀 외부 근거 확인
+- [x] 개선 프레임워크와 구현 우선순위 문서화
+
+## Review
+- Research artifact:
+  `docs/research/turning-point-probability-dashboard-2026-05-16.md`
+- Verification:
+  로컬 구현 파일과 기존 validation 문서를 읽고, NBER/Fidelity/SSGA/AQR 자료를 교차 확인했다.
+
+# 2026-05-16 - US Dashboard Trade Indicator RALPLAN
+
+## Goal
+- US 대시보드에서 한국 수출 데이터 대신 의미 있는 미국 수출입 지표를 표시하는 구현 계획을 확정한다.
+- KR 수출 지표/섹터 수출 UI는 회귀 없이 보존한다.
+- FRED YoY transform 중복 적용과 US 화면의 한국어 수출 copy 누수를 계획 단계에서 차단한다.
+
+## Checklist
+- [x] 현재 US/KR macro alias, export derivation, UI label 접점 확인
+- [x] FRED US exports/imports/trade balance 후보 지표 확인
+- [x] ralplan 계획서 작성
+- [x] Architect 검토 반영
+- [x] Critic 승인 반영
+
+## Review
+- Plan artifact:
+  `.omx/plans/ralplan-us-trade-indicators-20260516.md`
+- Result:
+  Option A를 실행안으로 확정했다.
+  US는 FRED `BOPTEXP`/`BOPTIMP` 기반 `trade_exports_yoy`/`trade_imports_yoy`를 추가하고, 전용 `trade_indicators` payload로 표시한다.
+  KR의 `export_amount -> pct_change(12)` 경로와 섹터 수출 UI는 유지한다.
+  섹터 수출 UI capability는 활성 macro config에 존재하는 sector `export_series_alias` 기준으로만 산정한다.
+- Verification:
+  Architect review -> ITERATE, capability rule 강화 요구
+  Critic review -> APPROVE after revision
+
+# 2026-05-16 - US Dashboard Trade Indicator Ralph Implementation
+
+## Goal
+- 승인된 ralplan에 따라 US 대시보드에 FRED 기반 수출입 trade pulse를 추가한다.
+- KR 수출 전년비와 섹터 수출 UI는 기존 의미로 보존한다.
+- US 화면에서는 한국식 섹터 수출 copy와 double-transform 위험을 제거한다.
+
+## Checklist
+- [x] US FRED trade aliases 추가
+- [x] KR export growth와 US trade indicators 분리
+- [x] sector export capability를 active `export_series_alias` 기준으로 계산
+- [x] US/KR hero, overview status, sector export UI gating 반영
+- [x] targeted tests 추가
+- [x] full regression, architect verification, deslop pass 완료
+
+## Review
+- Changed files:
+  `config/macro_series_us.yml`
+  `src/macro/series_utils.py`
+  `src/dashboard/types.py`
+  `app.py`
+  `src/ui/copy.py`
+  `src/ui/panels.py`
+  `src/dashboard/tabs.py`
+  `tests/test_market_registry.py`
+  `tests/test_fred.py`
+  `tests/test_macro_series_utils.py`
+  `tests/test_ui_components.py`
+  `tests/test_integration.py`
+- Result:
+  US macro config에 `trade_exports_yoy`, `trade_imports_yoy`, `trade_balance`를 추가했다.
+  US trade 값은 `trade_indicators`로 전달하고, `export_growth_val`은 KR `export_amount` level series의 12개월 YoY 계산에만 사용한다.
+  섹터 수출 UI는 active macro config에 존재하는 sector `export_series_alias`가 있을 때만 표시한다.
+  US overview/hero는 `US Exports YoY`, `US Imports YoY`, `Trade pulse` copy를 사용하며, 섹터 수출 표/차트/sort는 capability가 없으면 숨긴다.
+- Verification:
+  `python -m py_compile app.py src\macro\series_utils.py src\dashboard\types.py src\dashboard\tabs.py src\ui\copy.py src\ui\panels.py tests\test_market_registry.py tests\test_fred.py tests\test_macro_series_utils.py tests\test_ui_components.py tests\test_integration.py` -> passed
+  `python -m pytest -q tests/test_market_registry.py tests/test_fred.py tests/test_macro_series_utils.py tests/test_ui_components.py tests/test_dashboard_tabs.py --basetemp=%TEMP%\pytest-us-trade-post-deslop-affected` -> `134 passed`
+  `python -m pytest -q --basetemp=%TEMP%\pytest-us-trade-post-deslop-full` -> `625 passed`
+  Architect verification -> APPROVED
+  Deslop pass -> no Ralph-owned masking fallback or cleanup edits needed; post-deslop regression passed.
+
+# 2026-05-13 - Chart Readability Improvements
+
+## Goal
+- 섹터 상대강도와 섹터별 수출 YoY 차트에서 섹터 구분을 한눈에 하게 한다.
+- 월별 데이터 포인트가 어느 월인지 X축과 hover에서 바로 보이게 한다.
+- 데이터, 산식, 외부 라이브러리는 변경하지 않는다.
+
+## Checklist
+- [x] 현재 Plotly 차트 구성과 테스트 경계 확인
+- [x] 선 끝 라벨, 월 눈금, hover 기준 개선
+- [x] 회귀 테스트와 compile 검증
+- [x] 결과 기록
+
+## Review
+- Changed files:
+  `src/ui/panels.py`
+  `tests/test_ui_components.py`
+  `tasks/todo.md`
+- Result:
+  섹터 상대강도 차트와 섹터별 수출 YoY 차트에 선 끝 직접 라벨을 추가했다.
+  X축은 월 단위 눈금(`%b\n%Y`, `M1`)으로 고정했고, hover는 같은 X축 위치의 series를 한 번에 비교하는 `x unified`로 바꿨다.
+  상대강도 차트는 기준값 1.0, 수출 YoY 차트는 0% 기준선을 추가했다.
+  수출 YoY 차트의 월 index는 timestamp로 변환해 월별 포인트 위치가 명확하게 보이도록 했다.
+  끝 라벨이 가까울 때는 yshift를 적용해 겹침을 줄인다.
+- Verification:
+  `python -m py_compile src\ui\panels.py tests\test_ui_components.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py::test_build_sector_export_trend_figure_renders_monthly_series tests/test_ui_components.py::test_build_overview_trend_figure_labels_line_ends_and_month_ticks --basetemp=.pytest-tmp-chart-readability-focused-2` -> `2 passed`
+  `python -m pytest -q tests/test_ui_components.py --basetemp=.pytest-tmp-chart-readability-ui-2` -> `79 passed`
+  `git diff --check -- src/ui/panels.py tests/test_ui_components.py tasks/todo.md` -> no whitespace errors; LF/CRLF warnings only.
+
+# 2026-05-13 - Sector Rotation Review Candidate First Screen
+
+## Goal
+- 기존 overview 첫 화면에서 사용자가 빠르게 검토할 섹터 1~3개와 이유를 확인하게 한다.
+- 데이터, 점수 산식, 페이지, 외부 라이브러리, 이미지 에셋은 변경하지 않는다.
+- 직접 매수 권유가 아닌 `검토 후보` 리서치 도구 톤을 유지한다.
+
+## Checklist
+- [x] 기존 overview 후보/섹터 frame과 decision copy 재사용 경계 확인
+- [x] `검토 후보` 후보 데이터 helper와 pure renderer 추가
+- [x] 모바일 top-three strip 중복 제거 또는 동일 후보 renderer로 통합
+- [x] scoped CSS와 copy/test guardrail 추가
+- [x] focused tests, compile, smoke/visual 검증
+- [x] architect verification, deslop, post-deslop regression
+- [x] 결과 기록
+
+## Review
+- Changed files:
+  `src/ui/panels.py`
+  `src/ui/css.py`
+  `tests/test_ui_components.py`
+  `tests/test_ui_theme.py`
+  `tasks/todo.md`
+- Result:
+  overview 첫 화면에 `검토 후보` 섹션을 추가했다.
+  후보는 기존 overview sector frame의 기본 `모멘텀 점수` 정렬을 재사용하고, `N/A`는 제외하며 최대 3개만 렌더링한다.
+  후보 카드는 기존 decision copy/reason/invalidation을 재사용하고, renderer는 markdown 출력만 수행한다.
+  모바일은 기존 top-three strip 대신 같은 candidate renderer를 compact 모드로 사용한다.
+- Scope guard:
+  데이터 소스, 점수 산식, 페이지 구조, 외부 라이브러리, 이미지 에셋은 변경하지 않았다.
+  export 관련 diff는 이 Ralph lane 이전의 기존 worktree 변경으로 남겨두었다.
+- Deslop:
+  `.overview-mobile-decision-strip*`와 `.overview-decision-tile*` 죽은 CSS를 제거하고 theme selector smoke test를 새 `.overview-review-candidates` 계약으로 갱신했다.
+- Verification:
+  `python -m py_compile app.py src\ui\panels.py src\ui\css.py src\ui\copy.py src\dashboard\tabs.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py::test_build_overview_review_candidates_uses_default_momentum_order_and_limit tests/test_ui_components.py::test_render_overview_review_candidates_renders_reasons_and_guardrail_copy tests/test_ui_components.py::test_render_overview_review_candidates_empty_state tests/test_ui_components.py::test_render_overview_mobile_decision_strip_uses_review_candidate_markup --basetemp=.pytest-tmp-sector-review-candidates-focused-post` -> `4 passed`
+  `python -m pytest -q tests/test_ui_components.py tests/test_ui_copy.py tests/test_ui_contrast.py tests/test_ui_theme.py --basetemp=.pytest-tmp-sector-review-candidates-ui-post2` -> `107 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py --basetemp=.pytest-tmp-sector-review-candidates-dashboard-post2` -> `37 passed`
+  `git diff --check -- src/ui/panels.py src/ui/css.py tests/test_ui_components.py tests/test_ui_theme.py tasks/todo.md` -> no whitespace errors; LF/CRLF warnings only.
+- Visual smoke:
+  `.omx/artifacts/sector-review-candidates-desktop-post-8514.png`
+  `.omx/artifacts/sector-review-candidates-mobile-post-8515.png`
+  Desktop and mobile screenshots show 3 `검토 후보` cards without visible clipping or overlap.
+- Architect verification:
+  Approved with WATCH status.
+  Candidate implementation satisfied ordering, N/A exclusion, max-3, purity, mobile semantics, and guardrails.
+
+# 2026-05-13 - Representative ETF Mapping Overlay
+
+## Goal
+- 동적 KRX 섹터 유니버스가 `sector_map.yml`의 정적 ETF 매핑보다 넓을 때 대표 ETF가 비어 보이는 문제를 줄인다.
+- 국면-섹터 배정 권한은 `config/sector_map.yml`에 남기고, 실행 참고 ETF는 생성 오버레이로 보완한다.
+
+## Checklist
+- [x] 대표 ETF 매핑 누락 원인 확인
+- [x] 원본 sector map과 생성 ETF overlay 병합 경로 추가
+- [x] KRX 건설/증권/정보기술 ETF overlay 추가
+- [x] focused tests 및 compile 검증
+- [x] 결과 기록
+
+## Review
+- Changed files:
+  `src/data_sources/sector_etf_mapping.py`
+  `src/dashboard/tabs.py`
+  `data/curated/sector_etf_map.generated.yml`
+  `tests/test_sector_etf_mapping.py`
+  `tasks/todo.md`
+- Result:
+  `sector_map.yml`은 macro regime authority로 유지하고, 대표 ETF 실행 참고는 generated overlay를 병합해 보완한다.
+  명시적 `sector_map.yml` ETF 매핑이 있으면 원본 설정이 우선한다.
+  현재 overlay는 `5052 KRX 건설`, `5054 KRX 증권`, `5064 KRX 정보기술`을 채운다.
+- Effective map check:
+  `5052 -> 117700 KODEX 건설`
+  `5054 -> 102970 KODEX 증권 / 157500 TIGER 증권`
+  `5064 -> 266370 KODEX IT`
+- Verification:
+  `python -m py_compile src\data_sources\sector_etf_mapping.py src\dashboard\tabs.py tests\test_sector_etf_mapping.py` -> passed
+  `python -m pytest -q tests/test_sector_etf_mapping.py tests/test_dashboard_tabs.py::test_render_screening_tab_renders_representative_etf_context tests/test_dashboard_tabs.py::test_render_screening_tab_initial_render_uses_cache_only_loaders tests/test_dashboard_tabs.py::test_render_screening_tab_refresh_allows_live_loaders --basetemp=.pytest-tmp-sector-etf-map` -> `7 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py tests/test_sector_etf_mapping.py --basetemp=.pytest-tmp-sector-etf-map-full` -> `41 passed`
+
+# 2026-05-12 - Collection Completion Rate Semantics
+
+## Goal
+- 매크로/수급 데이터가 존재하는데 완료율이 0%로 보이는 문제를 고친다.
+- 매크로 완료율은 alias 완주 개수가 아니라 요청 월 x enabled alias 셀 커버리지로 계산한다.
+- 수급/시장 데이터는 요청 카운터가 없더라도 저장행수가 있으면 0% 대신 부분수집으로 보이게 한다.
+
+## Checklist
+- [x] 기존 완료율 산식과 0% 원인 확인
+- [x] 매크로 완료율 산식 변경
+- [x] 요청 카운터 없는 저장 데이터 fallback 변경
+- [x] UI 주의 문구와 회귀 테스트 갱신
+- [x] focused tests 및 compile 검증
+- [x] 결과 기록
+
+## Review
+- Changed files:
+  `src/data_sources/warehouse.py`
+  `src/dashboard/tabs.py`
+  `tests/test_warehouse_cli.py`
+  `tests/test_dashboard_tabs.py`
+  `tasks/todo.md`
+- Result:
+  매크로 완료율을 `완주 alias 수 / enabled alias 수`에서 `수집된 alias-month 셀 수 / 요청 alias-month 셀 수`로 변경했다.
+  따라서 데이터가 존재하는 KOSIS가 0%로 찍히지 않고 현재 로컬 warehouse 기준 79.2%로 표시된다.
+  ECOS도 같은 기준으로 98.6%로 표시된다.
+  요청 카운터가 없는 수급 데이터는 저장행수가 있으면 완료율 0% 대신 `부분 수집 데이터 있음 (n건)`으로 표시한다.
+- Local output check:
+  현재 요약 표는 KOSIS `요청 범위 일부 미충족 (79.2%)`, ECOS `요청 범위 일부 미충족 (98.6%)`, 수급데이터 `부분 수집 데이터 있음 (2,871건)`으로 표시된다.
+- Verification:
+  `python -m py_compile src\data_sources\warehouse.py src\dashboard\tabs.py tests\test_warehouse_cli.py tests\test_dashboard_tabs.py` -> passed
+  `python -m pytest -q tests/test_dashboard_tabs.py tests/test_warehouse_cli.py --basetemp=.pytest-tmp-completion-semantics-full` -> `54 passed`
+  `git diff --check -- src/dashboard/tabs.py src/data_sources/warehouse.py tests/test_dashboard_tabs.py tests/test_warehouse_cli.py tasks/todo.md` -> passed with line-ending warnings only
+
+# 2026-05-12 - Data Collection History Redesign
+
+## Goal
+- 데이터 수집 이력 화면을 최신 갱신 시점, 실제 보유 기간, 실패 이유 중심으로 재구성한다.
+- 저장행수/완료율 중심의 진단 테이블은 상세 이력으로 낮추고, 운영자가 한눈에 상태를 판단하게 한다.
+- 기존 warehouse 기록/캐시 경로는 유지하고 UI 표시 모델만 개선한다.
+
+## Checklist
+- [x] 기존 이력 화면과 warehouse 상태/이력 필드 확인
+- [x] 데이터셋별 실제 보유 기간 조회 helper 추가
+- [x] 최신 갱신 요약 테이블 추가
+- [x] 실패/주의 사유를 간결한 문장으로 정리
+- [x] 기존 최근 이력 테이블을 상세 로그로 유지
+- [x] focused tests 및 compile 검증
+- [x] 결과와 남은 리스크 기록
+
+## Review
+- Changed files:
+  `src/data_sources/warehouse.py`
+  `src/dashboard/tabs.py`
+  `tests/test_warehouse_cli.py`
+  `tests/test_dashboard_tabs.py`
+  `tasks/todo.md`
+- Result:
+  데이터 수집 이력 화면의 첫 표를 최신 갱신 요약으로 재구성했다.
+  이제 `마지막 갱신`, `보유기간`, `최근 요청`, `실패/주의`, `provider`, `저장행수`를 한 줄에서 확인한다.
+  매크로데이터는 ECOS/KOSIS provider별 최신 행으로 분리해 완료율 0.0%/9.1% 같은 차이가 한눈에 보이게 했다.
+  기존 상세 이력은 `최근 수집 실행 로그`로 이름을 바꿔 아래에 유지했다.
+- Local output check:
+  현재 warehouse 기준 요약은 시장데이터 2016-03-08~2026-05-11, KOSIS 2016-03~2026-04, ECOS 2016-03~2026-05, 수급데이터 2025-12-11~2026-04-21로 표시된다.
+- Verification:
+  `python -m py_compile src\dashboard\tabs.py src\data_sources\warehouse.py tests\test_dashboard_tabs.py tests\test_warehouse_cli.py` -> passed
+  `python -m pytest -q tests/test_dashboard_tabs.py tests/test_warehouse_cli.py --basetemp=.pytest-tmp-monitoring-redesign-full2` -> `52 passed`
+  `git diff --check -- src/dashboard/tabs.py src/data_sources/warehouse.py tests/test_dashboard_tabs.py tests/test_warehouse_cli.py tasks/todo.md` -> passed with line-ending warnings only
+- Remaining risks:
+  실제 provider API 실패 원인은 warehouse에 저장된 `failed_codes`/`abort_reason` 범위 안에서만 표시된다.
+
+# 2026-05-12 - Auto Export Visibility Fix
+
+## Goal
+- 자동차 수출 데이터가 캐시에 있어도 화면에서 독립적으로 인식되지 않는 문제를 고친다.
+- `KOSPI200 경기소비재`에 연결된 `export_auto`가 자동차 수출 기준임을 UI에서 명확히 보여준다.
+- 월별 수출 차트는 현재 visible signal에 없는 수출 품목도 빠뜨리지 않는다.
+
+## Checklist
+- [x] 기존 수출 UI 표시 경계 확인
+- [x] 섹터 테이블에 수출 기준 라벨 표시
+- [x] 월별 수출 차트에 모든 수출 시계열 포함
+- [x] 자동차 수출 표시 회귀 테스트 추가
+- [x] focused tests 및 compile 검증
+- [x] 결과와 남은 리스크 기록
+
+## Review
+- Changed files:
+  `src/ui/panels.py`
+  `src/ui/css.py`
+  `tests/test_ui_components.py`
+  `tasks/todo.md`
+  `tasks/lessons.md`
+- Fix:
+  자동차 수출은 기존처럼 `KOSPI200 경기소비재`의 export series로 유지하되, 섹터 테이블의 섹터명 아래에 `수출 기준: 자동차 수출` 보조 라벨을 표시한다.
+  월별 수출 YoY 차트는 현재 signal에 있는 섹터를 먼저 그린 뒤, signal에 없는 export history도 뒤에 추가해 자동차 수출 라인이 빠지지 않게 했다.
+  차트 trace 이름은 `자동차 수출`, `반도체 수출`처럼 품목 기준으로 표시한다.
+- Verification:
+  `python -m py_compile src\ui\panels.py src\ui\css.py tests\test_ui_components.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py --basetemp=.pytest-tmp-auto-export-visibility-ui` -> `73 passed`
+  `git diff --check -- src/ui/panels.py src/ui/css.py tests/test_ui_components.py tasks/todo.md` -> passed with line-ending warnings only
+
+# 2026-05-12 - Autopilot Sector Export Trends Dashboard
+
+## Goal
+- 한국 전체 수출 전년비를 넘어 주요 섹터별 수출 동향을 일반 대시보드에서 확인할 수 있게 한다.
+- 기존 ECOS macro warehouse/cache 경로를 재사용한다.
+- 섹터 액션 산식은 바꾸지 않고 보조 진단 지표로만 표시한다.
+
+## Checklist
+- [x] Autopilot context/PRD/test-spec 산출물 작성
+- [x] ECOS 품목별 수출금액지수 series alias 추가
+- [x] `sector_map.yml` 섹터별 export alias 매핑 추가
+- [x] 앱에서 섹터별 12개월 수출 YoY 계산
+- [x] 일반 대시보드 섹터 테이블에 `수출 YoY` 열 추가
+- [x] 일반 대시보드에 섹터별 월별 수출 YoY 추이 차트 추가
+- [x] macro warehouse 캐시 force refresh로 새 alias 적재 확인
+- [x] focused UI/macro tests 및 compile/diff 검증
+- [x] code-review gate 기록
+
+## Artifacts
+- Context: `.omx/context/sector-export-trends-dashboard-20260512T120441Z.md`
+- PRD: `.omx/plans/prd-sector-export-trends-dashboard.md`
+- Test spec: `.omx/plans/test-spec-sector-export-trends-dashboard.md`
+
+## Review
+- Changed files:
+  `config/macro_series.yml`
+  `config/sector_map.yml`
+  `src/data_sources/ecos.py`
+  `app.py`
+  `src/dashboard/types.py`
+  `src/ui/panels.py`
+  `tests/test_ui_components.py`
+  plus prior aggregate export display files from the preceding export task.
+- Result:
+  주요 섹터 수출금액지수 aliases를 추가했다:
+  `export_it`, `export_semiconductor`, `export_chemicals`, `export_steel`, `export_auto`, `export_machinery`, `export_pharma`.
+  일반 대시보드 섹터 테이블에 `수출 YoY`가 표시되고, 정렬 기준에도 `수출 YoY`가 추가된다.
+  우측 패널에는 최근 24개월 섹터별 `수출 YoY 월별 추이` 라인 차트가 추가된다.
+- Cache refresh evidence:
+  `sync_macro_warehouse(..., reason="manual_sector_export_trends_refresh", force=True)` -> `LIVE`
+  latest period: `2026-03`
+  alias rows: each selected export alias `119`
+  latest YoY sample:
+  `export_semiconductor=155.2638%`, `export_it=121.642%`, `export_chemicals=7.5128%`, `export_steel=1.0587%`, `export_auto=1.1612%`, `export_machinery=-0.7837%`, `export_pharma=0.9169%`
+- Verification:
+  `python -m py_compile app.py src\ui\panels.py src\dashboard\types.py src\data_sources\ecos.py tests\test_ui_components.py tests\test_dashboard_tabs.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py tests/test_dashboard_tabs.py --basetemp=.pytest-tmp-sector-export-ui` -> `107 passed`
+  `python -m pytest -q tests/test_ui_components.py tests/test_dashboard_tabs.py --basetemp=.pytest-tmp-monthly-export-ui` -> `108 passed`
+  `python -m pytest -q tests/test_ecos_kosis_api_handling.py tests/test_macro_sync.py --basetemp=.pytest-tmp-sector-export-macro` -> `20 passed`
+  `python -m pytest -q tests/test_ecos_kosis_api_handling.py tests/test_macro_sync.py --basetemp=.pytest-tmp-monthly-export-macro` -> `20 passed`
+  `git diff --check` -> passed with line-ending warnings only
+- Code review:
+  Recommendation `APPROVE`; architectural status `CLEAR`.
+  No new provider dependency was introduced.
+  Scoring/action semantics were not changed.
+
+# 2026-05-12 - Autoresearch Korean Export Dashboard Signal
+
+## Goal
+- 한국 수출 전년비 데이터를 기존 매크로 데이터 파이프라인에 포함한다.
+- 일반 대시보드 화면에서 의사결정에 바로 보이도록 노출한다.
+- 새 데이터 소스는 기존 KOSIS OpenAPI/KOSIS warehouse 경로를 재사용해 캐시 정책을 깨지 않는다.
+
+## Checklist
+- [x] 기존 KOSIS `export_growth` 설정과 매크로 캐시 경로 확인
+- [x] 실제 호출 가능한 ECOS 수출금액 series로 전환
+- [x] 최신 수출 전년비 값을 대시보드 표시 모델에 연결
+- [x] UI copy와 컴포넌트 테스트 갱신
+- [x] autoresearch 산출물 작성
+- [x] focused 테스트와 정적 검증 실행
+
+## Review
+- Changed files:
+  `config/macro_series.yml`
+  `src/data_sources/ecos.py`
+  `src/data_sources/kosis.py`
+  `app.py`
+  `src/dashboard/types.py`
+  `src/dashboard/tabs.py`
+  `src/ui/copy.py`
+  `src/ui/panels.py`
+  `tests/test_dashboard_tabs.py`
+  `tests/test_ui_components.py`
+  `tasks/todo.md`
+- Output artifact:
+  `.omx/specs/autoresearch-korean-export-dashboard/report.md`
+- Completion artifact:
+  `.omx/specs/autoresearch-korean-export-dashboard/result.json`
+- Result:
+  기존 KOSIS `export_growth` 후보는 실제 호출에서 통계표 오류가 나서 비활성 상태로 유지했다.
+  대신 한국은행 ECOS `901Y118/T002` 수출금액을 `export_amount`로 매크로 캐시에 추가하고, 앱 표시 단계에서 12개월 전년비를 계산해 일반 대시보드 시장/조회 카드와 의사결정 히어로에 연결했다.
+  ECOS API key 또는 최신 캐시가 없으면 기존 macro fallback 정책에 따라 값은 `N/A` 또는 미표시될 수 있다.
+- Cache refresh:
+  `sync_macro_warehouse(..., market="KR", reason="manual_export_amount_refresh", force=True)` -> `LIVE`
+  warehouse `export_amount` rows: `119`
+  latest period: `2026-03`
+  latest YoY: `49.19061991718805%`
+- Verification:
+  `python -m py_compile app.py src\dashboard\tabs.py src\ui\panels.py src\ui\copy.py src\dashboard\types.py src\data_sources\ecos.py src\data_sources\kosis.py tests\test_dashboard_tabs.py tests\test_ui_components.py` -> passed
+  `python -m pytest -q tests/test_dashboard_tabs.py::test_render_decision_first_sections_orders_main_canvas tests/test_ui_components.py::test_render_decision_hero_renders_regime_and_provisional_badge` -> `2 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py::test_render_decision_first_sections_orders_main_canvas tests/test_ui_components.py::test_render_decision_hero_renders_regime_and_provisional_badge tests/test_ui_components.py::test_overview_market_cards_include_export_growth_status --basetemp=.pytest-tmp-export-smoke` -> `3 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py tests/test_ui_components.py --basetemp=.pytest-tmp-export-ui` -> `105 passed`
+  `python -m pytest -q tests/test_ecos_kosis_api_handling.py tests/test_macro_sync.py --basetemp=.pytest-tmp-export-macro` -> `20 passed`
+  `git diff --check` -> passed with line-ending warnings only
+- Note:
+  First broad UI/macro test attempt ran in parallel against the same `.pytest-tmp` DuckDB path and failed during Windows temp cleanup.
+  Re-running the same suites sequentially with isolated `--basetemp` directories passed.
+
+# 2026-05-12 - Autoresearch Investor Flow Importance
+
+## Goal
+- 섹터 로테이션 탐색에서 투자자 수급을 핵심 신호로 볼지, 보조 신호로 볼지 판단한다.
+- 학술/시장구조 근거와 현재 repo 구현 근거를 분리해 기록한다.
+
+## Checklist
+- [x] repo의 기존 수급 overlay 설계 확인
+- [x] 섹터/업종 모멘텀 근거 확인
+- [x] ETF/펀드 수급의 가격 압력 및 반전 근거 확인
+- [x] 결론과 운용 가드레일 작성
+- [x] autoresearch completion artifact 작성
+
+## Review
+- Output artifact:
+  `.omx/specs/autoresearch-investor-flow-sector-rotation/report.md`
+- Project docs copy:
+  `docs/research/investor-flow-sector-rotation-2026-05-12.md`
+- Completion artifact:
+  `.omx/specs/autoresearch-investor-flow-sector-rotation/result.json`
+- Conclusion:
+  투자자 수급은 섹터 로테이션에서 중요하지만 1차 결정 변수가 아니라 확인/리스크 조정 변수로 두는 편이 타당하다.
+  기본 랭킹은 상대강도, 추세, 변동성, 매크로 국면으로 만들고 수급은 conviction 조정, 과열/반전 경고, 진입 타이밍 보정에 쓴다.
+  특히 KR 수급은 데이터 소스가 비공식/운영상 취약하므로 최종 액션을 단독으로 뒤집는 신호가 되면 안 된다.
+
 # 2026-05-11 - Incremental Data Refresh
 
 ## Goal
@@ -814,3 +1460,492 @@
   `python -m pytest -q tests/test_dashboard_tabs.py::test_render_monitoring_tab_splits_sector_and_ticker_failures tests/test_dashboard_tabs.py::test_render_monitoring_tab_separates_other_collection_errors tests/test_dashboard_tabs.py::test_render_monitoring_tab_keeps_warm_status_when_runtime_status_is_omitted tests/test_dashboard_tabs.py::test_render_monitoring_tab_uses_runtime_flow_snapshot_when_warehouse_history_is_empty tests/test_dashboard_tabs.py::test_render_monitoring_tab_shows_dataset_sample_history` -> `5 passed`
 - Note:
   One attempted pytest command used removed/renamed test ids and ran no tests; it was replaced with the actual current test ids above.
+
+# 2026-05-13 - KR Constituents Refresh Spinner Check
+
+## Goal
+- KR 구성종목 화면의 `데이터 갱신` 버튼이 계속 spinner 상태로 남는 원인을 점검한다.
+- 실제 네트워크 대기 결함인지, 단순 진행률 표시 부족인지 구분한다.
+- 무한 대기를 막는 최소 수정과 회귀 테스트를 적용한다.
+
+## Checklist
+- [x] 구성종목 버튼 렌더링과 live loader 연결 확인
+- [x] pykrx/KRX transport timeout 경로 확인
+- [x] timeout 결함 수정
+- [x] focused pytest 검증
+- [x] 결과 기록
+
+## Review
+- Root cause:
+  KR 구성종목 화면의 `데이터 갱신`은 `load_screened_stocks()`에서 pykrx wrapper 경로를 통해 구성종목과 종목별 OHLCV를 조회한다.
+  그런데 `ensure_pykrx_transport_compat()`가 pykrx `Post.read`/`Get.read`를 공유 `requests.Session`으로 교체하면서 `timeout`을 넘기지 않았다.
+  KRX/pykrx 요청 하나가 응답을 멈추면 Streamlit spinner가 계속 도는 상태로 보일 수 있었다.
+- Fix:
+  pykrx 공유 세션 read 경로에 `PYKRX_SHARED_SESSION_TIMEOUT = 15`를 적용했다.
+  raw KRX `request_krx_data()` 경로처럼 wrapper 호출도 무한 대기하지 않고 실패/예외 경로로 빠질 수 있게 했다.
+- Changed files:
+  `src/data_sources/pykrx_compat.py`
+  `tests/test_pykrx_compat.py`
+  `tasks/todo.md`
+- Verification:
+  `python -m py_compile src\data_sources\pykrx_compat.py tests\test_pykrx_compat.py` -> passed
+  `python -m pytest -q tests/test_pykrx_compat.py --basetemp .pytest-tmp-kr-spinner` -> `17 passed`
+  `python -m pytest -q tests/test_krx_stock_screening.py --basetemp .pytest-tmp-kr-screening` -> `11 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "render_screening_tab" --basetemp .pytest-tmp-kr-tabs` -> `3 passed, 34 deselected`
+  `git diff --check -- src/data_sources/pykrx_compat.py tests/test_pykrx_compat.py` -> passed with line-ending warnings only
+- Note:
+  First pytest attempt without `--basetemp` failed before tests because the existing `.pytest-tmp` directory was locked by Windows/OneDrive permissions.
+
+# 2026-05-13 - KR Constituents Stock OHLCV Cache
+
+## Goal
+- 구성종목 화면의 `데이터 갱신`이 개별 종목 가격을 매번 pykrx로 전량 재조회하지 않게 한다.
+- 개별 주식 OHLCV를 warehouse에 저장하고, 스크리닝은 DB cache-hit를 먼저 사용한다.
+- 스크리닝 가격 구간을 최근 120일에서 최근 1년으로 늘려 200일 이평선 계산이 가능하게 한다.
+
+## Checklist
+- [x] 현재 구성종목 스크리닝 캐시/DB 구조 확인
+- [x] 개별 주식 OHLCV warehouse table/read/upsert 추가
+- [x] 스크리닝 live path를 DB 우선 + 누락분 보충으로 변경
+- [x] 1년 가격 구간과 200DMA 계산 계약 추가
+- [x] focused pytest 및 compile 검증
+- [x] 결과 기록
+
+## Review
+- Root cause:
+  구성종목 스크리닝은 결과 pickle cache만 있었고, 종목별 OHLCV는 매 refresh 때 pykrx에서 직접 조회했다.
+  따라서 개별 종목 가격 데이터가 warehouse에 이미 있어도 스크리닝 조회 병목을 줄이는 구조가 아니었다.
+- Fix:
+  `fact_kr_stock_ohlcv_daily` warehouse table과 read/upsert API를 추가했다.
+  스크리닝 종목별 가격 로더는 warehouse hit를 먼저 사용하고, 200일 이동평균 계산에 필요한 최소 200개 종가와 최신성 조건이 부족할 때만 pykrx live 조회 후 DB에 저장한다.
+  가격 조회 구간은 최근 120일에서 최근 365일로 변경했다.
+  구성종목 화면에 `200DMA↑` 체크 컬럼도 추가해 200일선 상회 여부를 볼 수 있게 했다.
+- Changed files:
+  `src/data_sources/warehouse.py`
+  `src/data_sources/krx_stock_screening.py`
+  `src/dashboard/tabs.py`
+  `tests/test_warehouse_investor_flow.py`
+  `tests/test_krx_stock_screening.py`
+  `tasks/todo.md`
+- Verification:
+  `python -m py_compile src\data_sources\warehouse.py src\data_sources\krx_stock_screening.py src\dashboard\tabs.py tests\test_warehouse_investor_flow.py tests\test_krx_stock_screening.py` -> passed
+  `python -m pytest -q tests/test_warehouse_investor_flow.py tests/test_krx_stock_screening.py --basetemp %TEMP%\pytest-sector-stock-ohlcv-*` -> `20 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "render_screening_tab" --basetemp %TEMP%\pytest-sector-tabs-*` -> `3 passed, 34 deselected`
+  `python -m pytest -q tests/test_warehouse_cli.py::test_ensure_warehouse_schema_is_idempotent tests/test_warehouse_cli.py::test_read_dataset_status_skips_schema_write_when_read_schema_ready tests/test_warehouse_multimarket.py::test_market_and_macro_rows_are_scoped_by_market --basetemp %TEMP%\pytest-sector-warehouse-core-*` -> `3 passed`
+  `git diff --check -- src/data_sources/warehouse.py src/data_sources/krx_stock_screening.py src/dashboard/tabs.py tests/test_warehouse_investor_flow.py tests/test_krx_stock_screening.py tasks/todo.md` -> passed with line-ending warnings only
+- Note:
+  One pytest attempt under the OneDrive repo path failed because OneDrive held a temporary DuckDB file lock.
+  Re-running the same focused tests under `%TEMP%` passed.
+
+# 2026-05-13 - KR Constituents Refresh Progress
+
+## Goal
+- 구성종목 화면에서 `데이터 갱신`을 눌렀을 때 전체 갱신 대상 종목 수와 현재 처리 중인 종목 순번을 표시한다.
+- 초기 화면의 cache-only 로딩은 불필요한 진행률 UI를 띄우지 않는다.
+- 스크리닝 루프 진행 상태를 테스트로 고정한다.
+
+## Checklist
+- [x] 현재 구성종목 refresh UI와 스크리닝 루프 연결 확인
+- [x] 스크리닝 loader에 progress callback 계약 추가
+- [x] Streamlit progress/status 표시 연결
+- [x] focused pytest 및 compile 검증
+- [x] 결과 기록
+
+## Review
+- Fix:
+  `load_screened_stocks()`와 `_fetch_and_score()`에 progress callback 계약을 추가했다.
+  구성종목 갱신 대상 종목을 먼저 산정한 뒤, 각 종목 처리 직전에 `current`, `total`, `ticker`, `sector_name` 이벤트를 보낸다.
+  화면에서는 `데이터 갱신`을 누른 live refresh일 때만 progress bar와 상태 문구를 표시한다.
+  표시 문구는 `갱신 대상 총 N종목 중 M번째 처리 중: 종목 · 섹터` 형태다.
+- Changed files:
+  `src/data_sources/krx_stock_screening.py`
+  `src/dashboard/tabs.py`
+  `tests/test_krx_stock_screening.py`
+  `tests/test_dashboard_tabs.py`
+  `tasks/todo.md`
+- Verification:
+  `python -m py_compile src\data_sources\krx_stock_screening.py src\dashboard\tabs.py tests\test_krx_stock_screening.py tests\test_dashboard_tabs.py` -> passed
+  `python -m pytest -q tests/test_krx_stock_screening.py --basetemp %TEMP%\pytest-sector-progress-screening-*` -> `14 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "render_screening_tab" --basetemp %TEMP%\pytest-sector-progress-tabs-*` -> `3 passed, 34 deselected`
+  `python -m pytest -q tests/test_warehouse_investor_flow.py tests/test_krx_stock_screening.py --basetemp %TEMP%\pytest-sector-progress-stock-ohlcv-*` -> `21 passed`
+  `git diff --check -- src/data_sources/krx_stock_screening.py src/dashboard/tabs.py tests/test_krx_stock_screening.py tests/test_dashboard_tabs.py tasks/todo.md` -> passed with line-ending warnings only
+# 2026-05-13 - Composite Review Candidates Consensus Plan
+
+## Goal
+- 모멘텀 단독 `검토 후보`를 복합점수 기반 후보 랭킹으로 바꾸기 위한 실행 계획을 확정한다.
+- canonical KR action 정책은 그대로 두고, overview 후보 selection/projection만 1차 범위로 제한한다.
+
+## Checklist
+- [x] deep-interview spec 확인
+- [x] 현재 후보 생성, KR action, flow, UI test 근거 확인
+- [x] Planner 초안 작성
+- [x] Architect 검토 반영
+- [x] Critic reject 피드백 반영
+- [x] Architect 재검토 반영
+- [x] Critic 최종 승인
+- [x] PRD/test-spec/ralplan 산출물 저장
+
+## Review
+- Decision:
+  1차 구현은 `SectorSignal.action`, `SectorSignal.action_policy`, `compute_kr_action()`을 바꾸지 않는다.
+  대신 overview `검토 후보`에 candidate-only projection을 두고 `COMPOSITE_REVIEW_CANDIDATE` 정책 메타데이터와 composite score를 표시한다.
+- Artifacts:
+  `.omx/plans/prd-composite-review-candidates-20260513T134500Z.md`
+  `.omx/plans/test-spec-composite-review-candidates-20260513T134500Z.md`
+  `.omx/plans/ralplan-composite-review-candidates-20260513T134500Z.md`
+- Verification:
+  Artifact existence and final critic approval confirmed.
+
+# 2026-05-13 - Composite Review Candidates Ralph Implementation
+
+## Goal
+- overview `검토 후보`를 모멘텀 단독 순서가 아니라 composite review score 순서로 산출한다.
+- canonical `SectorSignal.action`, `action_policy`, `compute_kr_action()` 계약은 변경하지 않는다.
+- 후보 카드에 복합점수, 유형, 모멘텀/매크로/수급 기여도와 약점 신호를 노출한다.
+
+## Checklist
+- [x] Ralph context snapshot 생성
+- [x] 기존 dirty worktree에서 관련 파일 범위 확인
+- [x] composite candidate projection helper 추가
+- [x] overview 후보 builder를 composite score 정렬로 변경
+- [x] 후보 renderer copy와 metric 노출 갱신
+- [x] numeric formula, non-finite guard, policy preservation test 추가
+- [x] focused compile/test 검증
+- [x] architect verification 승인
+- [x] deslop pass 및 post-deslop regression
+
+## Review
+- Changed files:
+  `src/ui/panels.py`
+  `tests/test_ui_components.py`
+  `tasks/todo.md`
+- Result:
+  `_build_overview_review_candidates()`가 eligible signal 전체를 candidate projection으로 점수화한 뒤 `candidate_score desc`, `momentum_score desc`, `sector_name asc` 순서로 정렬하고 `limit`을 적용한다.
+  candidate DTO는 `COMPOSITE_REVIEW_CANDIDATE`, composite/component scores, availability, warnings, canonical `action`/`action_policy` metadata를 포함한다.
+  `SectorSignal`과 KR action 함수/계약은 건드리지 않았다.
+- Deslop:
+  Ralph-owned scope에서 masking fallback은 발견하지 못했다.
+  non-finite guard는 `math.isfinite()`로 고정했고 `inf`/`-inf` regression을 추가했다.
+- Verification:
+  `python -m py_compile src\ui\panels.py tests\test_ui_components.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py -k "overview_review_candidate" --basetemp "$env:TEMP\pytest-composite-review-ui"` -> `5 passed, 73 deselected`
+  `python -m pytest -q tests/test_signals.py tests/test_signal_pipeline_integration.py -k "kr_action or flow or sector_fit or composite" --basetemp "$env:TEMP\pytest-composite-review-signals"` -> `3 passed, 17 deselected`
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "overview or decision" --basetemp "$env:TEMP\pytest-composite-review-tabs"` -> `5 passed, 32 deselected`
+  `git diff --check -- src/ui/panels.py tests/test_ui_components.py tasks/todo.md` -> passed with line-ending warnings only
+  Architect verification retry -> APPROVED
+# 2026-05-15 - KOFIA FreeSIS Dashboard Research
+
+## Goal
+- 금투협 FreeSIS 통계 중 섹터 로테이션 대시보드에 반영할 가치가 높은 지표를 선별한다.
+- 현재 대시보드의 가격/수급/매크로 구조와 충돌하지 않는 적용 위치를 정한다.
+- 구현 전 리스크와 collector spike 범위를 분리한다.
+
+## Checklist
+- [x] FreeSIS 메인 메뉴와 serviceId 후보 추출
+- [x] FreeSIS metadata API 호출 방식 확인
+- [x] 현재 dashboard/data source 구조 확인
+- [x] 대시보드 반영 우선순위와 산출물 작성
+- [x] autoresearch completion artifact 작성
+
+## Review
+- Output:
+  `.omx/specs/autoresearch-kofia-freesis/report.md`
+- Result:
+  FreeSIS는 섹터별 가격/수급이 아니라 KR 시장 유동성, 레버리지, 금리, 펀드 플로우 컨텍스트 보강용으로 반영하는 것이 적합하다.
+  1차 P0 후보는 `증시자금추이`, `신용공여 잔고 추이`, `최종호가수익률`이다.
+  P1 후보는 `일자별 CMA현황`, `기간자금유출입`이다.
+  초기 구현에서는 sector score 산식에 반영하지 않고 overview/context/monitoring에만 표시한다.
+- Verification:
+  FreeSIS 메인 HTML에서 serviceId 61개 추출.
+  `/meta/getSrvData.do` JSON POST 성공.
+  주요 후보 8개 서비스의 `dsGridSQL`, `dsSearch`, `dsListAppDt` 확인.
+  현재 프로젝트의 KR 수급/매크로/warehouse 구조와 배치 경계 확인.
+
+# 2026-05-16 - US Trade Sector Lens Autopilot
+
+## Goal
+- 미국 총량 수출입 데이터를 섹터별 직접 지표로 오해하지 않게 한다.
+- US overview에 총량 수출입과 섹터별 교역 노출도를 결합한 보조 lens를 표시한다.
+- 섹터 점수/액션 산식은 변경하지 않는다.
+
+## Checklist
+- [x] Autopilot context snapshot 생성
+- [x] PRD/test-spec 작성
+- [x] US sector map에 `trade_exposure`/`trade_proxy_label` 추가
+- [x] 총량 trade proxy lens helper 구현
+- [x] US overview에 `미국 수출입 섹터 렌즈` 패널 추가
+- [x] 직접 섹터 데이터가 아닌 `총량 proxy` guardrail copy 추가
+- [x] macro/UI targeted tests 통과
+
+## Review
+- Artifacts:
+  `.omx/context/us-trade-sector-lens-dashboard-20260516T054000Z.md`
+  `.omx/plans/prd-us-trade-sector-lens-dashboard.md`
+  `.omx/plans/test-spec-us-trade-sector-lens-dashboard.md`
+- Verification:
+  `python -m py_compile app.py src\macro\series_utils.py src\dashboard\types.py src\ui\panels.py tests\test_macro_series_utils.py tests\test_ui_components.py` -> passed
+  `python -m pytest -q tests/test_macro_series_utils.py tests/test_ui_components.py` -> `92 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py` -> `37 passed`
+# 2026-05-16 - Dashboard Natural Korean UI Pass
+
+## Goal
+- 대시보드에서 AI 생성물처럼 보이는 과한 pill, 굵은 한글, 과장된 hover/색 대비를 줄인다.
+- 한글 UI는 Pretendard 중심으로 자연스럽게 보이도록 weight, line-height, letter-spacing을 재조정한다.
+- 데이터, 점수 산식, 화면 구조는 유지하고 theme/CSS 체감만 좁게 개선한다.
+
+## Checklist
+- [x] 현재 theme/CSS와 기존 디자인 계약 확인
+- [x] image-taste-frontend 레퍼런스 생성 및 디자인 방향 추출
+- [x] 한글 폰트/토큰/카드/배지 CSS 개선
+- [x] theme/contrast/UI focused tests 실행
+- [x] 결과 기록
+
+## Reference Extraction
+- Direction:
+  조용한 프리미엄 금융 운영 UI.
+  밝은 off-white 배경, 얇은 border, 낮은 그림자, 6-8px radius, 자연스러운 한글 weight를 기준으로 한다.
+- Avoid:
+  과한 uppercase, 큰 pill radius, 과도하게 굵은 카드 제목/숫자, hover lift, AI식 푸른 glow/gradient.
+- Typography:
+  한글 본문/라벨은 Pretendard Local 우선.
+  한글은 자간 0, display도 과한 음수 자간을 피한다.
+  제목은 650-700, 본문은 450-500, caption/badge는 620-650 중심으로 낮춘다.
+
+## Review
+- Changed files:
+  `.streamlit/config.toml`
+  `config/theme.py`
+  `src/ui/css.py`
+  `src/ui/panels.py`
+  `tests/test_ui_theme.py`
+  `tests/test_ui_components.py`
+  `tasks/todo.md`
+- Result:
+  한글 UI font stack에 `SUIT`, `Spoqa Han Sans Neo` fallback을 추가했다.
+  light palette를 조금 더 조용한 finance tone으로 낮추고 muted contrast는 WCAG AA를 유지하도록 보정했다.
+  heading/body/badge/button weight를 낮추고, heading 음수 자간, uppercase 라벨, 큰 pill radius, hover lift를 줄였다.
+  상단 `market context`와 `WARNING` 배지는 각각 `시장 컨텍스트`, `주의`로 바꿨다.
+- Verification:
+  `python -m py_compile src\ui\panels.py tests\test_ui_components.py config\theme.py src\ui\css.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py --basetemp "$env:TEMP\pytest-natural-ko-components-2"` -> `87 passed`
+  `python -m pytest -q tests/test_ui_theme.py tests/test_ui_contrast.py --basetemp "$env:TEMP\pytest-natural-ko-theme-contrast-3"` -> `23 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py tests/test_ui_copy.py tests/test_dashboard_runtime.py --basetemp "$env:TEMP\pytest-natural-ko-tabs-copy-runtime-2"` -> `74 passed`
+  `python scripts\capture_streamlit_screenshot.py --output .omx\artifacts\dashboard-natural-ko-desktop-post.png --port 8513 --debug-port 9233 --url http://127.0.0.1:8513 --width 1440 --height 1024 --timeout 120 --min-text-len 300` -> passed
+  `git diff --check -- .streamlit/config.toml config/theme.py src/ui/css.py src/ui/panels.py tests/test_ui_theme.py tests/test_ui_components.py tasks/todo.md` -> passed with line-ending warnings only
+# 2026-05-16 - KOSPI Overview Daily Return Label Check
+
+## Goal
+- KOSPI overview card percentage가 실제 일간 수익률인지 확인한다.
+- 표시값이 잘못 계산되거나 기간 기준이 불명확하면 좁게 수정한다.
+- 기존 sector/macro 산식은 변경하지 않는다.
+
+## Checklist
+- [x] KOSPI 카드 계산 경로와 최신 캐시 데이터 대조
+- [x] 일간 수익률 기준을 고정하는 regression test 추가
+- [x] 필요한 UI 표시/계산 수정
+- [x] targeted tests 실행
+- [x] 결과 기록
+
+## Review
+- Finding:
+  Overview market card percent is already daily return: latest close / previous observed close - 1.
+  Local cache KOSPI latest two closes are 2026-05-11 `7822.24` and 2026-05-12 `7643.15`, which equals `-2.29%`.
+- Changed:
+  Market card percent now renders as `1D ±x.xx%`.
+  Date-indexed series are sorted before selecting latest/previous values.
+- Verification:
+  `python -m py_compile src\ui\panels.py tests\test_ui_components.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py -k "overview_market_cards" --basetemp "$env:TEMP\pytest-kospi-overview-daily"` -> `4 passed, 85 deselected`
+  `git diff --check -- src\ui\panels.py tests\test_ui_components.py tasks\todo.md` -> passed with line-ending warnings only
+# 2026-05-16 - Overview Sector Table Export YoY De-duplication
+
+## Goal
+- 섹터 모멘텀 표에서 `수출 YoY` 숫자 컬럼을 제거한다.
+- 같은 페이지의 `섹터별 수출 YoY 월별 추이` 차트는 유지한다.
+- 수출 기준 라벨은 차트 해석 보조 정보로 유지하되, 표 정렬 기준에서는 수출 YoY를 제거한다.
+
+## Checklist
+- [x] overview sector table 데이터/렌더링 경로 확인
+- [x] 표의 `수출 YoY` 컬럼과 정렬 옵션 제거
+- [x] 기존 수출 추이 차트 회귀 방지 테스트 조정
+- [x] targeted tests 실행
+- [x] 결과 기록
+
+## Review
+- Changed:
+  `src/ui/panels.py`에서 overview 섹터 표의 `수출 YoY` 값 컬럼과 `수출 YoY` 정렬 옵션을 제거했다.
+  수출 기준 보조 라벨과 `섹터별 수출 YoY 월별 추이` 차트는 유지했다.
+- Tests:
+  `python -m py_compile src\ui\panels.py tests\test_ui_components.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py -k "overview_sector_frame or render_overview_sector_table or sector_export_trend" --basetemp "$env:TEMP\pytest-export-yoy-dedupe"` -> `5 passed, 87 deselected`
+# 2026-05-16 - AI Slop Cleaner Pass
+
+## Goal
+- 프로젝트에 남은 AI slop을 좁은 범위로 제거한다.
+- 기존 user/worktree 변경은 되돌리지 않는다.
+- 동작은 focused regression으로 먼저 잠그고, 작은 중복/침묵 fallback 정리만 수행한다.
+
+## Checklist
+- [x] 기존 lessons, dirty worktree, slop 후보 확인
+- [x] focused baseline test로 behavior lock
+- [x] cleanup plan 작성
+- [x] overview/sector momentum 카드 렌더링 중복 제거
+- [x] cache read fallback 침묵성 줄이기
+- [x] focused verification 및 diff check
+
+## Cleanup Plan
+- Scope:
+  `src/ui/panels.py`, `src/data_sources/krx_stock_screening.py`, 관련 focused tests.
+- Fallback findings:
+  cache read 실패가 `None`으로 조용히 축소되는 경로가 있다. cache는 선택적 boundary라 동작은 보존하되 debug log를 남기는 grounded fail-safe fallback으로 정리한다.
+- Smells:
+  overview 후보 카드와 sector momentum board 카드가 같은 HTML 조립을 반복한다.
+  cache read 예외가 evidence 없이 사라진다.
+- Order:
+  1. 카드 HTML 공통 헬퍼로 duplication 제거.
+  2. cache read 예외에 debug evidence 추가.
+  3. focused tests, compile, diff check 실행.
+
+## Review
+- Changed:
+  `src/ui/panels.py`에서 overview 검토 후보 카드와 섹터 모멘텀 보드 카드 HTML 조립을 `_render_review_candidate_card()`로 통합했다.
+  `src/data_sources/krx_stock_screening.py`에서 screening/ETF context cache read 예외를 완전 침묵시키지 않고 debug log로 evidence를 남기게 했다.
+- Fallback classification:
+  cache read 실패 후 `None` 반환은 선택적 cache boundary의 grounded fail-safe fallback으로 유지했다.
+  masking fallback slop은 발견하지 않았다.
+- Verification:
+  `python -m py_compile src\ui\panels.py src\data_sources\krx_stock_screening.py tests\test_ui_components.py tests\test_krx_stock_screening.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py -k "overview_review_candidate or sector_momentum_decision_board" --basetemp "$env:TEMP\pytest-ai-slop-ui"` -> `9 passed, 83 deselected`
+  `python -m pytest -q tests/test_krx_stock_screening.py -k "representative_etf_context or cache_only or live_failure" --basetemp "$env:TEMP\pytest-ai-slop-screening"` -> `6 passed, 10 deselected`
+  `python -m pytest -q tests/test_ui_components.py tests/test_krx_stock_screening.py tests/test_sector_etf_mapping.py --basetemp "$env:TEMP\pytest-ai-slop-final"` -> `112 passed`
+  `git diff --check -- src/ui/panels.py src/data_sources/krx_stock_screening.py tasks/todo.md` -> passed with LF/CRLF warnings only
+# Overview 매수/매도 검토 후보 동시 표시
+
+## 목표
+
+- overview 대시보드의 검토 후보 영역에서 매수 검토 후보와 매도 검토 후보를 함께 볼 수 있게 한다.
+
+## 계획
+
+- [x] 현재 overview 후보 산출/렌더링 경로 확인
+- [x] Autopilot context/PRD/test-spec/ralplan 산출물 작성
+- [x] 기존 composite projection을 보존한 매수/매도 그룹 계층 추가
+- [x] overview 호출부를 그룹 렌더링으로 전환
+- [x] 그룹 산출 및 렌더링 회귀 테스트 추가
+- [x] py_compile 및 targeted pytest 검증
+
+## 리뷰
+
+- 변경 파일:
+  - `src/ui/panels.py`
+  - `tests/test_ui_components.py`
+  - `.omx/context/overview-buy-sell-review-candidates-20260516T225051Z.md`
+  - `.omx/plans/prd-overview-buy-sell-review-candidates-20260516.md`
+  - `.omx/plans/test-spec-overview-buy-sell-review-candidates-20260516.md`
+  - `.omx/plans/ralplan-overview-buy-sell-review-candidates-20260516.md`
+- 검증:
+  - `python -m py_compile src\ui\panels.py tests\test_ui_components.py` -> passed
+  - `python -m pytest -q tests/test_ui_components.py -k "overview_review_candidate" --basetemp "$env:TEMP\pytest-overview-buy-sell-candidates"` -> `8 passed, 87 deselected`
+  - `python -m pytest -q tests/test_dashboard_tabs.py -k "overview or decision" --basetemp "$env:TEMP\pytest-overview-buy-sell-tabs"` -> `6 passed, 33 deselected`
+  - WATCH 보완 후 `python -m pytest -q tests/test_ui_components.py -k "overview_review_candidate" --basetemp "$env:TEMP\pytest-overview-buy-sell-candidates-2"` -> `9 passed, 87 deselected`
+  - WATCH 보완 후 `python -m pytest -q tests/test_dashboard_tabs.py -k "overview or decision" --basetemp "$env:TEMP\pytest-overview-buy-sell-tabs-2"` -> `6 passed, 33 deselected`
+  - Follow-up code review -> `APPROVE`
+  - Follow-up architecture review -> `CLEAR`
+- 남은 리스크:
+  - 전체 테스트는 실행하지 않았다. 현재 worktree에 기존 변경이 많아 이번 변경 범위는 targeted 검증으로 제한했다.
+  - `omx state write`는 기존 `ralph/autoresearch/ralplan` 활성 상태와 충돌해 Autopilot 상태 파일 갱신이 차단됐다.
+# 2026-05-16 - Autoresearch Thematic Sector Mapping
+
+## Goal
+- 전력, 조선, 원자력, 로봇, 방산, 우주항공, 화장품 같은 테마형 섹터 구분이 외부에서 이미 쓰이는지 확인한다.
+- 각 구분에 대해 주가정보를 가져올 수 있는 현실적인 데이터 경로를 판정한다.
+
+## Checklist
+- [x] 외부 분류/테마 지수 체계 조사
+- [x] 국내 시장에서 해당 테마별 매핑 가능성 판정
+- [x] 주가 데이터 수집 가능 경로 판정
+- [x] autoresearch 산출물과 completion artifact 작성
+
+## Review
+- Research artifact:
+  `.omx/specs/autoresearch-thematic-sector-mapping/report.md`
+- Conclusion:
+  요청한 구분은 하나의 공통 표준 섹터 체계라기보다 `WICS/GICS/FICS 산업분류`와 `FnGuide/iSelect/DeepSearch 테마지수`를 결합해 매핑하는 것이 맞다.
+  조선, 방산/우주항공, 화장품은 표준 산업분류 anchor가 강하고, 원자력/로봇/AI전력은 테마지수/ETF proxy 성격이 강하다.
+- Price feasibility:
+  `pykrx.stock.get_market_ohlcv("20260512", "20260516", code)`로 대표 ETF 14개 코드의 최근 OHLCV 반환을 확인했다.
+  KRX index finder는 125개 공식 rows를 반환했지만 요청 테마명 직접 매칭은 없었다.
+- Completion artifact:
+  `.omx/specs/autoresearch-thematic-sector-mapping/result.json`
+
+# 2026-05-16 - Ralplan Thematic Sector Lens Implementation
+
+## Goal
+- autoresearch 결과를 구현 가능한 계획으로 확정한다.
+- 기존 macro-regime 섹터 권위를 보존하면서 별도 theme lens를 추가하는 실행 범위를 정한다.
+- 정상 렌더 cache-only와 명시 refresh live-fetch 경계를 계획 단계에서 고정한다.
+
+## Checklist
+- [x] autoresearch 상태 정리 및 context snapshot 작성
+- [x] PRD 작성
+- [x] test spec 작성
+- [x] ralplan 작성
+- [x] Architect ITERATE 반영
+- [x] Architect 승인
+- [x] Critic 승인
+
+## Review
+- Plan artifacts:
+  `.omx/context/thematic-sector-lens-20260516T141849Z.md`
+  `.omx/plans/prd-thematic-sector-lens-20260516.md`
+  `.omx/plans/test-spec-thematic-sector-lens-20260516.md`
+  `.omx/plans/ralplan-thematic-sector-lens-20260516.md`
+- Decision:
+  `config/sector_map.yml`은 canonical macro-regime authority로 유지한다.
+  전력/조선/원자력/로봇/방산/우주항공/화장품은 별도 KR theme lens로 추가한다.
+  phase 1 가격 데이터는 representative ETF OHLCV proxy를 사용한다.
+- Key guardrails:
+  normal render는 warehouse `read_stock_ohlcv()` 기반 cache-only.
+  live pykrx ETF OHLCV fetch는 panel-local 또는 별도 runtime refresh에서만 수행한다.
+  cache invalidation은 `config/theme_lens.yml` artifact + warehouse artifact token 기준으로 명시한다.
+- Validation:
+  Architect cycle1 -> ITERATE: refresh/cache boundary under-specified.
+  Architect cycle2 -> APPROVE.
+  Critic -> APPROVE.
+
+# 2026-05-16 - Ralph Thematic Sector Lens Implementation
+
+## Goal
+- 전력, 조선, 원자력, 로봇, 방산, 우주항공, 화장품을 별도 KR theme lens로 구현한다.
+- 기존 `config/sector_map.yml` macro-regime authority와 canonical sector action을 변경하지 않는다.
+- 정상 렌더는 cache-only, 명시적 테마 ETF 갱신만 live pykrx fetch를 수행하도록 분리한다.
+
+## Checklist
+- [x] `config/theme_lens.yml` 추가
+- [x] cache-only loader와 explicit refresh loader 구현
+- [x] dashboard runtime payload와 artifact token 연결
+- [x] KR signals 화면에 reference-only theme lens panel 추가
+- [x] normal render no-pykrx, explicit refresh/upsert, string ETF code, KR/US UI boundary 테스트 추가
+- [x] deslop pass 및 post-deslop 회귀 검증
+- [x] Architect 최종 승인
+
+## Review
+- Changed scope:
+  `config/theme_lens.yml`
+  `src/data_sources/theme_lens.py`
+  `src/dashboard/data.py`
+  `src/dashboard/tabs.py`
+  `src/dashboard/types.py`
+  `src/ui/panels.py`
+  `app.py`
+  `tests/test_theme_lens.py`
+  `tests/test_dashboard_tabs.py`
+  `tests/test_ui_components.py`
+- Validation:
+  `python -m py_compile ...` -> passed
+  `python -m pytest -q tests/test_theme_lens.py tests/test_dashboard_tabs.py tests/test_ui_components.py tests/test_dashboard_data.py tests/test_dashboard_runtime.py tests/test_warehouse_investor_flow.py -k "theme_lens or all_signals_tab or routes_filter_state or dashboard or stock_ohlcv" --basetemp "$env:TEMP\pytest-theme-lens-post-deslop"` -> `91 passed, 101 deselected`
+  `git diff --check -- <Ralph-owned files>` -> no whitespace errors; CRLF warnings only
+  Architect final verification -> APPROVED
+- Residual risk:
+  `config/sector_map.yml` has unrelated pre-existing dirty changes and was not treated as Ralph-owned scope.
+  Full repository pytest was not run because the worktree contains broad unrelated changes; verification was scoped to affected theme/dashboard/UI/warehouse boundaries.

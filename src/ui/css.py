@@ -273,9 +273,11 @@ def inject_css(theme_mode: str) -> None:
         line-height: {body_line_height};
         letter-spacing: 0;
         font-optical-sizing: auto;
+        font-synthesis-weight: none;
         text-rendering: optimizeLegibility;
         word-break: keep-all;
-        overflow-wrap: anywhere;
+        overflow-wrap: break-word;
+        line-break: strict;
         {font_smoothing_css}
         color-scheme: {color_scheme};
     }}
@@ -286,7 +288,93 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     [data-testid="stHeader"] {{
+        display: block !important;
+        height: 3rem !important;
+        min-height: 3rem !important;
+        background: transparent !important;
+        pointer-events: auto !important;
+    }}
+
+    [data-testid="stHeader"] > div {{
+        height: 3rem !important;
+        min-height: 3rem !important;
+        background: transparent !important;
+    }}
+
+    [data-testid="stSidebarCollapsedControl"],
+    [data-testid="collapsedControl"],
+    [data-testid="stSidebarCollapseButton"] {{
+        display: flex !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
+        position: relative !important;
+        top: 0.72rem !important;
+        left: 0.72rem !important;
+        z-index: 999999 !important;
+        width: 2.1rem !important;
+        height: 2.1rem !important;
+        align-items: center !important;
+        justify-content: center !important;
+        border: 1px solid color-mix(in srgb, var(--border) 82%, transparent) !important;
+        border-radius: var(--radius-sm) !important;
+        background: color-mix(in srgb, var(--surface) 92%, transparent) !important;
+        box-shadow: 0 8px 18px rgba(15, 23, 42, 0.10) !important;
+    }}
+
+    [data-testid="stSidebarCollapsedControl"] [data-testid="stBaseButton-headerNoPadding"],
+    [data-testid="collapsedControl"] [data-testid="stBaseButton-headerNoPadding"],
+    [data-testid="stSidebarCollapseButton"] [data-testid="stBaseButton-headerNoPadding"],
+    [data-testid="stBaseButton-header"] {{
+        display: inline-flex !important;
+        visibility: visible !important;
+        pointer-events: auto !important;
+        width: 2.1rem !important;
+        height: 2.1rem !important;
+        min-width: 2.1rem !important;
+        min-height: 2.1rem !important;
+        align-items: center !important;
+        justify-content: center !important;
+    }}
+
+    [data-testid="stSidebar"][aria-expanded="false"] {{
+        transform: none !important;
+        width: 4.25rem !important;
+        min-width: 4.25rem !important;
+        flex-basis: 4.25rem !important;
+        overflow: visible !important;
+    }}
+
+    [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] {{
+        width: 4.25rem !important;
+        padding: 0 !important;
+        overflow: visible !important;
+    }}
+
+    [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarContent"] > :not([data-testid="stSidebarHeader"]) {{
         display: none !important;
+    }}
+
+    [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarHeader"] {{
+        width: 4.25rem !important;
+        height: 4.75rem !important;
+        min-height: 4.75rem !important;
+        align-items: flex-start !important;
+        justify-content: center !important;
+        padding: 1rem 0 0 !important;
+    }}
+
+    [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarHeader"] > :not([data-testid="stSidebarCollapseButton"]) {{
+        display: none !important;
+    }}
+
+    [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarCollapseButton"] {{
+        top: 0 !important;
+        left: 0 !important;
+        transform: none !important;
+    }}
+
+    [data-testid="stSidebar"][aria-expanded="false"] [data-testid="stSidebarCollapseButton"] [data-testid="stIconMaterial"] {{
+        transform: rotate(180deg) !important;
     }}
 
     [data-testid="stDecoration"] {{
@@ -294,23 +382,28 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     [data-testid="stToolbar"] {{
+        display: none !important;
         background: transparent !important;
     }}
 
     [data-testid="stDeployButton"],
+    [data-testid="stAppDeployButton"],
+    [data-testid="stHeader"] [aria-label="Deploy"],
     [data-testid="stStatusWidget"],
     [data-testid="manage-app-button"] {{
         display: none !important;
     }}
 
     [data-testid="stSidebar"] {{
-        background: {sidebar_background_css};
-        border-right: 1px solid var(--border);
-        box-shadow: inset -1px 0 0 color-mix(in srgb, var(--surface) 68%, transparent);
+        background:
+            linear-gradient(180deg, color-mix(in srgb, {sidebar_background_css} 92%, var(--surface-tint) 8%) 0%, {sidebar_background_css} 52%),
+            {sidebar_background_css};
+        border-right: 1px solid color-mix(in srgb, var(--border) 86%, transparent);
+        box-shadow: inset -1px 0 0 color-mix(in srgb, var(--surface) 72%, transparent);
     }}
 
     .block-container {{
-        padding-top: 1rem;
+        padding-top: 0;
         padding-bottom: 1.3rem;
         padding-left: clamp(1.1rem, 2.2vw, 2rem);
         padding-right: clamp(1.1rem, 2.2vw, 2rem);
@@ -318,14 +411,141 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     [data-testid="stSidebarContent"] {{
-        padding: 1.18rem 1rem 1.1rem;
+        padding: 0.92rem 0.86rem 1.05rem;
+    }}
+
+    .sidebar-workspace {{
+        padding: 0.72rem 0.72rem 0.68rem;
+        margin: 0 0 0.56rem;
+        border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+        border-radius: var(--radius-md);
+        background: color-mix(in srgb, var(--surface) 80%, transparent);
+    }}
+
+    .sidebar-workspace__eyebrow {{
+        font-family: var(--font-ui);
+        font-size: 0.62rem;
+        font-weight: 720;
+        color: var(--text-muted);
+        line-height: 1.2;
+        margin-bottom: 0.2rem;
+    }}
+
+    .sidebar-workspace__title {{
+        font-family: var(--font-display);
+        font-size: 1.08rem;
+        font-weight: 720;
+        line-height: 1.16;
+        color: var(--text);
+        margin-bottom: 0.24rem;
+    }}
+
+    .sidebar-workspace__meta {{
+        color: var(--text-muted);
+        font-size: 0.74rem;
+        line-height: 1.42;
+        margin-bottom: 0;
+    }}
+
+    .sidebar-ops-panel {{
+        padding: 0.68rem 0.7rem 0.72rem;
+        margin: 0 0 0.42rem;
+        border: 1px solid color-mix(in srgb, var(--primary) 22%, var(--border));
+        border-radius: var(--radius-md);
+        background: color-mix(in srgb, var(--surface) 88%, var(--primary) 4%);
+    }}
+
+    .sidebar-ops-panel__header {{
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        gap: 0.5rem;
+        margin-bottom: 0.52rem;
+        padding-bottom: 0.42rem;
+        border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+    }}
+
+    .sidebar-ops-panel__header span {{
+        color: var(--text) !important;
+        font-size: 0.82rem !important;
+        font-weight: 700;
+        line-height: 1.2;
+    }}
+
+    .sidebar-ops-panel__header strong {{
+        color: var(--text-muted);
+        font-family: var(--font-mono);
+        font-size: 0.66rem;
+        font-weight: 680;
+        line-height: 1.2;
+    }}
+
+    .sidebar-status-grid {{
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.34rem;
+    }}
+
+    .sidebar-status-chip {{
+        display: grid;
+        gap: 0.06rem;
+        min-width: 0;
+        padding: 0.38rem 0.44rem;
+        border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+        border-radius: var(--radius-sm);
+        background: color-mix(in srgb, var(--bg) 48%, var(--surface) 52%);
+    }}
+
+    .sidebar-status-chip span {{
+        color: var(--text-muted) !important;
+        font-size: 0.68rem !important;
+        line-height: 1.15;
+    }}
+
+    .sidebar-status-chip strong {{
+        color: var(--text);
+        font-family: var(--font-mono);
+        font-size: 0.72rem;
+        font-weight: 680;
+        line-height: 1.2;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }}
+
+    .sidebar-status-chip--ready {{
+        border-color: color-mix(in srgb, var(--success) 24%, var(--border));
+    }}
+
+    .sidebar-status-chip--attention {{
+        border-color: color-mix(in srgb, var(--warning) 30%, var(--border));
+    }}
+
+    .sidebar-section-label {{
+        margin: 0.78rem 0 0.34rem;
+        padding: 0.52rem 0.08rem 0;
+        border-top: 1px solid color-mix(in srgb, var(--border) 58%, transparent);
+        color: var(--text-muted);
+        font-family: var(--font-ui);
+        font-size: 0.72rem;
+        font-weight: 660;
+        line-height: 1.2;
+    }}
+
+    .sidebar-footer-label {{
+        margin-top: 0.78rem;
+        padding-top: 0.62rem;
+        border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+        color: var(--text-muted);
+        font-size: 0.72rem;
+        line-height: 1.35;
     }}
 
     [data-testid="stSidebar"] [data-testid="stHeading"] h1,
     [data-testid="stSidebar"] h1 {{
         font-size: 1.12rem !important;
-        font-weight: 750 !important;
-        letter-spacing: -0.01em;
+        font-weight: 680 !important;
+        letter-spacing: 0;
         margin-bottom: 0.9rem;
     }}
 
@@ -335,7 +555,9 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     [data-testid="stSidebar"] [data-testid="stSidebarNav"] {{
-        padding-top: 0.2rem;
+        padding: 0.08rem 0 0.72rem;
+        margin-bottom: 0.56rem;
+        border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
     }}
 
     [data-testid="stSidebar"] [data-testid="stSidebarNav"] ul {{
@@ -346,12 +568,12 @@ def inject_css(theme_mode: str) -> None:
     [data-testid="stSidebar"] [data-testid="stSidebarNav"] p {{
         font-family: var(--font-ui) !important;
         font-size: 0.86rem !important;
-        font-weight: 680 !important;
+        font-weight: 620 !important;
         color: var(--text-muted) !important;
     }}
 
     [data-testid="stSidebar"] [data-testid="stSidebarNav"] a {{
-        min-height: 2.08rem;
+        min-height: 2rem;
         border-radius: var(--radius-sm);
         padding: 0.38rem 0.58rem;
         color: var(--text-muted) !important;
@@ -365,9 +587,45 @@ def inject_css(theme_mode: str) -> None:
 
     [data-testid="stSidebar"] [data-testid="stSidebarNav"] a[aria-current="page"],
     [data-testid="stSidebar"] [data-testid="stSidebarNav"] a[aria-selected="true"] {{
-        background: color-mix(in srgb, var(--primary) 10%, #ffffff 90%);
+        background: color-mix(in srgb, var(--primary) 11%, var(--surface) 89%);
         color: var(--primary) !important;
         box-shadow: inset 2px 0 0 var(--primary);
+    }}
+
+    [data-testid="stSidebar"] [data-testid="stSidebarNav"] [data-testid="stIconMaterial"],
+    [data-testid="stSidebar"] [data-testid="stSidebarNav"] span[class*="material"],
+    [data-testid="stSidebar"] [data-testid="stSidebarNav"] i[class*="material"],
+    [data-testid="stSidebar"] [data-testid="stSidebarNav"] [class*="material-symbol"] {{
+        display: none !important;
+    }}
+
+    [data-testid="stSidebar"] [data-testid="stIconMaterial"],
+    [data-testid="stSidebar"] span[class*="material"],
+    [data-testid="stSidebar"] i[class*="material"],
+    [data-testid="stSidebar"] [class*="material-symbol"] {{
+        font-family: "Material Symbols Rounded", "Material Icons", sans-serif !important;
+        font-size: 1rem !important;
+        line-height: 1 !important;
+        width: 1rem;
+        min-width: 1rem;
+        max-width: 1rem;
+        overflow: hidden;
+        white-space: nowrap;
+        flex: 0 0 auto;
+    }}
+
+    [data-testid="stSidebar"] [data-baseweb="select"] > div {{
+        position: relative;
+        padding-right: 2.15rem !important;
+    }}
+
+    [data-testid="stSidebar"] [data-baseweb="select"] svg,
+    [data-testid="stSidebar"] [data-baseweb="select"] [role="img"] {{
+        position: absolute;
+        right: 0.72rem;
+        top: 50%;
+        transform: translateY(-50%);
+        pointer-events: none;
     }}
 
     div[data-testid="stMetricValue"], code, pre {{
@@ -394,7 +652,7 @@ def inject_css(theme_mode: str) -> None:
         color: var(--text);
         font-weight: {heading_font_weight};
         line-height: {heading_line_height};
-        letter-spacing: -0.004em;
+        letter-spacing: 0;
     }}
 
     .stApp h1,
@@ -402,7 +660,7 @@ def inject_css(theme_mode: str) -> None:
         font-family: var(--font-display) !important;
         font-weight: {display_font_weight};
         line-height: {display_line_height};
-        letter-spacing: -0.02em;
+        letter-spacing: 0;
     }}
 
     .stApp h3,
@@ -468,7 +726,7 @@ def inject_css(theme_mode: str) -> None:
         font-size: {button_font_size} !important;
         font-weight: {button_font_weight} !important;
         letter-spacing: 0;
-        border-radius: var(--radius-pill) !important;
+        border-radius: var(--radius-sm) !important;
         min-height: 2.52rem;
         padding: 0.58rem 0.96rem;
         border: 1px solid var(--border) !important;
@@ -563,7 +821,7 @@ def inject_css(theme_mode: str) -> None:
         font-size: {caption_font_size};
         font-weight: {badge_font_weight};
         letter-spacing: 0;
-        text-transform: uppercase;
+        text-transform: none;
         text-align: right;
     }}
 
@@ -781,7 +1039,7 @@ def inject_css(theme_mode: str) -> None:
     .overview-market-card__label {{
         color: var(--text);
         font-size: {caption_font_size};
-        font-weight: 720;
+        font-weight: 620;
         line-height: 1.2;
     }}
 
@@ -789,7 +1047,7 @@ def inject_css(theme_mode: str) -> None:
         color: var(--text);
         font-family: var(--font-mono);
         font-size: 1.02rem;
-        font-weight: 760;
+        font-weight: 680;
         font-variant-numeric: tabular-nums;
         line-height: 1.2;
         margin-top: 0;
@@ -798,7 +1056,7 @@ def inject_css(theme_mode: str) -> None:
     .overview-market-card__change {{
         font-family: var(--font-mono);
         font-size: {caption_font_size};
-        font-weight: 700;
+        font-weight: 620;
         margin-top: 0;
     }}
 
@@ -827,7 +1085,7 @@ def inject_css(theme_mode: str) -> None:
     .overview-market-card__status-row strong {{
         color: var(--text);
         font-size: {body_small_font_size};
-        font-weight: 760;
+        font-weight: 650;
     }}
 
     .overview-lookup-chips {{
@@ -853,57 +1111,131 @@ def inject_css(theme_mode: str) -> None:
         color: var(--primary);
     }}
 
-    .overview-mobile-decision-strip {{
-        display: none;
+    .overview-review-candidates {{
+        margin-top: 0.72rem;
+        padding-top: 0.72rem;
+        border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
     }}
 
-    .overview-mobile-decision-strip__label {{
-        color: var(--text-muted);
+    .overview-review-candidates[data-empty="true"] {{
+        padding-bottom: 0.18rem;
+    }}
+
+    .overview-review-candidates__header {{
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 0.72rem;
+        margin-bottom: 0.58rem;
+    }}
+
+    .overview-review-candidates__basis {{
+        flex-shrink: 0;
+        border: 1px solid color-mix(in srgb, var(--primary) 26%, var(--border));
+        background: color-mix(in srgb, var(--primary) 8%, transparent);
+        color: var(--primary);
+        border-radius: var(--radius-sm);
         font-size: {caption_font_size};
         font-weight: {badge_font_weight};
-        margin-bottom: 0.34rem;
-    }}
-
-    .overview-mobile-decision-strip__grid {{
-        display: grid;
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 0.38rem;
-    }}
-
-    .overview-decision-tile {{
-        border: 1px solid var(--border);
-        background: color-mix(in srgb, var(--surface) 88%, var(--surface-tint) 12%);
-        border-radius: var(--radius-sm);
-        padding: 0.54rem 0.58rem;
-        min-width: 0;
-    }}
-
-    .overview-decision-tile span {{
-        display: block;
-        color: var(--text);
-        font-size: {caption_font_size};
-        font-weight: 760;
-        line-height: 1.22;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        line-height: 1.15;
+        padding: 0.34rem 0.58rem;
         white-space: nowrap;
     }}
 
-    .overview-decision-tile strong {{
-        display: block;
+    .overview-review-candidates__grid {{
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 0.52rem;
+    }}
+
+    .overview-review-card {{
+        min-width: 0;
+        border: 1px solid var(--border);
+        background: color-mix(in srgb, var(--surface) 90%, var(--surface-tint) 10%);
+        border-radius: var(--radius-sm);
+        padding: 0.68rem 0.72rem;
+        animation: riseIn 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
+        transition: border-color 0.18s ease, background-color 0.18s ease;
+    }}
+
+    .overview-review-card:hover {{
+        border-color: color-mix(in srgb, var(--primary) 36%, var(--border));
+        background: color-mix(in srgb, var(--surface) 84%, var(--surface-tint) 16%);
+    }}
+
+    .overview-review-card__topline {{
+        display: flex;
+        align-items: center;
+        gap: 0.42rem;
+        min-height: 1.48rem;
+    }}
+
+    .overview-review-card__rank {{
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.34rem;
+        height: 1.34rem;
+        border-radius: var(--radius-sm);
+        background: color-mix(in srgb, var(--primary) 10%, transparent);
+        color: var(--primary);
         font-family: var(--font-mono);
-        font-size: {body_small_font_size};
-        font-weight: 780;
-        line-height: 1.2;
-        margin-top: 0.18rem;
+        font-size: {caption_font_size};
+        font-weight: 650;
     }}
 
-    .overview-decision-tile strong[data-tone="positive"] {{
-        color: var(--success);
+    .overview-review-card__sector {{
+        color: var(--text);
+        font-size: 0.96rem;
+        font-weight: 680;
+        line-height: 1.25;
+        margin-top: 0.42rem;
+        overflow-wrap: break-word;
     }}
 
-    .overview-decision-tile strong[data-tone="negative"] {{
-        color: var(--danger);
+    .overview-review-card__reasons {{
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        min-height: 1.82rem;
+        margin-top: 0.52rem;
+    }}
+
+    .overview-review-card__metrics {{
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.54rem;
+        margin-top: 0.12rem;
+        color: var(--text-muted);
+        font-size: {caption_font_size};
+        line-height: 1.3;
+    }}
+
+    .overview-review-card__metric strong {{
+        color: var(--text);
+        font-weight: 620;
+        margin-right: 0.22rem;
+    }}
+
+    .overview-review-card__invalidation {{
+        display: flex;
+        gap: 0.42rem;
+        margin-top: 0.46rem;
+        padding-top: 0.44rem;
+        border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+        color: var(--text-muted);
+        font-size: {caption_font_size};
+        line-height: 1.35;
+    }}
+
+    .overview-review-card__invalidation span {{
+        flex-shrink: 0;
+        font-weight: 620;
+    }}
+
+    .overview-review-card__invalidation strong {{
+        color: var(--text);
+        font-weight: 560;
     }}
 
     .overview-sector-table-wrap {{
@@ -953,14 +1285,23 @@ def inject_css(theme_mode: str) -> None:
         min-width: 8rem;
     }}
 
+    .overview-sector-subtext {{
+        display: block;
+        margin-top: 0.16rem;
+        font-size: 0.72em;
+        font-weight: 560;
+        color: var(--muted);
+        line-height: 1.15;
+    }}
+
     .overview-sector-table td[data-tone="positive"] {{
         color: var(--success);
-        font-weight: 760;
+        font-weight: 650;
     }}
 
     .overview-sector-table td[data-tone="negative"] {{
         color: var(--danger);
-        font-weight: 760;
+        font-weight: 650;
     }}
 
     .overview-heatmap-grid {{
@@ -1002,7 +1343,7 @@ def inject_css(theme_mode: str) -> None:
     .overview-heatmap-tile strong {{
         font-family: var(--font-mono);
         font-size: 0.98rem;
-        font-weight: 780;
+        font-weight: 680;
         font-variant-numeric: tabular-nums;
     }}
 
@@ -1062,7 +1403,7 @@ def inject_css(theme_mode: str) -> None:
         min-height: 1.95rem;
         border: 1px solid color-mix(in srgb, var(--primary) 18%, var(--border));
         background: color-mix(in srgb, var(--surface) 92%, var(--surface-tint) 8%);
-        border-radius: var(--radius-pill);
+        border-radius: var(--radius-sm);
         padding: 0.34rem 0.66rem;
         color: var(--text);
         font-size: {caption_font_size};
@@ -1192,9 +1533,9 @@ def inject_css(theme_mode: str) -> None:
     .cycle-palette__label {{
         color: var(--text-muted);
         font-size: {caption_font_size};
-        font-weight: 700;
-        letter-spacing: 0.06em;
-        text-transform: uppercase;
+        font-weight: {badge_font_weight};
+        letter-spacing: 0;
+        text-transform: none;
     }}
 
     .cycle-palette__item {{
@@ -1202,7 +1543,7 @@ def inject_css(theme_mode: str) -> None:
         align-items: center;
         gap: 0.42rem;
         border: 1px solid var(--border);
-        border-radius: var(--radius-pill);
+        border-radius: var(--radius-sm);
         background: color-mix(in srgb, var(--surface) 92%, var(--surface-tint) 8%);
         color: var(--text);
         font-size: {caption_font_size};
@@ -1260,7 +1601,7 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     .sector-rank-list__metric {{
-        border-radius: var(--radius-pill);
+        border-radius: var(--radius-sm);
         border: 1px solid var(--border);
         background: color-mix(in srgb, var(--surface) 92%, var(--surface-tint) 8%);
         color: var(--text-muted);
@@ -1434,7 +1775,7 @@ def inject_css(theme_mode: str) -> None:
         display: block;
         color: var(--text);
         font-size: 0.96rem;
-        font-weight: 700;
+        font-weight: 650;
         line-height: 1.2;
     }}
 
@@ -1543,7 +1884,7 @@ def inject_css(theme_mode: str) -> None:
         font-size: {body_small_font_size};
         font-weight: {heading_font_weight};
         line-height: 1.28;
-        overflow-wrap: anywhere;
+        overflow-wrap: break-word;
     }}
 
     .panel-header {{
@@ -1582,7 +1923,7 @@ def inject_css(theme_mode: str) -> None:
     .panel-header__badge {{
         display: inline-flex;
         align-items: center;
-        border-radius: var(--radius-pill);
+        border-radius: var(--radius-sm);
         border: 1px solid color-mix(in srgb, var(--primary) 38%, var(--border));
         background: color-mix(in srgb, var(--surface) 86%, var(--primary) 14%);
         color: var(--text);
@@ -1605,13 +1946,13 @@ def inject_css(theme_mode: str) -> None:
         background: var(--surface);
         border-radius: var(--radius-lg);
         padding: 0.76rem 0.84rem;
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        transition: border-color 0.18s ease, background-color 0.18s ease;
         animation: riseIn 460ms cubic-bezier(0.16, 1, 0.3, 1) both;
     }}
 
     .top-pick-card:hover {{
-        transform: translateY(-1px);
-        box-shadow: 0 3px 8px color-mix(in srgb, var(--primary) 8%, transparent);
+        border-color: color-mix(in srgb, var(--primary) 32%, var(--border));
+        background: color-mix(in srgb, var(--surface) 94%, var(--surface-tint) 6%);
     }}
 
     .top-pick-card__header {{
@@ -1626,7 +1967,7 @@ def inject_css(theme_mode: str) -> None:
     .top-pick-card__title {{
         color: var(--text);
         font-size: 0.9rem;
-        font-weight: 700;
+        font-weight: 650;
         display: flex;
         align-items: center;
         flex-wrap: wrap;
@@ -1682,7 +2023,7 @@ def inject_css(theme_mode: str) -> None:
         color: var(--text-muted);
         min-width: 75px;
         max-width: 75px;
-        font-weight: 700;
+        font-weight: 620;
         font-size: 0.72rem;
         flex-shrink: 0;
     }}
@@ -1722,13 +2063,13 @@ def inject_css(theme_mode: str) -> None:
         background: var(--surface);
         border-radius: var(--radius-lg);
         padding: 0.76rem 0.84rem;
-        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        transition: border-color 0.18s ease, background-color 0.18s ease;
         animation: riseIn 500ms cubic-bezier(0.16, 1, 0.3, 1) both;
     }}
 
     .flow-card:hover {{
-        transform: translateY(-1px);
-        box-shadow: 0 3px 8px color-mix(in srgb, var(--primary) 8%, transparent);
+        border-color: color-mix(in srgb, var(--primary) 32%, var(--border));
+        background: color-mix(in srgb, var(--surface) 94%, var(--surface-tint) 6%);
     }}
 
     .flow-card__header {{
@@ -1743,7 +2084,7 @@ def inject_css(theme_mode: str) -> None:
     .flow-card__title {{
         color: var(--text);
         font-size: 0.9rem;
-        font-weight: 700;
+        font-weight: 650;
         display: flex;
         align-items: center;
         flex-wrap: wrap;
@@ -1810,7 +2151,7 @@ def inject_css(theme_mode: str) -> None:
         color: var(--text-muted);
         min-width: 75px;
         max-width: 75px;
-        font-weight: 700;
+        font-weight: 620;
         font-size: {caption_font_size};
         flex-shrink: 0;
     }}
@@ -1868,11 +2209,11 @@ def inject_css(theme_mode: str) -> None:
         background-color: color-mix(in srgb, var(--warning) 22%, transparent);
         color: {provisional_badge_text};
         border: 1px solid {provisional_badge_border};
-        border-radius: var(--radius-pill);
+        border-radius: var(--radius-sm);
         padding: 3px 9px;
         font-size: 12.5px;
-        font-weight: 700;
-        letter-spacing: 0.02em;
+        font-weight: {badge_font_weight};
+        letter-spacing: 0;
         margin-left: 8px;
     }}
 
@@ -1907,15 +2248,15 @@ def inject_css(theme_mode: str) -> None:
     .action-hold,
     .action-avoid,
     .action-na {{
-        border-radius: var(--radius-pill);
+        border-radius: var(--radius-sm);
         padding: 3px 9px;
         font-weight: {badge_font_weight};
         font-size: {badge_font_size};
-        letter-spacing: 0.05em;
+        letter-spacing: 0;
         display: inline-block;
         text-align: center;
-        min-width: 92px;
-        text-transform: uppercase;
+        min-width: 84px;
+        text-transform: none;
     }}
 
     [data-testid="stTabs"] [data-baseweb="tab-list"] {{
@@ -1947,7 +2288,7 @@ def inject_css(theme_mode: str) -> None:
 
     [data-testid="stTabs"] [data-baseweb="tab"][aria-selected="true"] {{
         color: {tab_tokens['tab_selected_text']} !important;
-        font-weight: 700 !important;
+        font-weight: {heading_font_weight} !important;
         background-color: {tab_tokens['tab_selected_bg']};
         border-color: {tab_tokens['tab_selected_border']} !important;
     }}
@@ -2006,7 +2347,7 @@ def inject_css(theme_mode: str) -> None:
         color: var(--text);
         margin-top: 0.8rem;
         margin-bottom: 0.4rem;
-        font-weight: 700;
+        font-weight: 650;
         font-size: 1.15rem;
     }}
 
@@ -2215,9 +2556,32 @@ def inject_css(theme_mode: str) -> None:
             font-size: 0.9rem;
         }}
 
-        .overview-mobile-decision-strip {{
-            display: block;
-            margin: 0.36rem 0 0.46rem;
+        .overview-review-candidates {{
+            margin-top: 0.56rem;
+            padding-top: 0.58rem;
+        }}
+
+        .overview-review-candidates__header {{
+            flex-direction: column;
+            gap: 0.42rem;
+            margin-bottom: 0.48rem;
+        }}
+
+        .overview-review-candidates__basis {{
+            width: fit-content;
+        }}
+
+        .overview-review-candidates__grid {{
+            grid-template-columns: 1fr;
+            gap: 0.42rem;
+        }}
+
+        .overview-review-card {{
+            padding: 0.58rem 0.62rem;
+        }}
+
+        .overview-review-card__invalidation {{
+            display: none;
         }}
 
         .overview-sector-table-wrap {{

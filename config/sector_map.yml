@@ -17,6 +17,7 @@ regimes:
         name: "KOSPI200 정보기술"
         lookup_priority: 20
         export_sector: true
+        export_series_alias: "export_it"
         etfs:
           - code: "139260"
             name: "TIGER 200 IT"
@@ -36,6 +37,7 @@ regimes:
         name: "KRX 산업재"
         lookup_priority: 30
         export_sector: false
+        export_series_alias: "export_machinery"
         etfs:
           - code: "227550"
             name: "TIGER 200 산업재"
@@ -43,6 +45,7 @@ regimes:
         name: "KRX 반도체"
         lookup_priority: 10
         export_sector: true
+        export_series_alias: "export_semiconductor"
         etfs:
           - code: "396500"
             name: "TIGER 반도체TOP10"
@@ -52,6 +55,7 @@ regimes:
         name: "KRX 헬스케어"
         lookup_priority: 10
         export_sector: false
+        export_series_alias: "export_pharma"
         etfs:
           - code: "143860"
             name: "TIGER 헬스케어"
@@ -76,6 +80,7 @@ regimes:
         name: "KOSPI200 경기소비재"
         lookup_priority: 20
         export_sector: false
+        export_series_alias: "export_auto"
         etfs:
           - code: "266390"
             name: "KODEX 경기소비재"
@@ -103,6 +108,7 @@ regimes:
         name: "KRX 에너지화학"
         lookup_priority: 15
         export_sector: false
+        export_series_alias: "export_chemicals"
         etfs:
           - code: "139250"
             name: "TIGER 200 에너지화학"
@@ -112,6 +118,7 @@ regimes:
         name: "KRX 철강"
         lookup_priority: 10
         export_sector: true
+        export_series_alias: "export_steel"
         etfs:
           - code: "117680"
             name: "KODEX 철강"

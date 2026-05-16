@@ -51,6 +51,12 @@ class DashboardDataBundle:
     yield_curve_status: str | None = None
     growth_val: float | None = None
     inflation_val: float | None = None
+    export_growth_val: float | None = None
+    trade_indicators: dict[str, float] = field(default_factory=dict)
+    sector_trade_lens: list[dict[str, Any]] = field(default_factory=list)
+    sector_export_trends: dict[str, float] = field(default_factory=dict)
+    sector_export_history: dict[str, pd.Series] = field(default_factory=dict)
+    has_sector_export_indicators: bool = False
     fx_change: float | None = None
     price_warm_status: dict[str, Any] = field(default_factory=dict)
     price_cache_case: str | None = None
@@ -77,6 +83,8 @@ class DashboardDataBundle:
     investor_flow_detail: dict[str, Any] = field(default_factory=dict)
     shared_flow_summary_map: dict[str, Any] = field(default_factory=dict)
     investor_flow_refresh_notice: tuple[str, str] | None = None
+    theme_lens_status: str = "UNAVAILABLE"
+    theme_lens_rows: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)

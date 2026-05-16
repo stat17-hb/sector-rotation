@@ -10,12 +10,12 @@ ThemeMode = Literal["dark", "light"]
 THEME_SESSION_KEY = "theme_mode"
 
 UI_FONT_STACK = (
-    "'Pretendard Local', 'Pretendard', 'Noto Sans KR', 'Segoe UI', "
-    "'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif"
+    "'Pretendard Local', 'Pretendard', 'SUIT', 'Spoqa Han Sans Neo', "
+    "'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Segoe UI', sans-serif"
 )
 DISPLAY_FONT_STACK = (
-    "'Pretendard Local', 'Pretendard', 'Noto Sans KR', 'Segoe UI', "
-    "'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif"
+    "'Pretendard Local', 'Pretendard', 'SUIT', 'Spoqa Han Sans Neo', "
+    "'Noto Sans KR', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Segoe UI', sans-serif"
 )
 MONO_FONT_STACK = (
     "'JetBrains Mono Local', 'JetBrains Mono', 'Fira Code', "
@@ -92,11 +92,11 @@ THEME_TOKENS: dict[ThemeMode, dict[str, dict[str, Any]]] = {
             "display_line_height": "1.08",
             "heading_line_height": "1.12",
             "body_line_height": "1.56",
-            "display_weight": "500",
-            "heading_weight": "650",
-            "body_weight": "440",
-            "caption_weight": "700",
-            "button_weight": "650",
+            "display_weight": "620",
+            "heading_weight": "620",
+            "body_weight": "460",
+            "caption_weight": "640",
+            "button_weight": "620",
         },
         "chart": {
             "background": "#111418",
@@ -208,33 +208,33 @@ THEME_TOKENS: dict[ThemeMode, dict[str, dict[str, Any]]] = {
     "light": {
         "ui": {
             "background": "#F7F9FC",
-            "foreground": "#1B2433",
-            "muted": "#5D6878",
+            "foreground": "#1E2734",
+            "muted": "#626D7D",
             "card": "#FFFFFF",
-            "card_alt": "#F0F4F9",
-            "border": "#DDE5F0",
-            "border_soft": "#CAD5E3",
-            "primary": "#2567C8",
-            "primary_soft": "rgba(37, 103, 200, 0.10)",
+            "card_alt": "#F1F4F8",
+            "border": "#E1E7EF",
+            "border_soft": "#CFD8E4",
+            "primary": "#2B64B8",
+            "primary_soft": "rgba(43, 100, 184, 0.10)",
             "success": "#15966A",
             "danger": "#D94A55",
             "warning": "#C7821E",
-            "focus_ring": "rgba(37, 103, 200, 0.22)",
-            "info": "#2567C8",
+            "focus_ring": "rgba(43, 100, 184, 0.22)",
+            "info": "#2B64B8",
             "header_bg": "#FFFFFF",
             "header_border": "#DDE5F0",
-            "sidebar_bg": "#F4F7FB",
+            "sidebar_bg": "#F5F7FA",
             "sidebar_gradient_start": "#FFFFFF",
             "sidebar_gradient_end": "#EEF3F8",
-            "sidebar_hover": "#E8F1FC",
+            "sidebar_hover": "#EAF0F7",
             "input_bg": "#FFFFFF",
             "input_border": "#D4DEEB",
             "inline_code_bg": "#F0F4F9",
             "card_shadow": "0 1px 2px rgba(23, 32, 51, 0.04)",
             "provisional_badge_text": "#7B4A00",
             "cycle_swatch_border": "rgba(20, 24, 31, 0.1)",
-            "accent_blue_hover": "#2567C8",
-            "accent_link": "#2567C8",
+            "accent_blue_hover": "#2B64B8",
+            "accent_link": "#2B64B8",
             "surface_tint": "rgba(240, 244, 249, 0.92)",
         },
         "layout": {
@@ -273,11 +273,11 @@ THEME_TOKENS: dict[ThemeMode, dict[str, dict[str, Any]]] = {
             "display_line_height": "1.08",
             "heading_line_height": "1.12",
             "body_line_height": "1.56",
-            "display_weight": "750",
-            "heading_weight": "650",
-            "body_weight": "440",
-            "caption_weight": "700",
-            "button_weight": "650",
+            "display_weight": "680",
+            "heading_weight": "620",
+            "body_weight": "460",
+            "caption_weight": "640",
+            "button_weight": "620",
         },
         "chart": {
             "background": "#F8FAFC",

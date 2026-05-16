@@ -1,5 +1,12 @@
 # Lessons Learned
 
+## 2026-05-12
+- Pattern: User asked for export data, and the first implementation exposed only aggregate Korean export YoY while the intended decision question required sector-level export trends.
+- Rule: When the user asks for a data signal "by sector", verify the output granularity before implementation. Aggregate macro indicators are not sufficient unless the user explicitly accepts aggregate-only scope.
+- Rule: For dashboard data additions, state whether the implemented signal is aggregate, mapped-by-sector, or instrument-level, and add a UI/test contract that proves the intended granularity is visible.
+- Pattern: 자동차 수출 데이터 was loaded but hidden behind the broader `KOSPI200 경기소비재` sector label and the chart prioritized only currently visible signals.
+- Rule: When a sector uses a proxy/export-item series, show the proxy label in the UI and test that non-visible but configured export series still render in supporting charts.
+
 ## 2026-04-26
 - Pattern: Chrome `--headless --screenshot` captured only the Streamlit skeleton even though `_stcore/health` returned `ok`.
 - Rule: For Streamlit visual evidence, do not treat HTTP 200 or health `ok` as proof that the app has hydrated. Wait in the browser for `data-test-connection-state="CONNECTED"`, `data-test-script-state` not in `initial/running`, nontrivial body text, and absence of `[data-testid="stAppSkeleton"]`.
@@ -117,3 +124,9 @@
 - Rule: For refresh/cache bugs, prove the exact failing provider path with a manual reproduction and test the cache-validity predicate, not only the UI notice text.
 - Rule: Raw market cache coverage must be based on numeric, non-null close values for each required business date; earliest/latest dates alone are insufficient because internal NaN rows can be forward-filled later.
 - Rule: When repairing an older requested window, ensure the latest raw-cache snapshot label is updated or merged so a newer poisoned snapshot cannot keep winning `_latest_raw_cache_file()`.
+
+## 2026-05-17
+- Pattern: 테마 ETF 기능이 cache-only loader와 refresh button 테스트는 통과했지만, 실제 환경에서는 warehouse에 0건이라 화면이 `UNAVAILABLE`였고 Streamlit/Python 프로세스의 DuckDB write lock 때문에 button refresh 결과도 저장되지 않았다.
+- Rule: 새 warehouse-backed UI 기능은 구현 검증 시 `read_*` 실제 row count와 live refresh의 persistence 결과를 둘 다 수동 재현한다. 단위 테스트의 fake upsert 성공만으로 완료 처리하지 않는다.
+- Rule: Streamlit 내부 refresh가 DuckDB에 write해야 하는 기능은 write lock 실패 시에도 live fetch 결과를 화면에 표시할 session snapshot 또는 equivalent fallback을 제공한다.
+- Rule: 여러 representative ETF를 둔 proxy lens는 첫 번째 코드만 신뢰하지 않는다. 캐시/live 데이터가 있는 대표 ETF를 선택하는 fallback을 테스트로 고정한다.

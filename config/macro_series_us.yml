@@ -41,3 +41,21 @@ fred:
     transform: "none"
     label: "Trade-Weighted Dollar Index"
     unit: "index"
+  trade_exports_yoy:
+    enabled: true
+    series_id: "BOPTEXP"
+    transform: "pct_change_12m"
+    label: "Exports of Goods and Services YoY"
+    unit: "%"
+  trade_imports_yoy:
+    enabled: true
+    series_id: "BOPTIMP"
+    transform: "pct_change_12m"
+    label: "Imports of Goods and Services YoY"
+    unit: "%"
+  trade_balance:
+    enabled: true
+    series_id: "BOPGSTB"
+    transform: "none"
+    label: "Trade Balance: Goods and Services"
+    unit: "millions of dollars"

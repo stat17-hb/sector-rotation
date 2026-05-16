@@ -9,42 +9,64 @@ regimes:
       - code: "XLK"
         name: "Technology"
         export_sector: false
+        trade_exposure: "export_sensitive"
+        trade_proxy_label: "글로벌 IT/장비 수요"
       - code: "XLY"
         name: "Consumer Discretionary"
         export_sector: false
+        trade_exposure: "import_sensitive"
+        trade_proxy_label: "수입 소비재/내수 수요"
       - code: "XLC"
         name: "Communication Services"
         export_sector: false
+        trade_exposure: "low_linkage"
+        trade_proxy_label: "교역 직접성 낮음"
   Expansion:
     description: "Growth Up, Inflation Up"
     sectors:
       - code: "XLI"
         name: "Industrials"
         export_sector: true
+        trade_exposure: "export_sensitive"
+        trade_proxy_label: "자본재/운송장비 수출"
       - code: "XLF"
         name: "Financials"
         export_sector: false
+        trade_exposure: "low_linkage"
+        trade_proxy_label: "교역 직접성 낮음"
       - code: "XLRE"
         name: "Real Estate"
         export_sector: false
+        trade_exposure: "low_linkage"
+        trade_proxy_label: "교역 직접성 낮음"
   Slowdown:
     description: "Growth Down, Inflation Up"
     sectors:
       - code: "XLE"
         name: "Energy"
         export_sector: true
+        trade_exposure: "balanced_trade"
+        trade_proxy_label: "에너지 수출입 복합"
       - code: "XLB"
         name: "Materials"
         export_sector: true
+        trade_exposure: "export_sensitive"
+        trade_proxy_label: "원자재/화학 수출"
   Contraction:
     description: "Growth Down, Inflation Down"
     sectors:
       - code: "XLP"
         name: "Consumer Staples"
         export_sector: false
+        trade_exposure: "import_sensitive"
+        trade_proxy_label: "수입 소비재/내수 수요"
       - code: "XLU"
         name: "Utilities"
         export_sector: false
+        trade_exposure: "low_linkage"
+        trade_proxy_label: "교역 직접성 낮음"
       - code: "XLV"
         name: "Health Care"
         export_sector: false
+        trade_exposure: "balanced_trade"
+        trade_proxy_label: "의약품/방어주 복합"

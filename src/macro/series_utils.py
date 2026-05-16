@@ -17,6 +17,141 @@ def _is_enabled(cfg: Mapping | None) -> bool:
     return bool(cfg.get("enabled", True))
 
 
+def is_macro_alias_enabled(macro_series_cfg: Mapping | None, alias: str) -> bool:
+    """Return whether an alias exists and is enabled in any active macro provider config."""
+    normalized_alias = str(alias or "").strip()
+    if not normalized_alias or not macro_series_cfg:
+        return False
+    for provider_cfg in macro_series_cfg.values():
+        if not isinstance(provider_cfg, Mapping):
+            continue
+        alias_cfg = provider_cfg.get(normalized_alias)
+        if isinstance(alias_cfg, Mapping) and _is_enabled(alias_cfg):
+            return True
+    return False
+
+
+def build_enabled_sector_export_aliases(
+    sector_map: Mapping | None,
+    macro_series_cfg: Mapping | None,
+) -> dict[str, str]:
+    """Map sector names to enabled export aliases configured for the active market."""
+    aliases: dict[str, str] = {}
+    for regime_data in ((sector_map or {}).get("regimes", {}) or {}).values():
+        for sector in regime_data.get("sectors", []) or []:
+            sector_name = str(sector.get("name", "")).strip()
+            export_alias = str(sector.get("export_series_alias", "")).strip()
+            if sector_name and is_macro_alias_enabled(macro_series_cfg, export_alias):
+                aliases[sector_name] = export_alias
+    return aliases
+
+
+def extract_trade_indicators(
+    macro_df: pd.DataFrame,
+    macro_series_cfg: Mapping,
+) -> dict[str, float]:
+    """Extract pre-transformed aggregate trade indicators by explicit aliases."""
+    indicators: dict[str, float] = {}
+    alias_map = {
+        "exports_yoy": "trade_exports_yoy",
+        "imports_yoy": "trade_imports_yoy",
+        "balance": "trade_balance",
+    }
+    for output_key, alias in alias_map.items():
+        series = extract_macro_series(macro_df, macro_series_cfg, alias)
+        if not series.empty:
+            indicators[output_key] = float(series.iloc[-1])
+    return indicators
+
+
+def _classify_trade_proxy(value: float | None) -> tuple[str, str]:
+    if value is None:
+        return "데이터 없음", "neutral"
+    if value >= 3.0:
+        return "교역 순풍", "positive"
+    if value <= -3.0:
+        return "교역 역풍", "negative"
+    return "중립/혼재", "neutral"
+
+
+def build_sector_trade_proxy_lens(
+    sector_map: Mapping | None,
+    trade_indicators: Mapping[str, float] | None,
+) -> list[dict[str, object]]:
+    """Build sector-level interpretation rows from aggregate US trade indicators.
+
+    The returned rows are a proxy lens, not direct sector trade facts. Direct
+    sector trade would require commodity/end-use/NAICS source data and mapping.
+    """
+    trade = dict(trade_indicators or {})
+    exports_yoy = trade.get("exports_yoy")
+    imports_yoy = trade.get("imports_yoy")
+
+    rows: list[dict[str, object]] = []
+    seen: set[str] = set()
+    exposure_labels = {
+        "export_sensitive": "수출 민감",
+        "import_sensitive": "수입/내수 민감",
+        "balanced_trade": "복합",
+        "low_linkage": "낮음",
+    }
+    for regime_data in ((sector_map or {}).get("regimes", {}) or {}).values():
+        for sector in regime_data.get("sectors", []) or []:
+            sector_name = str(sector.get("name", "")).strip()
+            if not sector_name or sector_name in seen:
+                continue
+            exposure = str(sector.get("trade_exposure", "low_linkage")).strip() or "low_linkage"
+            basis = str(sector.get("trade_proxy_label", "")).strip()
+            value: float | None
+            driver: str
+            if exposure == "export_sensitive":
+                value = float(exports_yoy) if exports_yoy is not None else None
+                driver = "수출 YoY"
+            elif exposure == "import_sensitive":
+                value = float(imports_yoy) if imports_yoy is not None else None
+                driver = "수입 YoY"
+            elif exposure == "balanced_trade":
+                values = [
+                    float(item)
+                    for item in (exports_yoy, imports_yoy)
+                    if item is not None
+                ]
+                value = sum(values) / len(values) if values else None
+                driver = "수출/수입 평균"
+            else:
+                value = None
+                driver = "직접성 낮음"
+            status, tone = ("직접 해석 제한", "neutral") if exposure == "low_linkage" else _classify_trade_proxy(value)
+            rows.append(
+                {
+                    "sector": sector_name,
+                    "exposure": exposure,
+                    "exposure_label": exposure_labels.get(exposure, "낮음"),
+                    "basis": basis or exposure_labels.get(exposure, "교역 proxy"),
+                    "driver": driver,
+                    "value": value,
+                    "status": status,
+                    "tone": tone,
+                }
+            )
+            seen.add(sector_name)
+    return rows
+
+
+def extract_kr_export_growth_yoy(
+    macro_df: pd.DataFrame,
+    macro_series_cfg: Mapping,
+) -> float | None:
+    """Compute KR export YoY from a raw export amount level series."""
+    export_amount_series = extract_macro_series(macro_df, macro_series_cfg, "export_amount")
+    if len(export_amount_series) < 13:
+        return None
+    export_growth_series = export_amount_series.pct_change(12).dropna() * 100
+    if export_growth_series.empty:
+        return None
+    return float(export_growth_series.iloc[-1])
+
+
 def build_enabled_ecos_config(raw_cfg: Mapping | None) -> dict[str, dict]:
     """Build ECOS loader config, excluding disabled entries."""
     result: dict[str, dict] = {}

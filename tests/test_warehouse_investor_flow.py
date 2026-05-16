@@ -100,6 +100,31 @@ def test_read_latest_sector_constituents_snapshot_uses_latest_date_per_sector():
     assert latest_dates["5045"] == "2026-04-09"
 
 
+def test_stock_ohlcv_rows_are_scoped_and_readable():
+    frame = pd.DataFrame(
+        {
+            "ticker": ["005930", "005930"],
+            "ticker_name": ["삼성전자", "삼성전자"],
+            "open": [70000.0, 70500.0],
+            "high": [71000.0, 71500.0],
+            "low": [69500.0, 70000.0],
+            "close": [70800.0, 71200.0],
+            "volume": [10_000_000, 11_000_000],
+        },
+        index=pd.DatetimeIndex(["2026-04-08", "2026-04-09"]),
+    )
+
+    warehouse.upsert_stock_ohlcv(frame, provider="PYKRX", market="KR")
+
+    rows = warehouse.read_stock_ohlcv(["005930"], "20260401", "20260430", market="KR")
+
+    assert len(rows) == 2
+    assert rows["ticker"].tolist() == ["005930", "005930"]
+    assert rows["ticker_name"].tolist() == ["삼성전자", "삼성전자"]
+    assert rows["close"].tolist() == [70800.0, 71200.0]
+    assert rows["provider"].tolist() == ["PYKRX", "PYKRX"]
+
+
 def _operational_summary(*, end: str, coverage_complete: bool, failed_days: list[str] | None = None) -> dict:
     return {
         "status": "LIVE",

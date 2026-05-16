@@ -358,6 +358,7 @@ class TestIntegration:
 
         summary = krx_mod.read_warm_status()
 
+        assert summary.pop("created_at", None) is not None
         assert summary == {
             "status": "LIVE",
             "provider": "OPENAPI",

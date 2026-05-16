@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date
+from html import escape
 from typing import Any
 
 import pandas as pd
@@ -37,6 +38,8 @@ from src.ui.components import (
     render_returns_heatmap,
     render_rs_momentum_bar,
     render_rs_scatter,
+    render_sector_momentum_decision_boards,
+    render_theme_lens_panel,
     render_sector_detail_panel,
     render_signal_table,
     signal_display_sort_key,
@@ -259,6 +262,146 @@ def _format_collection_history_sample(history: pd.DataFrame, dataset: str) -> pd
     return display
 
 
+def _format_collection_date(value: object, *, monthly: bool = False) -> str:
+    text = str(value or "").strip()
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if monthly and len(digits) >= 6:
+        return f"{digits[:4]}-{digits[4:6]}"
+    if len(digits) >= 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    if len(digits) >= 6:
+        return f"{digits[:4]}-{digits[4:6]}"
+    return text or "—"
+
+
+def _format_collection_timestamp(value: object) -> str:
+    ts = pd.to_datetime(value, errors="coerce")
+    if pd.isna(ts):
+        return "—"
+    return ts.strftime("%Y-%m-%d %H:%M")
+
+
+def _collection_bounds_for_dataset(bounds: dict[str, Any], dataset: str, provider: object = "") -> dict[str, Any]:
+    provider_token = str(provider or "").strip().upper()
+    provider_key = f"{dataset}:{provider_token}" if provider_token else ""
+    if provider_key and isinstance(bounds.get(provider_key), dict):
+        return dict(bounds.get(provider_key) or {})
+    if dataset in bounds and isinstance(bounds.get(dataset), dict):
+        return dict(bounds.get(dataset) or {})
+    if dataset == "investor_flow" and (
+        "min_trade_date" in bounds or "max_trade_date" in bounds
+    ):
+        return dict(bounds)
+    return {}
+
+
+def _format_collection_data_range(dataset: str, bounds: dict[str, Any], fallback_end: object = "") -> str:
+    monthly = dataset == "macro_data"
+    if dataset == "macro_data":
+        start = bounds.get("min_period_month", "")
+        end = bounds.get("max_period_month", fallback_end)
+    else:
+        start = bounds.get("min_trade_date", "")
+        end = bounds.get("max_trade_date", fallback_end)
+    formatted_start = _format_collection_date(start, monthly=monthly)
+    formatted_end = _format_collection_date(end, monthly=monthly)
+    if formatted_start == "—" and formatted_end == "—":
+        return "—"
+    if formatted_start == "—":
+        return f"~ {formatted_end}"
+    if formatted_end == "—":
+        return f"{formatted_start} ~"
+    return f"{formatted_start} ~ {formatted_end}"
+
+
+def _format_collection_request_range(row: pd.Series | dict[str, Any]) -> str:
+    getter = row.get if hasattr(row, "get") else dict(row).get
+    start = _format_collection_date(getter("requested_start", ""))
+    end = _format_collection_date(getter("requested_end", ""))
+    if start == "—" and end == "—":
+        return "—"
+    return f"{start} ~ {end}"
+
+
+def _summarize_collection_attention(row: pd.Series | dict[str, Any]) -> str:
+    series = row if isinstance(row, pd.Series) else pd.Series(dict(row))
+    error_summary = _summarize_collection_errors(series)
+    if error_summary != "없음":
+        return error_summary
+    if bool(series.get("coverage_complete", False)):
+        return "없음"
+    pct = pd.to_numeric(pd.Series([series.get("completion_pct", pd.NA)]), errors="coerce").iloc[0]
+    if pd.notna(pct):
+        return f"요청 범위 일부 미충족 ({float(pct):.1f}%)"
+    row_count = pd.to_numeric(pd.Series([series.get("row_count", pd.NA)]), errors="coerce").iloc[0]
+    if pd.notna(row_count) and int(row_count) > 0:
+        return f"부분 수집 데이터 있음 ({int(row_count):,}건)"
+    return "요청 범위 일부 미충족"
+
+
+def _latest_collection_rows_by_dataset(history: pd.DataFrame) -> dict[str, pd.Series]:
+    if history.empty or "dataset" not in history.columns:
+        return {}
+    sortable = history.copy()
+    sortable["_created_sort"] = pd.to_datetime(sortable.get("created_at"), errors="coerce", utc=True)
+    sortable = sortable.sort_values("_created_sort", ascending=False, na_position="last")
+    latest: dict[str, pd.Series] = {}
+    for _, row in sortable.iterrows():
+        dataset = str(row.get("dataset", "") or "").strip()
+        if dataset and dataset not in latest:
+            latest[dataset] = row
+    return latest
+
+
+def _format_collection_overview_rows(
+    *,
+    statuses: dict[str, dict[str, Any]],
+    history: pd.DataFrame,
+    bounds: dict[str, Any],
+    dataset_order: list[str],
+) -> pd.DataFrame:
+    latest_rows = _latest_collection_rows_by_dataset(history)
+    latest_macro_rows: dict[str, pd.Series] = {}
+    if not history.empty and {"dataset", "created_at"}.issubset(history.columns):
+        macro_history = history[history["dataset"].astype(str).eq("macro_data")].copy()
+        macro_history["_created_sort"] = pd.to_datetime(macro_history["created_at"], errors="coerce", utc=True)
+        macro_history = macro_history.sort_values("_created_sort", ascending=False, na_position="last")
+        for _, row in macro_history.iterrows():
+            provider = str(row.get("provider", "") or "").strip().upper()
+            if provider and provider not in latest_macro_rows:
+                latest_macro_rows[provider] = row
+    rows: list[dict[str, object]] = []
+    for dataset in dataset_order:
+        dataset_sources: list[pd.Series]
+        if dataset == "macro_data" and latest_macro_rows:
+            dataset_sources = list(latest_macro_rows.values())
+        else:
+            latest = latest_rows.get(dataset)
+            dataset_sources = [latest if latest is not None else pd.Series(statuses.get(dataset) or {})]
+
+        status = dict(statuses.get(dataset) or {})
+        for source in dataset_sources:
+            provider = str(source.get("provider", status.get("provider", "—")) or "—")
+            dataset_bounds = _collection_bounds_for_dataset(bounds, dataset, provider)
+            row_count = dataset_bounds.get("row_count", source.get("row_count", pd.NA))
+            attention_source = source.copy()
+            if "row_count" not in attention_source or pd.isna(attention_source.get("row_count", pd.NA)):
+                attention_source["row_count"] = row_count
+            rows.append(
+                {
+                    "데이터": _format_collection_dataset_label(dataset),
+                    "상태": str(source.get("status", status.get("status", "—")) or "—"),
+                    "마지막 갱신": _format_collection_timestamp(source.get("created_at", status.get("updated_at", ""))),
+                    "보유기간": _format_collection_data_range(dataset, dataset_bounds, status.get("watermark_key", status.get("end", ""))),
+                    "최근 요청": _format_collection_request_range(source),
+                    "실패/주의": _summarize_collection_attention(attention_source),
+                    "provider": provider,
+                    "저장행수": row_count,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def _format_dataset_status_rows(statuses: dict[str, dict[str, Any]], dataset_order: list[str]) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     for dataset in dataset_order:
@@ -345,6 +488,16 @@ def resolve_dashboard_page_title(page_id: object, market_id: str) -> str:
     return f"{normalized_market} 대시보드"
 
 
+def _format_sidebar_status_chip(label: str, status: object) -> str:
+    normalized_status = str(status or "UNKNOWN").strip() or "UNKNOWN"
+    status_class = "ready" if normalized_status in {"LIVE", "CACHED", "SAMPLE"} else "attention"
+    return (
+        f'<span class="sidebar-status-chip sidebar-status-chip--{status_class}">'
+        f'<span>{escape(label)}</span><strong>{escape(normalized_status)}</strong>'
+        "</span>"
+    )
+
+
 def render_sidebar_controls(
     *,
     market_id: str,
@@ -361,8 +514,53 @@ def render_sidebar_controls(
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> tuple[date, str, bool, bool, bool, bool]:
     normalized_market = str(market_id or "KR").strip().upper() or "KR"
-    st.subheader("실행 환경")
-    st.caption(f"{normalized_market} 기준일, 테마, 데이터 작업")
+    status_chips = [
+        _format_sidebar_status_chip("시장", probe_price_status),
+        _format_sidebar_status_chip("매크로", probe_macro_status),
+    ]
+    if normalized_market == "KR":
+        status_chips.append(_format_sidebar_status_chip("수급", probe_investor_flow_status))
+
+    st.markdown(
+        (
+            '<div class="sidebar-workspace">'
+            '<div class="sidebar-workspace__eyebrow">OPERATIONS</div>'
+            f'<div class="sidebar-workspace__title">{escape(normalized_market)} 섹터 콘솔</div>'
+            '<div class="sidebar-workspace__meta">데이터 상태와 실행 기준을 통제합니다.</div>'
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        (
+            '<div class="sidebar-ops-panel">'
+            '<div class="sidebar-ops-panel__header">'
+            '<span>데이터 운용</span><strong>상태 / 갱신</strong>'
+            "</div>"
+            f'<div class="sidebar-status-grid">{"".join(status_chips)}</div>'
+            "</div>"
+        ),
+        unsafe_allow_html=True,
+    )
+    refresh_market = st.button(
+        "시장데이터 갱신",
+        disabled=not btn_states["refresh_market"],
+        width="stretch",
+    )
+    refresh_macro = st.button(
+        "매크로데이터 갱신",
+        disabled=not btn_states["refresh_macro"],
+        width="stretch",
+    )
+    refresh_flow = False
+    if normalized_market == "KR":
+        refresh_flow = st.button(
+            get_ui_text("flow_refresh_button", ui_locale),
+            width="stretch",
+        )
+
+    st.markdown('<div class="sidebar-section-label">분석 기준</div>', unsafe_allow_html=True)
     use_light_theme = st.toggle(
         "라이트 테마",
         value=theme_mode == "light",
@@ -391,8 +589,7 @@ def render_sidebar_controls(
     )
     st.session_state["asof_date_str"] = asof_date.strftime("%Y%m%d")
 
-    st.divider()
-    with st.popover("고급 설정", width="stretch"):
+    with st.popover("모델 파라미터", width="stretch"):
         with st.form("model_params_form"):
             st.caption("슬라이더 숫자를 직접 클릭해 세밀하게 조정할 수 있습니다.")
             param_col1, param_col2 = st.columns(2)
@@ -452,9 +649,8 @@ def render_sidebar_controls(
             st.session_state["price_years"] = int(slider_price_years)
             st.rerun()
 
-    st.divider()
     if normalized_market == "KR":
-        st.subheader(get_ui_text("flow_profile_label", ui_locale))
+        st.markdown('<div class="sidebar-section-label">수급 해석</div>', unsafe_allow_html=True)
         selected_flow_profile = st.selectbox(
             get_ui_text("flow_profile_label", ui_locale),
             options=list(FLOW_PROFILE_IDS),
@@ -465,29 +661,10 @@ def render_sidebar_controls(
     else:
         selected_flow_profile = str(flow_profile or "foreign_lead")
 
-    st.divider()
-    st.subheader("데이터 작업")
-    if normalized_market == "KR":
-        st.caption(f"시장: {probe_price_status} · 매크로: {probe_macro_status} · 수급: {probe_investor_flow_status}")
-    else:
-        st.caption(f"시장: {probe_price_status} · 매크로: {probe_macro_status}")
-    refresh_market = st.button(
-        "시장데이터 갱신",
-        disabled=not btn_states["refresh_market"],
-        width="stretch",
+    st.markdown(
+        f'<div class="sidebar-footer-label">{escape(ui_labels.get("sidebar_title", "섹터 로테이션"))}</div>',
+        unsafe_allow_html=True,
     )
-    refresh_macro = st.button(
-        "매크로데이터 갱신",
-        disabled=not btn_states["refresh_macro"],
-        width="stretch",
-    )
-    refresh_flow = False
-    if normalized_market == "KR":
-        refresh_flow = st.button(
-            get_ui_text("flow_refresh_button", ui_locale),
-            width="stretch",
-        )
-    st.caption(ui_labels.get("sidebar_title", "섹터 로테이션"))
     return asof_date, selected_flow_profile, refresh_market, refresh_macro, refresh_flow
 
 
@@ -691,6 +868,8 @@ def render_decision_first_sections(
     regime_is_confirmed: bool,
     growth_val: float | None,
     inflation_val: float | None,
+    export_growth_val: float | None = None,
+    trade_indicators: dict[str, float] | None = None,
     fx_change: float | None,
     fx_label: str,
     is_provisional: bool,
@@ -719,6 +898,8 @@ def render_decision_first_sections(
         regime_is_confirmed=regime_is_confirmed,
         growth_val=growth_val,
         inflation_val=inflation_val,
+        export_growth_val=export_growth_val,
+        trade_indicators=trade_indicators,
         fx_change=fx_change,
         fx_label=fx_label,
         is_provisional=is_provisional,
@@ -938,6 +1119,9 @@ def render_all_signals_tab(
     theme_mode: str,
     settings: dict[str, Any],
     etf_map: dict[str, list] | None = None,
+    market_id: str = "KR",
+    theme_lens_status: str = "UNAVAILABLE",
+    theme_lens_rows: list[dict[str, Any]] | None = None,
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
     with tab:
@@ -946,8 +1130,8 @@ def render_all_signals_tab(
         render_research_page_frame(
             page_key="signals",
             eyebrow="Signal Review",
-            title="섹터 모멘텀 필터 보드",
-            description="필터 조건, 보유 여부, 알림 상태를 한 화면에서 확인하고 같은 데이터 계약으로 상세 테이블을 검토합니다.",
+            title="섹터 액션 보드",
+            description="신규 검토, 보유 모니터링, 축소 주의, 변곡 후보를 같은 신호 계약으로 분리합니다.",
             summary_items=[
                 {"label": "유니버스", "value": f"{len(signals)}개 섹터"},
                 {"label": "필터", "value": get_action_filter_label(filter_action_global, ui_locale)},
@@ -955,13 +1139,51 @@ def render_all_signals_tab(
                 {"label": "알림", "value": f"{active_alert_count}개 활성"},
             ],
         )
-        render_panel_header(
-            eyebrow="전체 테이블",
-            title="전체 섹터 신호",
-            description="요약 패널과 동일한 구조와 필터 피드백을 사용하는 Streamlit 그리드입니다.",
+        render_sector_momentum_decision_boards(
+            signals,
+            held_sectors=held_sectors,
+            limit_per_board=4,
+            locale=ui_locale,
         )
-        from src.ui.components import render_signal_table
+        if str(market_id).strip().upper() == "KR":
+            snapshot = st.session_state.get("_theme_lens_live_snapshot")
+            display_status = theme_lens_status
+            display_rows = theme_lens_rows or []
+            if isinstance(snapshot, dict) and snapshot.get("rows"):
+                display_status = str(snapshot.get("status") or display_status)
+                display_rows = list(snapshot.get("rows") or display_rows)
+            refresh_clicked = render_theme_lens_panel(
+                display_rows,
+                status=display_status,
+                show_refresh_button=True,
+            )
+            if refresh_clicked:
+                from src.data_sources.theme_lens import refresh_theme_lens_etf_ohlcv
 
+                with st.spinner("테마 ETF proxy 갱신 중..."):
+                    summary = refresh_theme_lens_etf_ohlcv(
+                        asof_date=str(settings.get("market_end_date_str") or date.today().strftime("%Y%m%d"))
+                    )
+                status = str(summary.get("status", "")).upper()
+                refreshed_count = len(list(summary.get("refreshed_codes", [])))
+                fetched_count = len(list(summary.get("fetched_codes", [])))
+                failed_count = len(dict(summary.get("failed_codes", {})))
+                live_rows = list(summary.get("live_rows", []))
+                if live_rows:
+                    st.session_state["_theme_lens_live_snapshot"] = {
+                        "status": str(summary.get("live_status") or status),
+                        "rows": live_rows,
+                    }
+                if status in {"LIVE", "PARTIAL"}:
+                    st.toast(f"테마 ETF 갱신 완료: {fetched_count}개 수신, {refreshed_count}개 저장, {failed_count}개 실패")
+                    st.rerun()
+                else:
+                    st.warning("테마 ETF 갱신이 완료되지 않았습니다. 기존 캐시 또는 unavailable 상태를 유지합니다.")
+        render_panel_header(
+            eyebrow="전체 원장",
+            title="전체 섹터 신호 원장",
+            description="위 의사결정 보드와 동일한 신호 계약을 상세 행 단위로 검토합니다.",
+        )
         if kr_momentum_only:
             st.caption(
                 f"적용 필터: 액션={get_action_filter_label(filter_action_global, ui_locale)}, "
@@ -1107,6 +1329,33 @@ def render_screening_tab(
                 help="RS > RS_MA AND SMA20 > SMA60 조건을 모두 충족하는 종목만 표시",
             )
 
+        progress_status = st.empty() if force_refresh else None
+        progress_bar = st.progress(0, text="구성종목 갱신 준비 중...") if force_refresh else None
+
+        def _update_screening_progress(event: dict[str, Any]) -> None:
+            if progress_status is None or progress_bar is None:
+                return
+            current = int(event.get("current") or 0)
+            total = int(event.get("total") or 0)
+            stage = str(event.get("stage") or "")
+            if total <= 0:
+                label = "갱신 대상 종목을 확인하는 중..."
+                progress_value = 0
+            elif stage == "done":
+                label = f"갱신 완료: 총 {total}종목 처리"
+                progress_value = 100
+            elif stage == "ticker":
+                ticker = str(event.get("ticker") or "")
+                sector_name = str(event.get("sector_name") or "")
+                subject = f"{ticker} · {sector_name}" if sector_name else ticker
+                label = f"갱신 대상 총 {total}종목 중 {current}번째 처리 중: {subject}"
+                progress_value = min(100, max(0, round(current / total * 100)))
+            else:
+                label = f"갱신 대상 총 {total}종목 확인 완료"
+                progress_value = 0
+            progress_status.caption(label)
+            progress_bar.progress(progress_value, text=label)
+
         with st.spinner("구성종목 로딩 중..."):
             status, rows = load_screened_stocks(
                 strong_buy_sectors=strong_buy_sectors,
@@ -1114,7 +1363,12 @@ def render_screening_tab(
                 settings=settings,
                 force_refresh=force_refresh,
                 allow_live_fetch=force_refresh,
+                progress_callback=_update_screening_progress if force_refresh else None,
             )
+
+        if progress_status is not None and progress_bar is not None:
+            progress_status.empty()
+            progress_bar.empty()
 
         if status == "UNAVAILABLE" or not rows:
             st.markdown(
@@ -1126,7 +1380,11 @@ def render_screening_tab(
             )
             return
 
-        status_label = {"LIVE": "현재 세션", "CACHED": "캐시(24h)"}
+        status_label = {
+            "LIVE": "현재 세션",
+            "CACHED": "캐시(24h)",
+            "STALE_CACHE": "만료 캐시 · 갱신 권장",
+        }
         st.caption(f"데이터 상태: **{status_label.get(status, status)}** | 총 {len(rows)}개 종목")
 
         if show_momentum_only:
@@ -1151,6 +1409,7 @@ def render_screening_tab(
                 "RSI": r["rsi"],
                 "RS↑": r["rs_strong"],
                 "추세↑": r["trend_ok"],
+                "200DMA↑": r.get("above_200dma", False),
                 "1M(%)": r["ret_1m"],
                 "3M(%)": r["ret_3m"],
                 "알림": r["alerts"],
@@ -1185,6 +1444,7 @@ def render_screening_tab(
                 "RSI": st.column_config.NumberColumn("RSI", format="%.1f"),
                 "RS↑": st.column_config.CheckboxColumn("RS↑", width="small"),
                 "추세↑": st.column_config.CheckboxColumn("추세↑", width="small"),
+                "200DMA↑": st.column_config.CheckboxColumn("200DMA↑", width="small"),
                 "1M(%)": st.column_config.NumberColumn("1M(%)", format="%.1f%%"),
                 "3M(%)": st.column_config.NumberColumn("3M(%)", format="%.1f%%"),
                 "알림": st.column_config.TextColumn("알림", width="small"),
@@ -1517,16 +1777,9 @@ def render_investor_flow_tab(
 
 def _build_etf_map(sector_map: dict | None) -> dict[str, list]:
     """Build {index_code: [{"code":..., "name":...}, ...]} from sector_map config."""
-    if not sector_map:
-        return {}
-    etf_map: dict[str, list] = {}
-    for regime_data in sector_map.get("regimes", {}).values():
-        for sector in regime_data.get("sectors", []):
-            code = str(sector.get("code", ""))
-            etfs = sector.get("etfs") or []
-            if code and etfs:
-                etf_map[code] = [{"code": str(e["code"]), "name": str(e["name"])} for e in etfs]
-    return etf_map
+    from src.data_sources.sector_etf_mapping import build_effective_etf_map
+
+    return build_effective_etf_map(sector_map)
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -1534,6 +1787,7 @@ def _cached_monitoring_data(market_id: str) -> dict:
     """Load dataset collection monitoring data with a 60-second TTL cache."""
     from src.data_sources.warehouse import (
         COLLECTION_HISTORY_DATASETS,
+        read_dataset_data_bounds,
         read_dataset_status,
         read_collection_run_history,
     )
@@ -1548,7 +1802,29 @@ def _cached_monitoring_data(market_id: str) -> dict:
         sample_per_dataset=True,
         sample_size=10,
     )
-    return {"statuses": statuses, "history": history, "dataset_order": dataset_order}
+    bounds = {
+        dataset: read_dataset_data_bounds(dataset, market=market_id)
+        for dataset in dataset_order
+    }
+    macro_providers = {
+        str(provider).strip().upper()
+        for provider in (
+            history.loc[history["dataset"].astype(str).eq("macro_data"), "provider"].tolist()
+            if not history.empty and {"dataset", "provider"}.issubset(history.columns)
+            else []
+        )
+        if str(provider).strip()
+    }
+    macro_status_provider = str(statuses.get("macro_data", {}).get("provider", "") or "").strip().upper()
+    if macro_status_provider:
+        macro_providers.add(macro_status_provider)
+    for provider in sorted(macro_providers):
+        bounds[f"macro_data:{provider}"] = read_dataset_data_bounds(
+            "macro_data",
+            market=market_id,
+            provider=provider,
+        )
+    return {"statuses": statuses, "history": history, "bounds": bounds, "dataset_order": dataset_order}
 
 
 def clear_monitoring_data_cache() -> None:
@@ -1576,7 +1852,7 @@ def render_monitoring_tab(
             summary_items=[
                 {"label": "시장", "value": market_id},
                 {"label": "데이터셋", "value": "3개"},
-                {"label": "샘플", "value": "최신 10건"},
+                {"label": "로그", "value": "최신 10건"},
                 {"label": "기준", "value": "warehouse"},
             ],
         )
@@ -1661,13 +1937,26 @@ def render_monitoring_tab(
                 history = pd.concat([history, data["history"]], ignore_index=True)
             used_runtime_history_fallback = True
 
-        status_rows = _format_dataset_status_rows(statuses, dataset_order)
+        bounds = dict(data.get("bounds") or {})
+        status_rows = _format_collection_overview_rows(
+            statuses=statuses,
+            history=history,
+            bounds=bounds,
+            dataset_order=dataset_order,
+        )
         st.dataframe(
             status_rows,
             hide_index=True,
             width="stretch",
             column_config={
-                "최근 완료율(%)": st.column_config.NumberColumn("최근 완료율(%)", format="%.1f"),
+                "데이터": st.column_config.TextColumn("데이터", width="small"),
+                "상태": st.column_config.TextColumn("상태", width="small"),
+                "마지막 갱신": st.column_config.TextColumn("마지막 갱신", width="medium"),
+                "보유기간": st.column_config.TextColumn("보유기간", width="medium"),
+                "최근 요청": st.column_config.TextColumn("최근 요청", width="medium"),
+                "실패/주의": st.column_config.TextColumn("실패/주의", width="large"),
+                "provider": st.column_config.TextColumn("provider", width="small"),
+                "저장행수": st.column_config.NumberColumn("저장행수", format="%d"),
             },
         )
 
@@ -1684,7 +1973,7 @@ def render_monitoring_tab(
 
         render_panel_header(
             eyebrow="이력",
-            title="데이터 수집 이력 샘플",
+            title="최근 수집 실행 로그",
             description="수집일시 내림차순 기준으로 데이터셋별 최신 10건만 확인합니다.",
         )
         if history.empty:
@@ -1700,7 +1989,7 @@ def render_monitoring_tab(
                 sample = _format_collection_history_sample(history, dataset)
                 label = _format_collection_dataset_label(dataset)
                 render_panel_header(
-                    eyebrow="샘플",
+                    eyebrow="로그",
                     title=f"{label}",
                     description="수집일시 내림차순 최신 10건입니다.",
                     badge=f"{len(dataset_history):,}건",
@@ -1746,6 +2035,8 @@ def render_dashboard_tabs(
     sector_map: dict[str, Any] | None = None,
     ui_locale: str = DEFAULT_UI_LOCALE,
     selected_page_id: str = DEFAULT_DASHBOARD_PAGE_ID,
+    theme_lens_status: str = "UNAVAILABLE",
+    theme_lens_rows: list[dict[str, Any]] | None = None,
 ) -> None:
     etf_map = _build_etf_map(sector_map)
     normalized_market = str(market_id).strip().upper() or "KR"
@@ -1809,6 +2100,9 @@ def render_dashboard_tabs(
             theme_mode=theme_mode,
             settings=settings,
             etf_map=etf_map,
+            market_id=normalized_market,
+            theme_lens_status=theme_lens_status,
+            theme_lens_rows=theme_lens_rows,
             ui_locale=ui_locale,
         )
     elif selected_page_id == "constituents":

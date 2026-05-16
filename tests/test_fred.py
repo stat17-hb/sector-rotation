@@ -82,6 +82,57 @@ def test_load_fred_macro_persists_market_scoped_rows(monkeypatch):
     assert sorted(stored["series_alias"].astype(str).unique()) == ["cpi_mom", "leading_index"]
 
 
+def test_load_fred_macro_fetches_trade_aliases_with_configured_transforms(monkeypatch):
+    now = datetime.now(timezone.utc)
+    calls: list[tuple[str, str]] = []
+
+    def _fake_fetch(series_id: str, start_ym: str, end_ym: str, transform: str = "none") -> pd.DataFrame:
+        _ = (start_ym, end_ym)
+        calls.append((series_id, transform))
+        return pd.DataFrame(
+            {
+                "series_id": [series_id],
+                "value": [1.0],
+                "source": ["FRED"],
+                "fetched_at": [now],
+                "is_provisional": [False],
+            },
+            index=pd.PeriodIndex(["2024-01"], freq="M"),
+        )
+
+    monkeypatch.setattr(fred, "fetch_fred_series", _fake_fetch)
+
+    status, frame = fred.load_fred_macro(
+        "202401",
+        "202401",
+        series_config={
+            "trade_exports_yoy": {"series_id": "BOPTEXP", "transform": "pct_change_12m", "enabled": True},
+            "trade_imports_yoy": {"series_id": "BOPTIMP", "transform": "pct_change_12m", "enabled": True},
+            "trade_balance": {"series_id": "BOPGSTB", "transform": "none", "enabled": True},
+        },
+        market="US",
+    )
+
+    assert status == "LIVE"
+    assert sorted(calls) == [
+        ("BOPGSTB", "none"),
+        ("BOPTEXP", "pct_change_12m"),
+        ("BOPTIMP", "pct_change_12m"),
+    ]
+    assert sorted(frame["series_id"].astype(str).unique()) == ["BOPGSTB", "BOPTEXP", "BOPTIMP"]
+    stored = read_macro_data(
+        series_aliases=["trade_exports_yoy", "trade_imports_yoy", "trade_balance"],
+        start_ym="202401",
+        end_ym="202401",
+        market="US",
+    )
+    assert sorted(stored["series_alias"].astype(str).unique()) == [
+        "trade_balance",
+        "trade_exports_yoy",
+        "trade_imports_yoy",
+    ]
+
+
 def test_load_fred_macro_uses_cached_rows_without_write(monkeypatch):
     now = datetime.now(timezone.utc)
     upsert_macro_dimension(

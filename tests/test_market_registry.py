@@ -27,6 +27,19 @@ def test_load_market_configs_merges_us_overrides():
     assert macro_series_cfg["fred"]["leading_index"]["series_id"] == "INDPRO"
 
 
+def test_us_macro_config_includes_fred_trade_aliases():
+    _, _, macro_series_cfg, _ = load_market_configs("US")
+    fred_cfg = macro_series_cfg["fred"]
+
+    assert fred_cfg["trade_exports_yoy"]["series_id"] == "BOPTEXP"
+    assert fred_cfg["trade_exports_yoy"]["transform"] == "pct_change_12m"
+    assert fred_cfg["trade_imports_yoy"]["series_id"] == "BOPTIMP"
+    assert fred_cfg["trade_imports_yoy"]["transform"] == "pct_change_12m"
+    assert fred_cfg["trade_balance"]["series_id"] == "BOPGSTB"
+    assert fred_cfg["trade_balance"]["transform"] == "none"
+    assert "export_amount" not in fred_cfg
+
+
 def test_load_market_configs_sets_kr_adaptive_epsilon_false():
     settings, _, _, profile = load_market_configs("KR")
 

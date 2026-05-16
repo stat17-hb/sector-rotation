@@ -142,7 +142,7 @@ def test_render_page_header_avoids_forbidden_brokerage_or_live_claims(monkeypatc
     )
 
     markup = markdown_calls[0]
-    assert "market context" in markup
+    assert "시장 컨텍스트" in markup
     for phrase in (
         "live overview",
         "Watchlist",
@@ -175,6 +175,7 @@ def test_render_status_strip_renders_markup_and_details(monkeypatch):
 
     assert markdown_calls
     assert "status-strip" in markdown_calls[0]
+    assert "주의" in markdown_calls[0]
     assert "Cache fallback" in markdown_calls[0]
     assert "2개 상세" in markdown_calls[0]
     assert any("KRX: HTTP_ERROR" in call for call in write_calls)
@@ -466,6 +467,7 @@ def test_render_decision_hero_renders_regime_and_provisional_badge(monkeypatch):
         regime_is_confirmed=False,
         growth_val=101.25,
         inflation_val=2.1,
+        export_growth_val=7.5,
         fx_change=1.4,
         is_provisional=True,
         theme_mode="light",
@@ -478,6 +480,8 @@ def test_render_decision_hero_renders_regime_and_provisional_badge(monkeypatch):
     assert "규칙 기반 판단" in markdown_calls[0]
     assert "confirmed_regime 기준" in markdown_calls[0]
     assert "역사 문서 분리" in markdown_calls[0]
+    assert "수출 전년비" in markdown_calls[0]
+    assert "7.50%" in markdown_calls[0]
 
     markdown_calls.clear()
     render_decision_hero(
@@ -485,6 +489,7 @@ def test_render_decision_hero_renders_regime_and_provisional_badge(monkeypatch):
         regime_is_confirmed=False,
         growth_val=101.25,
         inflation_val=2.1,
+        export_growth_val=7.5,
         fx_change=1.4,
         is_provisional=True,
         theme_mode="light",
@@ -495,6 +500,410 @@ def test_render_decision_hero_renders_regime_and_provisional_badge(monkeypatch):
     assert "Rules-based heuristic" in markdown_calls[0]
     assert "confirmed_regime primary" in markdown_calls[0]
     assert "Historical docs separated" in markdown_calls[0]
+    assert "Exports YoY" in markdown_calls[0]
+
+
+def test_render_decision_hero_renders_us_trade_copy_without_kr_export_label(monkeypatch):
+    markdown_calls: list[str] = []
+    monkeypatch.setattr("src.ui.components.st.markdown", lambda text, **_: markdown_calls.append(text))
+
+    render_decision_hero(
+        regime="Expansion",
+        regime_is_confirmed=True,
+        growth_val=2.4,
+        inflation_val=3.1,
+        export_growth_val=7.5,
+        trade_indicators={"exports_yoy": 4.2, "imports_yoy": -1.5},
+        fx_change=0.8,
+        theme_mode="light",
+        locale="en",
+    )
+
+    assert markdown_calls
+    assert "US Exports YoY" in markdown_calls[0]
+    assert "US Imports YoY" in markdown_calls[0]
+    assert "4.20%" in markdown_calls[0]
+    assert "-1.50%" in markdown_calls[0]
+    assert "수출 전년비" not in markdown_calls[0]
+
+
+def test_overview_market_cards_include_kr_export_growth_status():
+    cards = panels_module._build_overview_market_cards(
+        prices_wide=pd.DataFrame({"KOSPI": [100.0, 101.0]}),
+        benchmark_label="KOSPI",
+        reference_index_labels=[],
+        signals=[],
+        current_regime="Recovery",
+        price_status="LIVE",
+        macro_status="CACHED",
+        export_growth_val=7.5,
+    )
+
+    rendered = "".join(cards)
+    assert "수출 전년비" in rendered
+    assert "+7.5%" in rendered
+
+
+def test_overview_market_cards_show_latest_daily_return_basis():
+    prices = pd.DataFrame(
+        {"KOSPI": [101.0, 100.0, 98.0]},
+        index=pd.to_datetime(["2026-05-11", "2026-05-10", "2026-05-12"]),
+    )
+
+    cards = panels_module._build_overview_market_cards(
+        prices_wide=prices,
+        benchmark_label="KOSPI",
+        reference_index_labels=[],
+        signals=[],
+        current_regime="Recovery",
+        price_status="LIVE",
+        macro_status="CACHED",
+    )
+
+    rendered = "".join(cards)
+    assert "1D -2.97%" in rendered
+    assert "98.00" in rendered
+
+
+def test_overview_market_cards_do_not_promote_sector_signals_without_reference_indexes():
+    cards = panels_module._build_overview_market_cards(
+        prices_wide=pd.DataFrame(
+            {
+                "KOSPI": [100.0, 101.0],
+                "KRX 증권": [200.0, 210.0],
+            }
+        ),
+        benchmark_label="KOSPI",
+        reference_index_labels=[],
+        signals=[_signal("KRX 증권", "Strong Buy", 1.2, 1.0)],
+        current_regime="Recovery",
+        price_status="CACHED",
+        macro_status="CACHED",
+    )
+
+    rendered = "".join(cards)
+    assert "KOSPI" in rendered
+    assert "KRX 증권" not in rendered
+
+
+def test_overview_market_cards_include_us_trade_status_without_export_growth():
+    cards = panels_module._build_overview_market_cards(
+        prices_wide=pd.DataFrame({"S&P 500": [100.0, 101.0]}),
+        benchmark_label="S&P 500",
+        reference_index_labels=[],
+        signals=[],
+        current_regime="Expansion",
+        price_status="LIVE",
+        macro_status="CACHED",
+        trade_indicators={"exports_yoy": 4.2, "imports_yoy": -1.5},
+    )
+
+    rendered = "".join(cards)
+    assert "미국 수출입" in rendered
+    assert "수출 +4.2%" in rendered
+    assert "수입 -1.5%" in rendered
+    assert "수출 전년비" not in rendered
+
+
+def test_overview_market_cards_show_trade_placeholder_when_configured_without_data():
+    cards = panels_module._build_overview_market_cards(
+        prices_wide=pd.DataFrame({"S&P 500": [100.0, 101.0]}),
+        benchmark_label="S&P 500",
+        reference_index_labels=[],
+        signals=[],
+        current_regime="Expansion",
+        price_status="LIVE",
+        macro_status="CACHED",
+        trade_indicators={},
+        has_trade_indicators=True,
+    )
+
+    rendered = "".join(cards)
+    assert "미국 수출입" in rendered
+    assert "데이터 없음" in rendered
+    assert "수출 전년비" not in rendered
+
+
+def test_render_sector_trade_lens_labels_aggregate_proxy(monkeypatch):
+    markdown_calls: list[str] = []
+    monkeypatch.setattr("src.ui.panels.st.markdown", lambda text, **_: markdown_calls.append(text))
+
+    panels_module._render_sector_trade_lens(
+        [
+            {
+                "sector": "Technology",
+                "exposure_label": "수출 민감",
+                "basis": "글로벌 IT/장비 수요",
+                "driver": "수출 YoY",
+                "value": 4.2,
+                "status": "교역 순풍",
+                "tone": "positive",
+            }
+        ]
+    )
+
+    assert markdown_calls
+    rendered = markdown_calls[0]
+    assert "미국 수출입 섹터 렌즈" in rendered
+    assert "총량 proxy" in rendered
+    assert "섹터별 직접 무역 데이터가 아니며" in rendered
+    assert "Technology" in rendered
+    assert "교역 순풍" in rendered
+    assert "+4.2%" in rendered
+
+
+def test_render_sector_trade_lens_omits_direct_limitation_na_cards(monkeypatch):
+    markdown_calls: list[str] = []
+    monkeypatch.setattr("src.ui.panels.st.markdown", lambda text, **_: markdown_calls.append(text))
+
+    panels_module._render_sector_trade_lens(
+        [
+            {
+                "sector": "Technology",
+                "exposure_label": "수출 민감",
+                "basis": "글로벌 IT/장비 수요",
+                "driver": "수출 YoY",
+                "value": 4.2,
+                "status": "교역 순풍",
+                "tone": "positive",
+            },
+            {
+                "sector": "Financials",
+                "exposure_label": "낮음",
+                "basis": "교역 직접성 낮음",
+                "driver": "직접성 낮음",
+                "value": None,
+                "status": "직접 해석 제한",
+                "tone": "neutral",
+            },
+        ]
+    )
+
+    assert markdown_calls
+    rendered = markdown_calls[0]
+    assert "Technology" in rendered
+    assert "Financials" not in rendered
+    assert "N/A" not in rendered
+    assert "직접 해석 제한 섹터 1개 제외" in rendered
+
+
+def test_render_sector_trade_lens_skips_panel_when_only_na_rows(monkeypatch):
+    markdown_calls: list[str] = []
+    monkeypatch.setattr("src.ui.panels.st.markdown", lambda text, **_: markdown_calls.append(text))
+
+    panels_module._render_sector_trade_lens(
+        [
+            {
+                "sector": "Financials",
+                "value": None,
+                "status": "직접 해석 제한",
+            }
+        ]
+    )
+
+    assert markdown_calls == []
+
+
+def test_overview_sector_frame_includes_sector_export_basis_when_capability_enabled():
+    signals = [
+        type(
+            "Signal",
+            (),
+            {
+                "sector_name": "KRX 반도체",
+                "action": "Buy",
+                "returns": {"1M": 0.02, "3M": 0.08},
+                "mom_percentile": 84.0,
+            },
+        )(),
+        type(
+            "Signal",
+            (),
+            {
+                "sector_name": "KOSPI200 경기소비재",
+                "action": "Watch",
+                "returns": {"1M": 0.01, "3M": 0.02},
+                "mom_percentile": 61.0,
+            },
+        )(),
+    ]
+
+    frame = panels_module._build_overview_sector_frame(
+        signals,
+        sort_key="모멘텀 점수",
+        sector_export_trends={
+            "KRX 반도체": 18.4,
+            "KOSPI200 경기소비재": 1.2,
+        },
+    )
+
+    assert list(frame["섹터"]) == ["KRX 반도체", "KOSPI200 경기소비재"]
+    assert list(frame["수출 기준"]) == ["반도체 수출", "자동차 수출"]
+    assert "수출 YoY" not in frame.columns
+
+
+def test_render_overview_sector_table_omits_export_yoy_but_keeps_export_basis(monkeypatch):
+    markdown_calls: list[str] = []
+    monkeypatch.setattr("src.ui.panels.st.markdown", lambda text, **_: markdown_calls.append(text))
+
+    panels_module._render_overview_sector_table(
+        pd.DataFrame(
+            [
+                {
+                    "순위": 1,
+                    "섹터": "KOSPI200 경기소비재",
+                    "수출 기준": "자동차 수출",
+                    "모멘텀 점수": 84.0,
+                    "상대강도": 4.2,
+                    "3M": 8.0,
+                }
+            ]
+        )
+    )
+
+    assert markdown_calls
+    assert "수출 YoY" not in markdown_calls[0]
+    assert "수출 기준: 자동차 수출" in markdown_calls[0]
+    assert "+8.00%" in markdown_calls[0]
+
+
+def test_overview_sector_frame_omits_export_columns_when_capability_disabled():
+    signals = [
+        type(
+            "Signal",
+            (),
+            {
+                "sector_name": "Industrials",
+                "action": "Watch",
+                "rs": 1.03,
+                "rs_ma": 1.00,
+                "returns": {"1M": 0.01, "3M": 0.03},
+                "mom_percentile": 80.0,
+            },
+        )()
+    ]
+
+    frame = panels_module._build_overview_sector_frame(
+        signals,
+        sort_key="수출 YoY",
+        sector_export_trends={"Industrials": 8.4},
+        has_sector_export_indicators=False,
+    )
+
+    assert "수출 YoY" not in frame.columns
+    assert "수출 기준" not in frame.columns
+
+
+def test_render_overview_sector_table_omits_export_headers_when_capability_disabled(monkeypatch):
+    markdown_calls: list[str] = []
+    monkeypatch.setattr("src.ui.panels.st.markdown", lambda text, **_: markdown_calls.append(text))
+
+    panels_module._render_overview_sector_table(
+        pd.DataFrame(
+            [
+                {
+                    "순위": 1,
+                    "섹터": "Industrials",
+                    "모멘텀 점수": 84.0,
+                    "상대강도": 4.2,
+                    "3M": 8.0,
+                }
+            ]
+        ),
+        has_sector_export_indicators=False,
+    )
+
+    assert markdown_calls
+    assert "수출 YoY" not in markdown_calls[0]
+    assert "수출 기준" not in markdown_calls[0]
+
+
+def test_build_sector_export_trend_figure_renders_monthly_series():
+    index = pd.period_range("2025-01", periods=14, freq="M")
+    signals = [
+        type(
+            "Signal",
+            (),
+            {
+                "sector_name": "KRX 반도체",
+                "action": "Buy",
+                "returns": {"3M": 0.08},
+                "mom_percentile": 84.0,
+            },
+        )()
+    ]
+
+    fig = panels_module._build_sector_export_trend_figure(
+        sector_export_history={
+            "KRX 반도체": pd.Series(range(14), index=index, dtype="float64"),
+            "KOSPI200 경기소비재": pd.Series(range(100, 114), index=index, dtype="float64"),
+        },
+        signals=signals,
+        theme_mode="dark",
+        window_months=12,
+    )
+
+    assert len(fig.data) == 2
+    assert fig.data[0].name == "반도체 수출"
+    assert fig.data[1].name == "자동차 수출"
+    assert list(fig.data[0].x)[0] == pd.Timestamp("2025-03-01")
+    assert list(fig.data[0].x)[-1] == pd.Timestamp("2026-02-01")
+    assert fig.layout.xaxis.tickformat == "%b\n%Y"
+    assert fig.layout.xaxis.dtick == "M1"
+    assert fig.layout.hovermode == "x unified"
+    assert "반도체 수출" in str(fig.layout.annotations[0].text)
+    assert "섹터별 수출 YoY 월별 추이" in str(fig.layout.title.text)
+
+
+def test_build_overview_trend_figure_labels_line_ends_and_month_ticks():
+    dates = pd.date_range("2026-01-02", periods=45, freq="B")
+    prices = pd.DataFrame(
+        {
+            "KOSPI": range(100, 145),
+            "KRX 반도체": range(100, 190, 2),
+            "KRX 정보기술": range(100, 235, 3),
+        },
+        index=dates,
+    )
+    signals = [
+        type(
+            "Signal",
+            (),
+            {
+                "sector_name": "KRX 반도체",
+                "action": "Strong Buy",
+                "returns": {"3M": 0.08},
+                "mom_percentile": 84.0,
+            },
+        )(),
+        type(
+            "Signal",
+            (),
+            {
+                "sector_name": "KRX 정보기술",
+                "action": "Watch",
+                "returns": {"3M": 0.05},
+                "mom_percentile": 74.0,
+            },
+        )(),
+    ]
+
+    fig = panels_module._build_overview_trend_figure(
+        prices_wide=prices,
+        signals=signals,
+        benchmark_label="KOSPI",
+        period="3M",
+        theme_mode="light",
+    )
+
+    assert len(fig.data) == 3
+    assert fig.layout.xaxis.tickformat == "%b\n%Y"
+    assert fig.layout.xaxis.dtick == "M1"
+    assert fig.layout.hovermode == "x unified"
+    annotation_text = " ".join(str(annotation.text) for annotation in fig.layout.annotations)
+    assert "KOSPI" in annotation_text
+    assert "KRX 반도체" in annotation_text
+    assert "KRX 정보기술" in annotation_text
 
 
 def test_render_status_card_row_renders_card_markup(monkeypatch):
@@ -1701,14 +2110,406 @@ def test_build_sector_strength_heatmap_thins_all_range_x_labels_and_hides_cell_t
     assert ticktext[1] == ""
 
 
-def test_render_overview_mobile_decision_strip_shows_top_three(monkeypatch):
+def test_build_overview_review_candidate_projection_scores_numeric_examples():
+    signal = _signal("A", "Strong Buy", 1.10, 1.00, action_policy="KR_MOMENTUM_ONLY")
+    signal.mom_percentile = 80.0
+    signal.rs_change_pct = 4.0
+    signal.macro_fit = True
+    signal.sector_fit_rank = 2
+    signal.sector_fit_total = 5
+    signal.flow_state = "supportive"
+    signal.flow_score = 1.2
+
+    candidate = panels_module._build_overview_review_candidate_projection(signal)
+
+    assert candidate is not None
+    assert candidate["momentum_score"] == pytest.approx(80.0)
+    assert candidate["macro_score"] == pytest.approx(67.5)
+    assert candidate["flow_score"] == pytest.approx(80.0)
+    assert candidate["candidate_score"] == pytest.approx(75.625)
+    assert candidate["upside_proxy"] == pytest.approx(84.25)
+    assert candidate["downside_proxy"] == pytest.approx(19.75)
+    assert candidate["edge_proxy"] == pytest.approx(64.5)
+    assert candidate["turning_point_state"] == "Continuation up"
+    assert candidate["bullish_evidence"][:3] == ["모멘텀 우위", "RS 상방", "RS 개선"]
+    assert candidate["candidate_policy"] == "COMPOSITE_REVIEW_CANDIDATE"
+    assert candidate["action_policy"] == "KR_MOMENTUM_ONLY"
+    assert signal.action_policy == "KR_MOMENTUM_ONLY"
+
+    neutral_signal = _signal("B", "Watch", 1.00, 1.00, macro_fit=False)
+    neutral_signal.mom_percentile = float("nan")
+    neutral_signal.mom_score = 0.4
+    neutral_signal.flow_state = "unavailable"
+    neutral_signal.flow_score = float("nan")
+
+    neutral_candidate = panels_module._build_overview_review_candidate_projection(neutral_signal)
+
+    assert neutral_candidate is not None
+    assert neutral_candidate["momentum_score"] == pytest.approx(40.0)
+    assert neutral_candidate["macro_score"] == pytest.approx(35.0)
+    assert neutral_candidate["flow_score"] == pytest.approx(50.0)
+    assert neutral_candidate["flow_available"] is False
+    assert neutral_candidate["candidate_score"] == pytest.approx(40.25)
+
+
+def test_build_overview_review_candidate_projection_marks_bearish_turn_exactly():
+    signal = _signal(
+        "A",
+        "Avoid",
+        0.94,
+        1.00,
+        macro_fit=False,
+        alerts=["Overheat"],
+    )
+    signal.mom_percentile = 20.0
+    signal.rs_change_pct = -5.0
+    signal.trend_ok = False
+    signal.flow_state = "adverse"
+    signal.flow_score = -1.0
+    signal.volatility_20d = 0.32
+    signal.mdd_3m = -0.22
+
+    candidate = panels_module._build_overview_review_candidate_projection(signal)
+
+    assert candidate is not None
+    assert candidate["upside_proxy"] == pytest.approx(23.25)
+    assert candidate["downside_proxy"] == pytest.approx(77.75)
+    assert candidate["edge_proxy"] == pytest.approx(-54.5)
+    assert candidate["turning_point_state"] == "Bearish turn"
+    assert candidate["bearish_evidence"][:4] == ["모멘텀 약화", "RS 하방", "RS 둔화", "추세 훼손"]
+    assert signal.action == "Avoid"
+
+
+def test_build_overview_review_candidate_projection_uses_boolean_momentum_and_flow_guards():
+    signal = _signal("A", "Strong Buy", 1.10, 1.00)
+    signal.mom_percentile = float("inf")
+    signal.mom_score = float("-inf")
+    signal.flow_state = "supportive"
+    signal.flow_score = float("inf")
+
+    candidate = panels_module._build_overview_review_candidate_projection(signal)
+
+    assert candidate is not None
+    assert candidate["momentum_score"] == pytest.approx(66.6667)
+    assert candidate["flow_score"] == pytest.approx(50.0)
+    assert candidate["upside_proxy"] == pytest.approx(74.33, abs=0.01)
+    assert candidate["downside_proxy"] == pytest.approx(27.50, abs=0.01)
+    assert candidate["edge_proxy"] == pytest.approx(46.83, abs=0.01)
+    assert "수급 점수 중립" in candidate["warnings"]
+
+
+def test_build_sector_momentum_decision_boards_groups_watch_without_trend_as_monitor():
+    strong = _signal("A", "Strong Buy", 1.10, 1.00, action_policy="KR_MOMENTUM_ONLY")
+    strong.mom_percentile = 90.0
+    watch = _signal("B", "Watch", 0.99, 1.00, action_policy="KR_MOMENTUM_ONLY")
+    watch.momentum_core_pass = True
+    watch.trend_ok = False
+    watch.mom_percentile = 75.0
+    risky_watch = _signal("C", "Watch", 0.98, 1.00, action_policy="KR_MOMENTUM_ONLY", alerts=["Overheat"])
+    risky_watch.momentum_core_pass = True
+    risky_watch.trend_ok = False
+    risky_watch.mom_percentile = 65.0
+    risky_watch.flow_state = "neutral"
+    bearish = _signal("D", "Hold", 0.94, 1.00, action_policy="KR_MOMENTUM_ONLY")
+    bearish.trend_ok = False
+    bearish.rs_change_pct = -3.0
+    bearish.mom_percentile = 45.0
+
+    boards = panels_module._build_sector_momentum_decision_boards(
+        [strong, watch, risky_watch, bearish],
+        held_sectors=["Sector B", "Sector C"],
+    )
+
+    assert [candidate["sector_name"] for candidate in boards["new_review"]] == ["Sector A"]
+    assert [candidate["sector_name"] for candidate in boards["held_monitor"]] == ["Sector B"]
+    assert [candidate["sector_name"] for candidate in boards["held_reduce"]] == ["Sector C"]
+    assert [candidate["sector_name"] for candidate in boards["inflection"]] == ["Sector D"]
+    assert boards["held_monitor"][0]["risk_flag"] is False
+    assert boards["held_reduce"][0]["risk_flag"] is True
+
+
+def test_build_sector_momentum_decision_boards_includes_held_na_as_reduce():
+    missing = _signal(
+        "A",
+        "N/A",
+        1.00,
+        1.00,
+        action_policy="KR_MOMENTUM_ONLY",
+        alerts=["Benchmark Missing"],
+    )
+
+    boards = panels_module._build_sector_momentum_decision_boards(
+        [missing],
+        held_sectors=["Sector A"],
+    )
+
+    assert [candidate["sector_name"] for candidate in boards["held_reduce"]] == ["Sector A"]
+    assert boards["held_reduce"][0]["candidate_policy"] == "SECTOR_MOMENTUM_NA_DATA_CHECK"
+    assert boards["held_reduce"][0]["metrics"][0] == ("상방 proxy", "N/A")
+
+
+def test_render_sector_momentum_decision_boards_uses_proxy_guardrail_copy(monkeypatch):
+    markdown_calls: list[str] = []
+    signal = _signal("A", "Strong Buy", 1.10, 1.00, action_policy="KR_MOMENTUM_ONLY")
+    signal.mom_percentile = 88.0
+
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **_: markdown_calls.append(text))
+
+    panels_module.render_sector_momentum_decision_boards([signal], held_sectors=[])
+
+    assert markdown_calls
+    markup = markdown_calls[0]
+    assert "의사결정 보드" in markup
+    assert "신규/증액 검토" in markup
+    assert "보유 모니터링" in markup
+    assert "보유 축소/주의" in markup
+    assert "변곡 감시" in markup
+    assert "보정 확률이 아니라 근거 점수" in markup
+    assert "canonical action policy는 바꾸지 않습니다" in markup
+    assert "상승 확률" not in markup
+    assert "하락 확률" not in markup
+
+
+def test_render_theme_lens_panel_uses_proxy_guardrail_copy(monkeypatch):
+    markdown_calls: list[str] = []
+    dataframe_payloads: list[pd.DataFrame] = []
+
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **_: markdown_calls.append(text))
+    monkeypatch.setattr(panels_module.st, "button", lambda *args, **kwargs: False)
+    monkeypatch.setattr(
+        panels_module.st,
+        "dataframe",
+        lambda data, **kwargs: dataframe_payloads.append(data.copy()),
+    )
+
+    clicked = panels_module.render_theme_lens_panel(
+        [
+            {
+                "theme_name": "조선",
+                "status": "CACHED",
+                "representative_etfs": [{"code": "0141S0", "name": "SOL 조선기자재"}],
+                "latest_date": "2026-05-15",
+                "return_1d": 0.01,
+                "return_1m": 0.05,
+                "return_3m": 0.12,
+                "classification_basis": [{"provider": "FnGuide", "label": "조선기자재"}],
+                "warning": "",
+            }
+        ],
+        status="CACHED",
+        show_refresh_button=True,
+    )
+
+    assert clicked is False
+    assert markdown_calls
+    assert "테마 렌즈" in markdown_calls[0]
+    assert "대표 ETF 가격 기반 proxy" in markdown_calls[0]
+    assert "canonical sector action" in markdown_calls[0]
+    assert dataframe_payloads[0]["테마"].tolist() == ["조선"]
+    assert dataframe_payloads[0]["대표 ETF"].tolist() == ["SOL 조선기자재 (0141S0)"]
+    assert dataframe_payloads[0]["1M"].tolist() == ["+5.00%"]
+
+
+def test_build_overview_review_candidates_uses_composite_order_and_preserves_policy():
+    signals = [
+        _signal("A", "Strong Buy", 1.10, 1.00, macro_fit=False, action_policy="KR_MOMENTUM_ONLY"),
+        _signal("B", "Watch", 1.08, 1.00, macro_fit=True, action_policy="KR_MOMENTUM_ONLY"),
+        _signal("C", "Hold", 1.06, 1.00, macro_fit=True, action_policy="KR_MOMENTUM_ONLY"),
+        _signal("D", "Avoid", 1.04, 1.00),
+        _signal("E", "N/A", 1.20, 1.00),
+    ]
+    for signal, score in zip(signals, [95.0, 80.0, 70.0, 50.0, 99.0], strict=True):
+        signal.mom_percentile = score
+        signal.flow_state = "unavailable"
+    signals[1].sector_fit_rank = 2
+    signals[1].sector_fit_total = 5
+    signals[1].flow_state = "supportive"
+    signals[1].flow_score = 1.2
+    signals[2].sector_fit_rank = 1
+    signals[2].sector_fit_total = 5
+
+    frame = panels_module._build_overview_sector_frame(signals, sort_key="모멘텀 점수")
+    candidates = panels_module._build_overview_review_candidates(signals, frame, limit=3)
+
+    assert list(frame["섹터"].head(3)) == ["Sector A", "Sector B", "Sector C"]
+    assert [candidate["sector_name"] for candidate in candidates] == ["Sector B", "Sector C", "Sector A"]
+    assert all(candidate["action"] != "N/A" for candidate in candidates)
+    assert len(candidates) == 3
+    assert all(candidate["reason_parts"] for candidate in candidates)
+    assert all(candidate["candidate_policy"] == "COMPOSITE_REVIEW_CANDIDATE" for candidate in candidates)
+    assert all(candidate["action_policy"] == "KR_MOMENTUM_ONLY" for candidate in candidates)
+    assert all(signal.action_policy == "KR_MOMENTUM_ONLY" for signal in signals[:3])
+    assert "매크로 약점" in candidates[2]["warnings"]
+
+
+def test_build_overview_review_candidate_groups_keeps_buy_and_sell_visible():
+    buy = _signal("A", "Strong Buy", 1.10, 1.00, macro_fit=True, action_policy="KR_MOMENTUM_ONLY")
+    buy.mom_percentile = 88.0
+    buy.flow_state = "supportive"
+    buy.flow_score = 1.0
+    sell = _signal("B", "Avoid", 0.94, 1.00, macro_fit=False, action_policy="KR_MOMENTUM_ONLY")
+    sell.mom_percentile = 20.0
+    sell.rs_change_pct = -5.0
+    sell.trend_ok = False
+    sell.flow_state = "adverse"
+    sell.flow_score = -1.0
+    sell.volatility_20d = 0.32
+    sell.mdd_3m = -0.22
+    neutral = _signal("C", "Watch", 1.02, 1.00, macro_fit=True, action_policy="KR_MOMENTUM_ONLY")
+    neutral.mom_percentile = 55.0
+    neutral.flow_state = "unavailable"
+
+    frame = panels_module._build_overview_sector_frame([buy, sell, neutral], sort_key="모멘텀 점수")
+    groups = panels_module._build_overview_review_candidate_groups(
+        [buy, sell, neutral],
+        frame,
+        limit_per_group=2,
+    )
+
+    assert [candidate["sector_name"] for candidate in groups["buy"]] == ["Sector A", "Sector C"]
+    assert [candidate["sector_name"] for candidate in groups["sell"]] == ["Sector B"]
+    assert all(candidate["review_side"] == "buy" for candidate in groups["buy"])
+    assert groups["buy"][0]["review_side_label"] == "매수 검토 후보"
+    assert groups["sell"][0]["edge_proxy"] < 0
+    assert groups["sell"][0]["review_side"] == "sell"
+    assert groups["sell"][0]["review_side_label"] == "매도 검토 후보"
+    assert groups["sell"][0]["candidate_policy"] == "COMPOSITE_REVIEW_CANDIDATE"
+    assert groups["sell"][0]["action_policy"] == "KR_MOMENTUM_ONLY"
+
+
+def test_overview_review_candidate_group_does_not_default_neutral_to_buy():
+    assert panels_module._overview_review_candidate_group(
+        {"action": "Hold", "edge_proxy": 0.0, "turning_point_state": "Flat"}
+    ) is None
+    assert panels_module._overview_review_candidate_group(
+        {"action": "Hold", "edge_proxy": -0.1, "turning_point_state": "Flat"}
+    ) == "sell"
+    assert panels_module._overview_review_candidate_group(
+        {"action": "Watch", "edge_proxy": 0.1, "turning_point_state": "Flat"}
+    ) == "buy"
+
+
+def test_render_overview_review_candidates_renders_reasons_and_guardrail_copy(monkeypatch):
+    markdown_calls: list[str] = []
+    candidates = [
+        {
+            "sector_name": "KRX 반도체",
+            "decision": "신규 검토 후보",
+            "reason_parts": ["국면 적합", "3M 수익률 +12.00%"],
+            "invalidation": "다음 검토 시까지 RS가 추세 하회 지속 시 무효화.",
+            "action": "Strong Buy",
+            "candidate_policy": "COMPOSITE_REVIEW_CANDIDATE",
+            "candidate_score": 75.625,
+            "metrics": [
+                ("상방 proxy", "84.2"),
+                ("하방 proxy", "19.8"),
+                ("엣지 proxy", "+64.5"),
+                ("변곡", "Continuation up"),
+                ("복합점수", "75.6"),
+            ],
+        }
+    ]
+
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **_: markdown_calls.append(text))
+
+    panels_module._render_overview_review_candidates(candidates)
+
+    assert markdown_calls
+    markup = markdown_calls[0]
+    assert "overview-review-candidates" in markup
+    assert "검토 후보" in markup
+    assert "proxy 근거 기준" in markup
+    assert "기본 모멘텀 기준" not in markup
+    assert "KRX 반도체" in markup
+    assert "국면 적합" in markup
+    metric_positions = [
+        markup.rindex("상방 proxy"),
+        markup.rindex("하방 proxy"),
+        markup.rindex("엣지 proxy"),
+        markup.rindex("변곡"),
+        markup.rindex("복합점수"),
+    ]
+    assert metric_positions == sorted(metric_positions)
+    assert "복합점수" in markup
+    assert "75.6" in markup
+    assert "Continuation up" in markup
+    assert "보정 확률이 아니라 근거 점수" in markup
+    assert "canonical action policy는 바꾸지 않습니다" in markup
+    assert "상승 확률" not in markup
+    assert "하락 확률" not in markup
+    assert "다음 검토 시까지" in markup
+    for forbidden in ("brokerage", "order", "매수 ETF", "실시간 거래", "보장"):
+        assert forbidden not in markup
+
+
+def test_render_overview_review_candidates_renders_buy_and_sell_groups(monkeypatch):
+    markdown_calls: list[str] = []
+    groups = {
+        "buy": [
+            {
+                "sector_name": "KRX 반도체",
+                "decision": "신규 검토 후보",
+                "reason_parts": ["변곡 Continuation up", "엣지 +64.5"],
+                "invalidation": "",
+                "action": "Strong Buy",
+                "candidate_policy": "COMPOSITE_REVIEW_CANDIDATE",
+                "candidate_score": 75.625,
+                "edge_proxy": 64.5,
+                "metrics": [("상방 proxy", "84.2"), ("하방 proxy", "19.8")],
+            }
+        ],
+        "sell": [
+            {
+                "sector_name": "KRX 건설",
+                "decision": "이탈 검토",
+                "reason_parts": ["변곡 Bearish turn", "엣지 -54.5"],
+                "invalidation": "",
+                "action": "Avoid",
+                "candidate_policy": "COMPOSITE_REVIEW_CANDIDATE",
+                "candidate_score": 32.0,
+                "edge_proxy": -54.5,
+                "metrics": [("상방 proxy", "23.2"), ("하방 proxy", "77.8")],
+            }
+        ],
+    }
+
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **_: markdown_calls.append(text))
+
+    panels_module._render_overview_review_candidates(groups)
+
+    assert markdown_calls
+    markup = markdown_calls[0]
+    assert 'data-grouped="true"' in markup
+    assert "매수 검토 후보" in markup
+    assert "매도 검토 후보" in markup
+    assert "KRX 반도체" in markup
+    assert "KRX 건설" in markup
+    assert "보정 확률이 아니라 근거 점수" in markup
+    assert "canonical action policy는 바꾸지 않습니다" in markup
+    assert markup.index("매수 검토 후보") < markup.index("매도 검토 후보")
+
+
+def test_render_overview_review_candidates_empty_state(monkeypatch):
+    markdown_calls: list[str] = []
+
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **_: markdown_calls.append(text))
+
+    panels_module._render_overview_review_candidates([])
+
+    assert markdown_calls
+    assert 'data-empty="true"' in markdown_calls[0]
+    assert "현재 복합 검토 기준에 맞는 섹터 후보가 없습니다." in markdown_calls[0]
+    assert "기본 모멘텀 기준" not in markdown_calls[0]
+
+
+def test_render_overview_mobile_decision_strip_uses_review_candidate_markup(monkeypatch):
     markdown_calls: list[str] = []
     frame = pd.DataFrame(
         [
-            {"섹터": "KRX 반도체", "3M": 51.8},
-            {"섹터": "KRX 증권", "3M": 61.28},
-            {"섹터": "KRX 건설", "3M": 80.83},
-            {"섹터": "KRX 보험", "3M": 28.30},
+            {"섹터": "KRX 반도체", "3M": 51.8, "액션": "신규 검토 후보"},
+            {"섹터": "KRX 증권", "3M": 61.28, "액션": "관찰 후보"},
+            {"섹터": "KRX 건설", "3M": 80.83, "액션": "유지"},
+            {"섹터": "KRX 보험", "3M": 28.30, "액션": "회피"},
         ]
     )
 
@@ -1718,12 +2519,13 @@ def test_render_overview_mobile_decision_strip_shows_top_three(monkeypatch):
 
     assert markdown_calls
     markup = markdown_calls[0]
-    assert "overview-mobile-decision-strip" in markup
-    assert "상위 섹터" in markup
+    assert "overview-review-candidates" in markup
+    assert "검토 후보" in markup
     assert "KRX 반도체" in markup
     assert "KRX 증권" in markup
     assert "KRX 건설" in markup
     assert "KRX 보험" not in markup
+    assert "overview-mobile-decision-strip" not in markup
 
 
 def test_render_cycle_timeline_panel_returns_selected_phase(monkeypatch):

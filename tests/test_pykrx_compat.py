@@ -374,10 +374,20 @@ def test_patched_webio_reads_pick_up_fresh_session_after_reset(monkeypatch):
             self.label = label
 
         def post(self, url, headers=None, data=None, timeout=None):
-            return {"label": self.label, "url": url, "data": dict(data or {})}
+            return {
+                "label": self.label,
+                "url": url,
+                "data": dict(data or {}),
+                "timeout": timeout,
+            }
 
         def get(self, url, headers=None, params=None, timeout=None):
-            return {"label": self.label, "url": url, "params": dict(params or {})}
+            return {
+                "label": self.label,
+                "url": url,
+                "params": dict(params or {}),
+                "timeout": timeout,
+            }
 
         def close(self):
             return None
@@ -403,6 +413,38 @@ def test_patched_webio_reads_pick_up_fresh_session_after_reset(monkeypatch):
 
     assert first["label"] == "s1"
     assert second["label"] == "s2"
+    assert first["timeout"] == compat.PYKRX_SHARED_SESSION_TIMEOUT
+    assert second["timeout"] == compat.PYKRX_SHARED_SESSION_TIMEOUT
+
+
+def test_patched_webio_get_read_uses_bounded_timeout(monkeypatch):
+    _install_fake_pykrx(monkeypatch)
+    import src.data_sources.pykrx_compat as compat
+
+    importlib.reload(compat)
+
+    captured: dict[str, object] = {}
+
+    class _Session:
+        def get(self, url, headers=None, params=None, timeout=None):
+            captured["url"] = url
+            captured["params"] = dict(params or {})
+            captured["timeout"] = timeout
+            return {"ok": True}
+
+    monkeypatch.setattr(compat, "_get_shared_session", lambda: _Session())
+    compat.ensure_pykrx_transport_compat()
+
+    from pykrx.website.comm import webio
+
+    get = webio.Get()
+    get.url = compat.KRX_JSON_URL
+    response = get.read(foo="bar")
+
+    assert response == {"ok": True}
+    assert captured["url"] == compat.KRX_JSON_URL
+    assert captured["params"] == {"foo": "bar"}
+    assert captured["timeout"] == compat.PYKRX_SHARED_SESSION_TIMEOUT
 
 
 def test_get_shared_session_records_login_failure_detail(monkeypatch):
