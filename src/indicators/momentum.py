@@ -105,13 +105,13 @@ def compute_return_excluding_recent(
     close: pd.Series,
     *,
     lookback_days: int,
-    skip_recent_days: int = 21,
+    skip_recent_days: int = 0,
 ) -> float:
-    """Return trailing simple return ending before the most recent skip window.
+    """Return trailing simple return with an optional recent skip window.
 
     The calculation uses:
-    - end price at ``t - skip_recent_days``
-    - start price at ``t - (lookback_days + skip_recent_days)``
+    - with ``skip_recent_days == 0``: latest price vs ``lookback_days`` observations back
+    - with ``skip_recent_days > 0``: the historical ex-recent window used by legacy tests
     """
     if close.empty:
         return float("nan")
@@ -121,11 +121,15 @@ def compute_return_excluding_recent(
         raise ValueError("skip_recent_days must be non-negative")
 
     required = lookback_days + skip_recent_days
+    if skip_recent_days == 0:
+        required += 1
     if len(close) < required:
         return float("nan")
 
     end_idx = -skip_recent_days if skip_recent_days > 0 else -1
     start_idx = -(lookback_days + skip_recent_days)
+    if skip_recent_days == 0:
+        start_idx -= 1
     start_price = float(close.iloc[start_idx])
     end_price = float(close.iloc[end_idx])
     if pd.isna(start_price) or pd.isna(end_price) or start_price == 0:
@@ -138,9 +142,9 @@ def compute_relative_return_excluding_recent(
     benchmark_close: pd.Series,
     *,
     lookback_days: int,
-    skip_recent_days: int = 21,
+    skip_recent_days: int = 0,
 ) -> float:
-    """Return benchmark-relative trailing simple return excluding recent days."""
+    """Return benchmark-relative trailing simple return with an optional skip window."""
     aligned_sector, aligned_bench = sector_close.align(benchmark_close, join="inner")
     if aligned_sector.empty or aligned_bench.empty:
         return float("nan")

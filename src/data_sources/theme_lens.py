@@ -28,6 +28,7 @@ THEME_RETURN_WINDOWS: tuple[tuple[str, int], ...] = (
     ("return_3m", 63),
 )
 MIN_LIVE_LOOKBACK_DAYS = 120
+THEME_SIGNAL_LOOKBACK_DAYS = 420
 
 
 @dataclass(frozen=True)
@@ -233,6 +234,84 @@ def load_theme_lens_cache_only(
     return "UNAVAILABLE", rows
 
 
+def load_theme_proxy_signal_inputs(
+    *,
+    asof_date: str,
+    lookback_days: int = THEME_SIGNAL_LOOKBACK_DAYS,
+    config_path: Path = THEME_LENS_CONFIG_PATH,
+) -> tuple[str, pd.DataFrame, list[dict[str, Any]]]:
+    """Return cached theme ETF proxy rows in signal-compatible shape.
+
+    This is intentionally cache-only. Live pykrx access belongs only in
+    `refresh_theme_lens_etf_ohlcv()`.
+    """
+    definitions = load_theme_lens_config(config_path)
+    if not definitions:
+        return "UNAVAILABLE", pd.DataFrame(), []
+
+    end = pd.Timestamp(asof_date).strftime("%Y%m%d")
+    start = (pd.Timestamp(asof_date) - pd.Timedelta(days=max(lookback_days, THEME_SIGNAL_LOOKBACK_DAYS))).strftime(
+        "%Y%m%d"
+    )
+    cached = read_stock_ohlcv(_theme_tickers(definitions), start, end, market="KR")
+    if cached.empty or "ticker" not in cached.columns or "close" not in cached.columns:
+        return "UNAVAILABLE", pd.DataFrame(), []
+
+    ticker_text = cached["ticker"].astype(str)
+    price_frames: list[pd.DataFrame] = []
+    universe_rows: list[dict[str, Any]] = []
+    used_codes: set[str] = set()
+
+    for definition in definitions:
+        row = _row_for_theme(definition, cached, asof_date=asof_date)
+        if str(row.get("status", "")).strip().upper() != "CACHED":
+            continue
+
+        proxy_code = _coerce_text(row.get("primary_proxy_code"))
+        if not proxy_code or proxy_code in used_codes:
+            continue
+
+        proxy_frame = cached[ticker_text == proxy_code].copy().sort_index()
+        if proxy_frame.empty:
+            continue
+
+        signal_frame = pd.DataFrame(
+            {
+                "index_code": proxy_code,
+                "index_name": definition.name,
+                "close": pd.to_numeric(proxy_frame["close"], errors="coerce"),
+            },
+            index=pd.DatetimeIndex(proxy_frame.index).normalize(),
+        ).dropna(subset=["close"])
+        if signal_frame.empty:
+            continue
+
+        used_codes.add(proxy_code)
+        price_frames.append(signal_frame)
+        universe_rows.append(
+            {
+                "index_code": proxy_code,
+                "index_name": definition.name,
+                "family": "theme_lens_etf_proxy",
+                "is_benchmark": False,
+                "is_active": True,
+                "export_sector": False,
+                "taxonomy_kind": "THEME",
+                "taxonomy_label": definition.name,
+                "theme_id": definition.theme_id,
+                "primary_proxy_code": proxy_code,
+                "primary_proxy_name": _coerce_text(row.get("primary_proxy_name")),
+                "reference_only": True,
+            }
+        )
+
+    if not price_frames:
+        return "UNAVAILABLE", pd.DataFrame(), []
+
+    status = "CACHED" if len(universe_rows) == len(definitions) else "PARTIAL"
+    return status, pd.concat(price_frames).sort_index(), universe_rows
+
+
 def _normalize_live_ohlcv(raw: pd.DataFrame, *, ticker: str, ticker_name: str) -> pd.DataFrame:
     if raw is None or raw.empty:
         return pd.DataFrame()
@@ -271,7 +350,7 @@ def _normalize_live_ohlcv(raw: pd.DataFrame, *, ticker: str, ticker_name: str) -
 def refresh_theme_lens_etf_ohlcv(
     *,
     asof_date: str,
-    lookback_days: int = MIN_LIVE_LOOKBACK_DAYS,
+    lookback_days: int = THEME_SIGNAL_LOOKBACK_DAYS,
     config_path: Path = THEME_LENS_CONFIG_PATH,
 ) -> dict[str, Any]:
     """Explicit live refresh for theme ETF OHLCV rows."""

@@ -781,6 +781,31 @@ def test_overview_sector_frame_can_project_theme_taxonomy_labels():
     assert frame.iloc[0]["수출 기준"] == "반도체 수출"
 
 
+def test_overview_taxonomy_payload_uses_theme_signal_metadata_without_context():
+    signal = _signal(
+        "445290",
+        "Strong Buy",
+        1.10,
+        1.00,
+        taxonomy_kind="THEME",
+        taxonomy_label="로봇",
+    )
+    signal.sector_name = "로봇"
+
+    payload = panels_module._overview_taxonomy_display_payload(
+        signal,
+        None,
+        fallback_sector_name=signal.sector_name,
+    )
+
+    assert payload == {
+        "display_sector_name": "로봇",
+        "runtime_sector_name": "로봇",
+        "taxonomy_subtext": "ETF proxy 테마",
+        "taxonomy_layer": "theme_lens_proxy",
+    }
+
+
 def test_render_overview_taxonomy_surface_renders_axis_map(monkeypatch):
     markdown_calls: list[str] = []
     signal = _signal("5044", "Strong Buy", 1.10, 1.00)
@@ -2734,11 +2759,51 @@ def test_overview_review_candidate_group_does_not_default_neutral_to_buy():
         {"action": "Hold", "edge_proxy": 0.0, "turning_point_state": "Flat"}
     ) is None
     assert panels_module._overview_review_candidate_group(
+        {"action": "Strong Buy", "edge_proxy": -0.1, "turning_point_state": "Flat"}
+    ) == "buy"
+    assert panels_module._overview_review_candidate_group(
+        {"action": "Avoid", "edge_proxy": 0.1, "turning_point_state": "Flat"}
+    ) == "sell"
+    assert panels_module._overview_review_candidate_group(
         {"action": "Hold", "edge_proxy": -0.1, "turning_point_state": "Flat"}
     ) == "sell"
     assert panels_module._overview_review_candidate_group(
         {"action": "Watch", "edge_proxy": 0.1, "turning_point_state": "Flat"}
     ) == "buy"
+
+
+def test_build_overview_theme_proxy_frame_lists_theme_signals_first_screen():
+    robot = _signal(
+        "445290",
+        "Strong Buy",
+        1.10,
+        1.00,
+        taxonomy_kind="THEME",
+        taxonomy_label="로봇",
+        returns={"1M": 0.30, "3M": 0.20},
+    )
+    robot.mom_percentile = 75.0
+    robot.mom_raw = 0.018
+    space = _signal(
+        "421320",
+        "Hold",
+        1.05,
+        1.00,
+        taxonomy_kind="THEME",
+        taxonomy_label="우주항공/UAM",
+        returns={"1M": -0.06, "3M": -0.01},
+    )
+    space.mom_percentile = 77.0
+    space.mom_raw = -0.16
+    sector = _signal("5044", "Strong Buy", 1.20, 1.00)
+    sector.mom_percentile = 95.0
+
+    frame = panels_module._build_overview_theme_proxy_frame([sector, robot, space])
+
+    assert frame["테마"].tolist() == ["우주항공/UAM", "로봇"]
+    assert frame["액션"].tolist() == ["Hold", "Strong Buy"]
+    assert frame["모멘텀 점수"].tolist() == [77.0, 75.0]
+    assert frame["1M"].tolist() == [-6.0, 30.0]
 
 
 def test_render_overview_review_candidates_renders_reasons_and_guardrail_copy(monkeypatch):

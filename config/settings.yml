@@ -1,7 +1,7 @@
 # Default algorithm parameters
 epsilon: 0
 momentum_method: "hybrid_return_rank_v1"
-momentum_skip_recent_days: 21
+momentum_skip_recent_days: 0
 momentum_lookback_6m_days: 126
 momentum_lookback_12m_days: 252
 momentum_rank_threshold_pct: 0.60

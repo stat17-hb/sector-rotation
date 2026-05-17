@@ -142,3 +142,7 @@
 - Rule: 여러 representative ETF를 둔 proxy lens는 첫 번째 코드만 신뢰하지 않는다. 캐시/live 데이터가 있는 대표 ETF를 선택하는 fallback을 테스트로 고정한다.
 - Pattern: theme_taxonomy 수집/품질 레이어는 구현했지만 첫 화면 검토 후보 카드는 여전히 runtime `sector_name`을 직접 렌더해 KRX 섹터명으로 보였다.
 - Rule: 분류 체계를 바꾸거나 overlay를 추가할 때는 데이터 수집/상태 패널뿐 아니라 첫 화면 카드, 표, 히트맵처럼 사용자가 결론으로 읽는 모든 주요 렌더링 경로에 표시 모델이 연결됐는지 확인한다.
+- Pattern: 사용자가 빠른 섹터 대응을 원했는데 KR 하이브리드 모멘텀 기본값이 `6M/12M ex-1M`처럼 최근 21거래일을 제외해 `로봇` 같은 최근 급상승 테마를 후보에서 늦게 반영했다.
+- Rule: KR tactical sector/theme 후보 산출은 기본적으로 최신 가격을 포함한다. 최근 구간 제외는 명시적 실험/리스크 필터로만 쓰고, 기본 액션 산식·UI copy·테스트는 같은 skip-window 계약을 공유해야 한다.
+- Pattern: 사용자가 대시보드에서 로봇/전력/원자력/우주항공이 안 보이고 시장데이터 갱신 이력도 안 남는다고 지적했는데, 원인은 `OPENAPI` 캘린더 기준일이 warehouse 최신 벤치마크일보다 뒤처지고 첫 화면 후보 카드가 3개로 잘리며 no-op refresh가 ingest history를 기록하지 않는 조합이었다.
+- Rule: Dashboard 기준일은 provider calendar와 warehouse benchmark max date 중 더 최신인 검증된 거래일을 사용한다. Manual refresh button은 live fetch가 없어도 사용자가 누른 운영 이벤트를 history에 남겨야 하며, 테마 proxy는 후보 card limit과 별개로 첫 화면 모니터에 노출한다.

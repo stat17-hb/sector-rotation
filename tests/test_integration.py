@@ -372,6 +372,7 @@ class TestIntegration:
             "abort_reason": "",
             "predicted_requests": 0,
             "processed_requests": 0,
+            "row_count": 42,
         }
 
     def test_run_manual_price_refresh_uses_manual_warm_reason_and_resets_health(self, monkeypatch):

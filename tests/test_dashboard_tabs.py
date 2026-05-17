@@ -1769,7 +1769,7 @@ def test_cached_monitoring_data_reads_manual_refresh_history(monkeypatch):
     assert calls == [
         {
             "market": "KR",
-            "reasons": ("manual_refresh", "sync_warehouse", "bootstrap_warehouse"),
+            "reasons": ("manual_refresh", "manual_retry_after_lock_clear", "sync_warehouse", "bootstrap_warehouse"),
             "sample_per_dataset": True,
             "sample_size": 10,
         }

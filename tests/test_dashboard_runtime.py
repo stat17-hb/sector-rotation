@@ -229,12 +229,17 @@ def test_run_market_refresh_uses_incremental_start_from_warehouse_latest_dates(m
 def test_run_market_refresh_skips_runner_when_warehouse_is_current(monkeypatch):
     invalidate_calls: list[str] = []
     transient_clears: list[str] = []
+    close_calls: list[str] = []
+    recorded_runs: list[dict[str, object]] = []
 
     monkeypatch.setattr(runtime, "get_market_index_universe_codes", lambda benchmark_code, market_id: ["1001", "5044"])
     monkeypatch.setattr(runtime, "get_market_range_strings", lambda end_date_str, price_years: ("20230101", end_date_str))
     monkeypatch.setattr(runtime, "get_market_latest_dates", lambda codes, *, market: {"1001": "20260407", "5044": "20260407"})
+    monkeypatch.setattr(runtime, "close_cached_read_only_connection", lambda: close_calls.append("close"))
+    monkeypatch.setattr(runtime, "read_dataset_data_bounds", lambda dataset, *, market: {"row_count": 1234})
     monkeypatch.setattr(runtime, "invalidate_dashboard_caches", lambda scope: invalidate_calls.append(scope))
     monkeypatch.setattr(runtime, "clear_market_price_transient_override", lambda: transient_clears.append("clear"))
+    monkeypatch.setattr(runtime, "record_ingest_run", lambda **kwargs: recorded_runs.append(kwargs))
     monkeypatch.setattr(runtime, "build_market_refresh_notice", lambda summary: ("info", summary["status"]))
     monkeypatch.setattr(
         runtime,
@@ -245,8 +250,16 @@ def test_run_market_refresh_skips_runner_when_warehouse_is_current(monkeypatch):
     notice = runtime.run_market_refresh(_context("KR"), price_years=3)
 
     assert notice == ("info", "CACHED")
+    assert close_calls == ["close"]
     assert invalidate_calls == ["market"]
     assert transient_clears == ["clear"]
+    assert recorded_runs[-1]["dataset"] == "market_prices"
+    assert recorded_runs[-1]["reason"] == "manual_refresh"
+    assert recorded_runs[-1]["requested_start"] == "20260407"
+    assert recorded_runs[-1]["requested_end"] == "20260407"
+    assert recorded_runs[-1]["summary"]["next_start"] == "20260408"
+    assert recorded_runs[-1]["status"] == "CACHED"
+    assert recorded_runs[-1]["row_count"] == 1234
 
 
 def test_run_market_refresh_sets_transient_override_for_write_lock_preview(monkeypatch):

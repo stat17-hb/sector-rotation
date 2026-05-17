@@ -2883,8 +2883,10 @@ def read_collection_run_history(
         if pred > 0:
             return round(proc / pred * 100, 1)
         row_count = int(row["row_count"] or 0)
+        if bool(row.get("coverage_complete", False)):
+            return 100.0
         if row_count > 0:
-            return 100.0 if bool(row.get("coverage_complete", False)) else float("nan")
+            return float("nan")
         return 0.0
 
     df["completion_pct"] = df.apply(_pct, axis=1)

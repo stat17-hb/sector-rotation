@@ -662,6 +662,22 @@ def _overview_taxonomy_display_payload(
 ) -> dict[str, object]:
     context = _overview_taxonomy_context_for_signal(signal, taxonomy_context)
     if context is None:
+        taxonomy_kind = str(getattr(signal, "taxonomy_kind", "") or "").strip().upper()
+        taxonomy_label = str(getattr(signal, "taxonomy_label", "") or "").strip()
+        if taxonomy_kind or taxonomy_label:
+            display_name = taxonomy_label or fallback_sector_name
+            subtexts = []
+            if taxonomy_kind == "THEME":
+                subtexts.append("ETF proxy 테마")
+            elif taxonomy_kind:
+                subtexts.append(taxonomy_kind)
+            runtime_name = fallback_sector_name
+            return {
+                "display_sector_name": display_name,
+                "runtime_sector_name": runtime_name,
+                "taxonomy_subtext": " · ".join(subtexts),
+                "taxonomy_layer": "theme_lens_proxy",
+            }
         return {}
     display_name = _overview_taxonomy_primary_label(context, fallback=fallback_sector_name)
     runtime_name = str(getattr(context, "sector_name", "") or "").strip() or fallback_sector_name
@@ -1646,11 +1662,72 @@ def _overview_review_candidate_group(candidate: Mapping[str, object]) -> str | N
     action = str(candidate.get("action", "") or "")
     edge_proxy = _sector_momentum_safe_float(candidate.get("edge_proxy"), default=0.0)
     turning_point_state = str(candidate.get("turning_point_state", "") or "")
-    if action == "Avoid" or edge_proxy < 0.0 or turning_point_state == "Bearish turn":
+    if action == "Strong Buy":
+        return "buy"
+    if action == "Avoid":
         return "sell"
-    if action == "Strong Buy" or edge_proxy > 0.0 or turning_point_state in {"Bullish turn", "Continuation up"}:
+    if edge_proxy < 0.0 or turning_point_state == "Bearish turn":
+        return "sell"
+    if edge_proxy > 0.0 or turning_point_state in {"Bullish turn", "Continuation up"}:
         return "buy"
     return None
+
+
+def _build_overview_theme_proxy_frame(signals: Sequence, *, limit: int = 8) -> pd.DataFrame:
+    """Return a compact first-screen table for theme ETF proxy signals."""
+    rows: list[dict[str, object]] = []
+    for signal in signals:
+        taxonomy_kind = str(getattr(signal, "taxonomy_kind", "") or "").strip().upper()
+        if taxonomy_kind != "THEME":
+            continue
+        returns = dict(getattr(signal, "returns", {}) or {})
+        rows.append(
+            {
+                "테마": str(getattr(signal, "taxonomy_label", "") or getattr(signal, "sector_name", "") or "").strip(),
+                "액션": str(getattr(signal, "action", "N/A") or "N/A"),
+                "모멘텀 점수": _overview_candidate_momentum_score(signal),
+                "6M/12M 상대": _sector_momentum_safe_float(getattr(signal, "mom_raw", pd.NA), default=float("nan")),
+                "1M": _sector_momentum_safe_float(returns.get("1M", pd.NA), default=float("nan")) * 100.0,
+                "3M": _sector_momentum_safe_float(returns.get("3M", pd.NA), default=float("nan")) * 100.0,
+                "추세": "통과" if bool(getattr(signal, "trend_ok", False)) else "미통과",
+            }
+        )
+    if not rows:
+        return pd.DataFrame()
+    frame = pd.DataFrame(rows)
+    frame = frame.sort_values(
+        by=["모멘텀 점수", "6M/12M 상대", "테마"],
+        ascending=[False, False, True],
+        na_position="last",
+    )
+    return frame.head(max(1, int(limit))).reset_index(drop=True)
+
+
+def _render_overview_theme_proxy_watchlist(signals: Sequence, *, is_mobile: bool = False) -> None:
+    frame = _build_overview_theme_proxy_frame(signals, limit=7 if not is_mobile else 5)
+    if frame.empty:
+        return
+    render_panel_header(
+        eyebrow="Theme Proxy",
+        title="테마 proxy 모니터",
+        description="대표 ETF 가격 기반 테마 신호입니다. 로봇, 전력, 원자력, 우주항공처럼 KRX broad sector가 아닌 테마도 첫 화면에서 확인합니다.",
+    )
+    st.caption("이 표는 theme_lens ETF proxy를 신호 원장과 같은 기준으로 정렬한 모니터입니다. 개별 종목 추천이나 주문 신호가 아닙니다.")
+    st.dataframe(
+        frame,
+        hide_index=True,
+        width="stretch",
+        height=min(330, 80 + len(frame) * 36),
+        column_config={
+            "테마": st.column_config.TextColumn("테마", width="medium"),
+            "액션": st.column_config.TextColumn("액션", width="small"),
+            "모멘텀 점수": st.column_config.NumberColumn("모멘텀 점수", format="%.1f"),
+            "6M/12M 상대": st.column_config.NumberColumn("6M/12M 상대", format="%.3f"),
+            "1M": st.column_config.NumberColumn("1M", format="%.1f%%"),
+            "3M": st.column_config.NumberColumn("3M", format="%.1f%%"),
+            "추세": st.column_config.TextColumn("추세", width="small"),
+        },
+    )
 
 
 def _overview_review_group_sort_key(group_key: str, candidate: Mapping[str, object]) -> tuple[object, ...]:
@@ -1849,7 +1926,7 @@ def _render_overview_review_candidates(
                 '복합점수와 수급은 랭킹 보조이며 canonical action policy는 바꾸지 않습니다.'
                 '</div>'
                 '</div>'
-                f'<span class="overview-review-candidates__basis">{sum(len(items[:3]) for items in grouped_candidates.values())}개 · proxy 근거 기준</span>'
+                f'<span class="overview-review-candidates__basis">{sum(len(items) for items in grouped_candidates.values())}개 · proxy 근거 기준</span>'
                 '</div>'
                 f'{sections}'
                 '</section>'
@@ -2400,14 +2477,15 @@ def render_toss_overview_dashboard(
         taxonomy_context=taxonomy_context,
         use_taxonomy_display=use_taxonomy_layer,
     )
+    overview_candidate_limit = 4 if is_mobile else 6
     review_candidate_groups = _build_overview_review_candidate_groups(
         signals,
         sector_frame,
-        limit_per_group=3,
+        limit_per_group=overview_candidate_limit,
         taxonomy_context=taxonomy_context if use_taxonomy_layer else None,
         locale=locale,
     )
-    review_candidate_count = sum(len(items[:3]) for items in review_candidate_groups.values())
+    review_candidate_count = sum(len(items[:overview_candidate_limit]) for items in review_candidate_groups.values())
     period = "3M"
     compare_basis = "벤치마크 대비"
     sector_group = selected_taxonomy_layer
@@ -2437,6 +2515,8 @@ def render_toss_overview_dashboard(
                 compact=is_mobile,
                 locale=locale,
             )
+        if str(market_id).strip().upper() == "KR":
+            _render_overview_theme_proxy_watchlist(signals, is_mobile=is_mobile)
     with st.container(border=True):
         _render_overview_market_command_surface(cards)
         _render_sector_trade_lens(sector_trade_lens, limit=6 if not is_mobile else 3)

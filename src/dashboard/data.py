@@ -31,6 +31,7 @@ from src.data_sources.warehouse import (
 from src.data_sources.theme_lens import (
     get_theme_lens_artifact_key,
     load_theme_lens_cache_only,
+    load_theme_proxy_signal_inputs,
 )
 from src.ui.data_status import (
     resolve_dashboard_status_banner,
@@ -592,11 +593,26 @@ def get_market_index_universe_codes(benchmark_code: str, market_id_arg: str) -> 
 def _resolve_market_end_date(benchmark_code: str) -> date:
     """Resolve the market end date once per app run."""
     from src.transforms.calendar import get_last_business_day
+    from src.data_sources.warehouse import get_market_latest_dates
 
-    return get_last_business_day(
+    calendar_date = get_last_business_day(
         provider=_krx_provider_effective(),
         benchmark_code=benchmark_code,
     )
+    normalized_market = str(market_id or "").strip().upper()
+    if normalized_market != "KR":
+        return calendar_date
+
+    try:
+        latest_dates = get_market_latest_dates([str(benchmark_code).strip()], market=normalized_market)
+        latest_text = str(latest_dates.get(str(benchmark_code).strip(), "") or "").strip()
+        latest_date = pd.Timestamp(latest_text).date() if latest_text else None
+    except Exception as exc:
+        logger.debug("Warehouse market-end-date fallback lookup failed: %s", exc)
+        latest_date = None
+    if latest_date is not None and calendar_date < latest_date <= date.today():
+        return latest_date
+    return calendar_date
 
 
 def _build_regime_inflation_series(
@@ -1256,6 +1272,7 @@ def _resolve_price_reference_date(
 def _build_signal_payload(
     *,
     normalized_market: str,
+    market_end_date_str: str,
     price_status: str,
     sector_prices: pd.DataFrame,
     macro_df: pd.DataFrame,
@@ -1325,6 +1342,16 @@ def _build_signal_payload(
             benchmark_code=str(bench_code),
             include_benchmark=False,
         )
+        try:
+            theme_proxy_status, theme_proxy_prices, theme_proxy_rows = load_theme_proxy_signal_inputs(
+                asof_date=market_end_date_str
+            )
+        except Exception as exc:
+            logger.warning("KR theme proxy signal cache load failed: %s", exc)
+            theme_proxy_status, theme_proxy_prices, theme_proxy_rows = "UNAVAILABLE", pd.DataFrame(), []
+        if theme_proxy_status in {"CACHED", "PARTIAL"} and not theme_proxy_prices.empty and theme_proxy_rows:
+            sector_prices = pd.concat([sector_prices, theme_proxy_prices]).sort_index()
+            sector_universe_rows = [*(sector_universe_rows or []), *theme_proxy_rows]
 
     signals = build_signal_table(
         sector_prices=sector_prices,
@@ -1365,13 +1392,15 @@ def _cached_signals(
     price_years: int = 3,
     flow_profile: str = "foreign_lead",
     momentum_method: str = "legacy_rs_ma_v0",
-    momentum_skip_recent_days: int = 21,
+    momentum_skip_recent_days: int = 0,
     momentum_lookback_6m_days: int = 126,
     momentum_lookback_12m_days: int = 252,
     momentum_rank_threshold_pct: float = 0.60,
     momentum_abs_filter: str = "price_gt_200dma",
+    theme_lens_artifact_key: tuple = (),
 ):
     """Compute signals. Keyed by parquet file metadata + params hash."""
+    _ = theme_lens_artifact_key
     if not isinstance(flow_artifact_key, tuple):
         legacy_epsilon = float(flow_artifact_key)
         legacy_rs_ma_period = int(epsilon)
@@ -1401,6 +1430,7 @@ def _cached_signals(
     macro_status, macro_df = _cached_macro(normalized_market, macro_cache_token, market_end_date_str)
     signals, macro_result = _build_signal_payload(
         normalized_market=normalized_market,
+        market_end_date_str=market_end_date_str,
         price_status=price_status,
         sector_prices=sector_prices,
         macro_df=macro_df,
@@ -1466,7 +1496,7 @@ def load_dashboard_runtime_data(
     price_years: int = 3,
     flow_profile: str = "foreign_lead",
     momentum_method: str = "legacy_rs_ma_v0",
-    momentum_skip_recent_days: int = 21,
+    momentum_skip_recent_days: int = 0,
     momentum_lookback_6m_days: int = 126,
     momentum_lookback_12m_days: int = 252,
     momentum_rank_threshold_pct: float = 0.60,
@@ -1483,6 +1513,7 @@ def load_dashboard_runtime_data(
         detail=f"{normalized_market} · {market_end_date_str}",
     )
     try:
+        resolved_theme_lens_key = theme_lens_artifact_key or get_theme_lens_artifact_key()
         price_status, sector_prices, market_blocking_error = _load_price_stage(
             market_id_arg=normalized_market,
             market_end_date_str=market_end_date_str,
@@ -1546,9 +1577,9 @@ def load_dashboard_runtime_data(
             momentum_abs_filter=momentum_abs_filter,
             price_years=price_years,
             flow_profile=flow_profile,
+            theme_lens_artifact_key=resolved_theme_lens_key,
         )
         flow_display_fresh = flow_fresh and not bool(flow_detail.get("warehouse_write_skipped"))
-        resolved_theme_lens_key = theme_lens_artifact_key or get_theme_lens_artifact_key()
         theme_lens_status, theme_lens_rows = _cached_theme_lens(
             normalized_market,
             market_end_date_str,

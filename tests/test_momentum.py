@@ -90,6 +90,20 @@ class TestMomentum:
 
         assert result == pytest.approx((108.0 / 102.0) - 1.0)
 
+    def test_return_with_zero_skip_includes_latest_price(self):
+        close = pd.Series(
+            [100.0, 105.0, 110.0, 121.0],
+            index=pd.date_range("2024-01-01", periods=4, freq="B"),
+        )
+
+        result = compute_return_excluding_recent(
+            close,
+            lookback_days=3,
+            skip_recent_days=0,
+        )
+
+        assert result == pytest.approx((121.0 / 100.0) - 1.0)
+
     def test_relative_return_excluding_recent_subtracts_benchmark(self):
         sector = pd.Series(
             [100.0, 101.0, 103.0, 106.0, 108.0, 110.0],

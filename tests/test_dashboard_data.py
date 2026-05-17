@@ -1,10 +1,39 @@
 from __future__ import annotations
 
+from datetime import date
 import pandas as pd
 from pathlib import Path
 
 from src.dashboard import data as dashboard_data
 from src.macro import series_utils
+
+
+def test_resolve_market_end_date_uses_newer_warehouse_benchmark_date(monkeypatch):
+    monkeypatch.setattr(dashboard_data, "market_id", "KR")
+    monkeypatch.setattr(
+        "src.transforms.calendar.get_last_business_day",
+        lambda **_kwargs: date(2026, 5, 14),
+    )
+    monkeypatch.setattr(
+        "src.data_sources.warehouse.get_market_latest_dates",
+        lambda codes, *, market: {"1001": "20260515"},
+    )
+
+    assert dashboard_data._resolve_market_end_date("1001") == date(2026, 5, 15)
+
+
+def test_resolve_market_end_date_ignores_older_warehouse_benchmark_date(monkeypatch):
+    monkeypatch.setattr(dashboard_data, "market_id", "KR")
+    monkeypatch.setattr(
+        "src.transforms.calendar.get_last_business_day",
+        lambda **_kwargs: date(2026, 5, 15),
+    )
+    monkeypatch.setattr(
+        "src.data_sources.warehouse.get_market_latest_dates",
+        lambda codes, *, market: {"1001": "20260514"},
+    )
+
+    assert dashboard_data._resolve_market_end_date("1001") == date(2026, 5, 15)
 
 
 def test_build_regime_inflation_series_kr_uses_homogeneous_yoy_backfill(monkeypatch):
@@ -293,6 +322,112 @@ def test_load_dashboard_runtime_data_emits_progress_and_returns_flow_payload(mon
     assert payload["investor_flow_frame"].equals(flow_frame)
     assert "5044" in payload["shared_flow_summary_map"]
     assert payload["shared_flow_summary_map"]["5044"].flow_profile == "foreign_lead"
+
+
+def test_cached_signals_merges_cached_theme_proxy_inputs(monkeypatch):
+    captured: dict[str, object] = {}
+    idx = pd.to_datetime(["2024-02-28", "2024-02-29"])
+    sector_prices = pd.DataFrame(
+        {
+            "index_code": ["1001", "5044"],
+            "index_name": ["KOSPI", "KRX 반도체"],
+            "close": [100.0, 110.0],
+        },
+        index=idx,
+    )
+    theme_prices = pd.DataFrame(
+        {
+            "index_code": ["445290", "445290"],
+            "index_name": ["로봇", "로봇"],
+            "close": [100.0, 125.0],
+        },
+        index=idx,
+    )
+    theme_rows = [
+        {
+            "index_code": "445290",
+            "index_name": "로봇",
+            "family": "theme_lens_etf_proxy",
+            "taxonomy_kind": "THEME",
+            "taxonomy_label": "로봇",
+        }
+    ]
+
+    monkeypatch.setattr(dashboard_data, "_cached_sector_prices", lambda *args, **kwargs: ("LIVE", sector_prices))
+    monkeypatch.setattr(dashboard_data, "_cached_investor_flow", lambda *args, **kwargs: ("SAMPLE", False, {}, pd.DataFrame()))
+    monkeypatch.setattr(dashboard_data, "_cached_macro", lambda *args, **kwargs: ("LIVE", pd.DataFrame()))
+    monkeypatch.setattr(dashboard_data, "load_theme_proxy_signal_inputs", lambda **kwargs: ("CACHED", theme_prices, theme_rows))
+    monkeypatch.setattr(
+        dashboard_data,
+        "read_active_index_dimension",
+        lambda market="KR": pd.DataFrame(
+            [
+                {
+                    "index_code": "1001",
+                    "index_name": "KOSPI",
+                    "family": "kospi_dd_trd",
+                    "is_benchmark": True,
+                    "taxonomy_label": "KOSPI",
+                },
+                {
+                    "index_code": "5044",
+                    "index_name": "KRX 반도체",
+                    "family": "krx_dd_trd",
+                    "is_benchmark": False,
+                    "taxonomy_label": "반도체",
+                },
+            ]
+        ),
+    )
+
+    import src.signals.matrix as matrix_mod
+
+    monkeypatch.setattr(matrix_mod, "build_signal_table", lambda **kwargs: captured.update(kwargs) or [])
+
+    dashboard_data.configure_dashboard_env(
+        settings_obj={
+            "benchmark_code": "1001",
+            "epsilon": 0.0,
+            "confirmation_periods": 2,
+            "use_adaptive_epsilon": False,
+            "epsilon_factor": 0.5,
+            "yield_curve_spread_threshold": 0.0,
+            "price_years": 3,
+        },
+        sector_map_obj={"regimes": {}},
+        macro_series_cfg_obj={},
+        market_id_obj="KR",
+        market_profile_obj=None,
+        cache_ttl=1,
+        curated_sector_prices_path=Path("data/curated/sector_prices.parquet"),
+    )
+    dashboard_data._cached_signals.clear()
+
+    dashboard_data._cached_signals(
+        "KR",
+        "20240229",
+        (0, 0),
+        (0, 0),
+        "params",
+        "macro-token",
+        "price-token",
+        (0, 0),
+        (),
+        epsilon=0.0,
+        rs_ma_period=20,
+        ma_fast=20,
+        ma_slow=60,
+        price_years=3,
+        flow_profile="foreign_lead",
+        theme_lens_artifact_key=("theme",),
+    )
+
+    merged_prices = captured["sector_prices"]
+    assert sorted(merged_prices["index_code"].astype(str).unique().tolist()) == ["1001", "445290", "5044"]
+    universe_rows = captured["sector_universe_rows"]
+    assert [row["index_code"] for row in universe_rows] == ["5044", "445290"]
+    assert universe_rows[-1]["taxonomy_kind"] == "THEME"
+    assert universe_rows[-1]["taxonomy_label"] == "로봇"
 
 
 def test_normalize_kr_named_frame_replaces_code_like_names_from_active_dimension(monkeypatch):

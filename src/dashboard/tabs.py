@@ -1021,7 +1021,7 @@ def render_charts_tab(
         with st.expander("차트 해석 상세", expanded=False):
             st.markdown(
                 """
-        **이 패널은 레거시 RS 진단용입니다.** 하이브리드 모멘텀 canonical action은 `6M ex-1M`, `12M ex-1M`, percentile rank, `price > 200DMA`를 사용합니다.
+        **이 패널은 레거시 RS 진단용입니다.** 하이브리드 모멘텀 canonical action은 최근 가격을 포함한 `6M`, `12M` 상대 모멘텀, percentile rank, `price > 200DMA`를 사용합니다.
 
         **X축 (RS)**: 섹터 종가 대비 벤치마크(KOSPI) 비율입니다. 값이 높을수록 벤치마크 대비 상대강도가 높습니다.
 
@@ -1221,7 +1221,7 @@ def render_all_signals_tab(
                 )
             else:
                 momentum_line = (
-                    "- 최종 `액션`(Strong Buy/Watch/Hold/Avoid)은 국면 적합 여부와 하이브리드 모멘텀(`6M ex-1M`, `12M ex-1M`, percentile rank, `price > 200DMA`)을 결합해 계산합니다."
+                    "- 최종 `액션`(Strong Buy/Watch/Hold/Avoid)은 국면 적합 여부와 하이브리드 모멘텀(최근 가격을 포함한 `6M`, `12M` 상대 모멘텀, percentile rank, `price > 200DMA`)을 결합해 계산합니다."
                     if momentum_method == "hybrid_return_rank_v1"
                     else "- 최종 `액션`(Strong Buy/Watch/Hold/Avoid)은 국면 적합 여부와 모멘텀 조건(RS, 추세)을 결합해 계산합니다."
                 )
@@ -1811,7 +1811,7 @@ def _cached_monitoring_data(market_id: str) -> dict:
     }
     history = read_collection_run_history(
         market=market_id,
-        reasons=("manual_refresh", "sync_warehouse", "bootstrap_warehouse"),
+        reasons=("manual_refresh", "manual_retry_after_lock_clear", "sync_warehouse", "bootstrap_warehouse"),
         sample_per_dataset=True,
         sample_size=10,
     )

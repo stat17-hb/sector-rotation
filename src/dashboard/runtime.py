@@ -28,6 +28,8 @@ from src.dashboard.data import (
 from src.dashboard.types import DashboardContext
 from src.data_sources.warehouse import close_cached_read_only_connection
 from src.data_sources.warehouse import get_market_latest_dates
+from src.data_sources.warehouse import read_dataset_data_bounds
+from src.data_sources.warehouse import record_ingest_run
 
 
 logger = logging.getLogger(__name__)
@@ -155,6 +157,37 @@ def _resolve_incremental_market_range(
     }
 
 
+def _record_market_refresh_noop(context: DashboardContext, summary: dict[str, Any]) -> None:
+    """Persist a manual market refresh click even when the warehouse is already current."""
+    row_count = int(summary.get("row_count", 0) or 0)
+    if row_count <= 0:
+        try:
+            row_count = int(
+                read_dataset_data_bounds("market_prices", market=context.market_id).get("row_count", 0)
+                or 0
+            )
+        except Exception:
+            row_count = 0
+        summary["row_count"] = row_count
+    record_ingest_run(
+        dataset="market_prices",
+        reason="manual_refresh",
+        provider=str(summary.get("provider", "") or "OPENAPI"),
+        requested_start=str(summary.get("start", "") or ""),
+        requested_end=str(summary.get("end", "") or ""),
+        status=str(summary.get("status", "CACHED") or "CACHED"),
+        coverage_complete=bool(summary.get("coverage_complete", True)),
+        failed_days=list(summary.get("failed_days", []) or []),
+        failed_codes=dict(summary.get("failed_codes", {}) or {}),
+        delta_keys=list(summary.get("delta_codes", []) or []),
+        row_count=row_count,
+        predicted_requests=int(summary.get("predicted_requests", 0) or 0),
+        processed_requests=int(summary.get("processed_requests", 0) or 0),
+        summary=dict(summary),
+        market=context.market_id,
+    )
+
+
 def run_market_refresh(
     context: DashboardContext,
     price_years: int,
@@ -193,10 +226,18 @@ def run_market_refresh(
                 "failed_codes": {},
                 "provider": "YFINANCE" if normalized_market == "US" else "OPENAPI",
                 "reason": "manual_refresh",
-                "start": refresh_start_str,
+                "start": refresh_end_str,
                 "end": refresh_end_str,
+                "next_start": refresh_start_str,
+                "row_count": 0,
                 "window": window_meta,
             }
+            close_cached_read_only_connection()
+            try:
+                _record_market_refresh_noop(context, summary)
+            except Exception as exc:
+                logger.warning("Failed to record no-op market refresh history: %s", exc)
+                summary["history_record_failed"] = str(exc)
             clear_market_price_transient_override()
             invalidate_dashboard_caches("market")
             notice = build_market_refresh_notice(summary)

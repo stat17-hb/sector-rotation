@@ -331,7 +331,7 @@ def build_signal_table(
     rsi_period = int(settings.get("rsi_period", 14))
     fx_shock_pct = float(settings.get("fx_shock_pct", 3.0))
     momentum_method = _normalize_momentum_method(settings)
-    momentum_skip_recent_days = int(settings.get("momentum_skip_recent_days", 21))
+    momentum_skip_recent_days = int(settings.get("momentum_skip_recent_days", 0))
     momentum_lookback_6m_days = int(settings.get("momentum_lookback_6m_days", 126))
     momentum_lookback_12m_days = int(settings.get("momentum_lookback_12m_days", 252))
     momentum_rank_threshold_pct = float(settings.get("momentum_rank_threshold_pct", 0.60))

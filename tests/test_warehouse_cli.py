@@ -302,6 +302,31 @@ def test_read_collection_run_history_does_not_zero_partial_rows_without_request_
     assert pd.isna(history["completion_pct"].iloc[0])
 
 
+def test_read_collection_run_history_marks_complete_noop_refresh_as_complete():
+    warehouse.ensure_warehouse_schema()
+    warehouse.record_ingest_run(
+        dataset="market_prices",
+        reason="manual_refresh",
+        provider="OPENAPI",
+        requested_start="20260515",
+        requested_end="20260515",
+        status="CACHED",
+        coverage_complete=True,
+        failed_days=[],
+        failed_codes={},
+        delta_keys=[],
+        row_count=0,
+        predicted_requests=0,
+        processed_requests=0,
+        created_at=datetime(2026, 5, 18, 1, 0, tzinfo=timezone.utc),
+    )
+
+    history = warehouse.read_collection_run_history(market="KR", limit=15)
+
+    assert history["dataset"].tolist() == ["market_prices"]
+    assert history["completion_pct"].tolist() == [100.0]
+
+
 def test_read_collection_run_history_filters_reasons_before_sampling():
     warehouse.ensure_warehouse_schema()
     for reason, created_at in (

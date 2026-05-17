@@ -2560,3 +2560,116 @@
   `python -m pytest -q tests/test_dashboard_tabs.py tests/test_theme_taxonomy_adapter.py --basetemp "$env:TEMP\pytest-theme-taxonomy-tabs-adapter-full"` -> `45 passed`
   `git diff --check -- src\ui\panels.py tests\test_ui_components.py tasks\todo.md tasks\lessons.md` -> passed with CRLF warnings only
   `Invoke-WebRequest http://localhost:8502` -> `HTTP 200 OK`
+
+# 2026-05-17 - Autopilot Theme Taxonomy Sector Price Collection Diagnostic
+
+## Goal
+- `theme_taxonomy`/`theme_lens` 기준 섹터·테마 가격 데이터가 후보 산출까지 연결되는지 점검한다.
+- `로봇`, `우주항공/UAM` 같은 테마 proxy가 캐시에 있을 때 매수 검토 후보 산출 대상에서 누락되지 않게 한다.
+
+## Checklist
+- [x] 기존 taxonomy, theme lens, KR signal universe 경로 확인
+- [x] 진단 증거와 ralplan/test spec 작성
+- [x] cache-only theme ETF proxy를 signal 입력으로 변환
+- [x] KR signal payload에 theme proxy universe 병합
+- [x] overview taxonomy 표시 fallback 보강
+- [x] 회귀 테스트와 diff guard 실행
+- [x] code-review clean gate
+
+## Review
+- Diagnosis:
+  active KR 후보 universe는 `dim_index`의 canonical KRX sector rows를 사용한다.
+  기존 `theme_taxonomy` warehouse 수집 코드는 11개 legacy mapping code만 다루며, `로봇`/`우주항공`은 broad sector index가 아니라 `theme_lens` 대표 ETF proxy로만 존재한다.
+  `445290 KODEX K-로봇액티브`는 live proxy 기준 2026-05-15에 1M 약 `+30.38%`, 3M 약 `+20.52%`였지만, DuckDB write lock 때문에 warehouse 저장이 막혔다.
+  현재 정상 렌더는 cache-only theme lens를 참고 패널로만 표시하고 후보 산출에는 넣지 않는다.
+- Implementation:
+  `src/data_sources/theme_lens.py`에 cache-only `load_theme_proxy_signal_inputs()`를 추가해 대표 ETF OHLCV를 signal-compatible price frame과 universe row로 변환한다.
+  `src/dashboard/data.py`는 KR 신호 계산 전에 cached theme proxy rows를 canonical KRX universe 뒤에 병합한다.
+  `src/ui/panels.py`는 static taxonomy context가 없어도 `taxonomy_kind=THEME`, `taxonomy_label`을 후보 표시 payload로 사용할 수 있다.
+- Verification:
+  `python -m py_compile src\data_sources\theme_lens.py src\dashboard\data.py src\ui\panels.py tests\test_theme_lens.py tests\test_dashboard_data.py tests\test_ui_components.py` -> passed
+  `python -m pytest -q tests/test_theme_lens.py -k "theme_proxy_signal_inputs" --basetemp "$env:TEMP\pytest-theme-proxy-signal-inputs"` -> `2 passed, 8 deselected`
+  `python -m pytest -q tests/test_dashboard_data.py -k "cached_signals_merges_cached_theme_proxy_inputs" --basetemp "$env:TEMP\pytest-theme-proxy-dashboard-data"` -> `1 passed, 13 deselected`
+  `python -m pytest -q tests/test_ui_components.py -k "theme_signal_metadata" --basetemp "$env:TEMP\pytest-theme-proxy-ui"` -> `1 passed, 104 deselected`
+  `python -m pytest -q tests/test_signal_pipeline_integration.py -k "theme_proxy_universe_row" --basetemp "$env:TEMP\pytest-theme-proxy-signal-pipeline"` -> `1 passed, 13 deselected`
+  `python -m pytest -q tests/test_theme_lens.py tests/test_dashboard_data.py tests/test_dashboard_runtime.py tests/test_signal_pipeline_integration.py tests/test_ui_components.py --basetemp "$env:TEMP\pytest-theme-proxy-focused-full"` -> `172 passed`
+  actual local cache check -> `theme_proxy_signal_status UNAVAILABLE`, because representative ETF OHLCV cache is still missing.
+  active KR canonical universe check -> 17 sector rows, no theme proxy rows while ETF cache is unavailable.
+  `git diff --exit-code -- config\sector_map.yml` -> passed
+  `git diff --check -- <scoped files>` -> passed with CRLF warnings only
+  `rg -n "[ \t]$" <scoped code/test files>` -> no trailing whitespace
+  code-review -> APPROVE / CLEAR
+- Post-lock-clear processing:
+  Streamlit `app.py` 프로세스 `27120`, `13392`, `23144` 종료 후 writer lock 해소 확인.
+  `sync_theme_taxonomy_warehouse(reason="manual_retry_after_lock_clear")` -> `LIVE`, 11 rows, coverage complete.
+  `refresh_theme_lens_etf_ohlcv(asof_date="20260515", lookback_days=420)` -> `LIVE`, fetched 15, refreshed 15, failed 0, rows 3452.
+  cache-only readback -> `theme_lens_cache_status CACHED`, 7 theme rows.
+  signal input readback -> `proxy_signal_status CACHED`, 1967 price rows, 7 proxy universe rows.
+  `_cached_signals(..., "20260515")` smoke -> 24 signals total, theme signals included.
+  theme Strong Buy after persistence: `전력/AI전력인프라`, `원자력`, `우주항공/UAM`.
+  `로봇` persisted and included, but current hybrid momentum action is `Hold` because 6M/12M excluding recent 21 trading days has negative relative raw momentum despite strong recent 1M/3M returns.
+
+# 2026-05-17 - Recent Momentum Inclusion for Tactical Theme Rotation
+
+## Goal
+- KR tactical sector/theme candidates should react to recent theme momentum by default.
+- Keep ex-recent momentum as an explicit experiment/risk filter, not the production default.
+
+## Checklist
+- [x] `momentum_skip_recent_days` default changed from 21 to 0
+- [x] zero-skip momentum window calculation fixed and tested
+- [x] dashboard copy updated from ex-1M wording to recent-included wording
+- [x] current momentum-method comparison artifacts regenerated
+- [x] real cached KR signal smoke confirms theme proxies are included
+- [x] focused and full regression tests passed
+
+## Review
+- Rationale:
+  `12-1` style momentum can reduce short-term reversal risk, but it delays recognition of fast KR theme rotations.
+  For the dashboard's buy-review candidate surface, the current price should be part of the default 6M/12M relative momentum calculation.
+- Verification:
+  `python -m py_compile src\indicators\momentum.py src\signals\matrix.py src\dashboard\data.py src\dashboard\tabs.py tests\test_momentum.py tests\test_signal_pipeline_integration.py` -> passed
+  `python -m pytest -q tests/test_momentum.py tests/test_signal_pipeline_integration.py --basetemp "$env:TEMP\pytest-recent-momentum-core-2"` -> `23 passed`
+  cached KR smoke as of `20260515` -> theme signals include `로봇` as `Strong Buy`; `우주항공/UAM` remains included but is currently `Hold` under the configured ETF proxy signal.
+  `python -m pytest -q tests/test_theme_lens.py tests/test_dashboard_data.py tests/test_dashboard_runtime.py tests/test_ui_components.py --basetemp "$env:TEMP\pytest-recent-momentum-related-2"` -> `158 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "theme_lens or dashboard_page" --basetemp "$env:TEMP\pytest-recent-momentum-tabs"` -> `5 passed, 37 deselected`
+  `python -m pytest -q tests/test_integration.py::TestIntegration::test_read_warm_status_returns_sanitized_summary --basetemp "$env:TEMP\pytest-warm-status-row-count"` -> `1 passed`
+  `python -m pytest -q --basetemp "$env:TEMP\pytest-recent-momentum-full-2"` -> `717 passed`
+  momentum method comparison as of `2026-05-15` -> whipsaws legacy `96`, hybrid `15`, reduction `84.4%`, rank-stability median rho `0.91`, gate `approved`
+
+# 2026-05-18 - Dashboard Theme Visibility and Refresh History Fix
+
+## Goal
+- 대시보드 조회 기준일이 warehouse 최신 시장데이터보다 뒤처지지 않게 한다.
+- 시장데이터 갱신 버튼을 눌렀을 때 이미 최신인 no-op 경로도 갱신 이력에 남긴다.
+- 로봇, 전력, 원자력, 우주항공 같은 theme_lens ETF proxy 신호를 첫 화면에서 바로 보이게 한다.
+
+## Checklist
+- [x] 중복 Streamlit 프로세스 정리
+- [x] OPENAPI calendar 2026-05-14 / warehouse benchmark 2026-05-15 불일치 재현
+- [x] dashboard market end date를 warehouse 최신 벤치마크일로 보정
+- [x] no-op market refresh ingest history 기록 추가
+- [x] collection history no-op 완료율 100% 표시 보정
+- [x] overview 후보 그룹을 action 우선으로 분류
+- [x] overview `테마 proxy 모니터` 추가
+- [x] focused tests와 실제 warehouse smoke 실행
+
+## Review
+- Diagnosis:
+  `get_last_business_day(provider=OPENAPI, benchmark_code=1001)`는 2026-05-18 00시대에 `2026-05-14`를 반환했지만, warehouse benchmark `1001`은 이미 `20260515`까지 보유했다.
+  첫 화면 후보 카드는 그룹당 3개 제한이라 테마가 신호 원장에 있어도 카드에서 밀렸고, `Strong Buy`가 보조 edge 음수이면 sell group으로 먼저 갈 수 있었다.
+  시장데이터가 이미 최신이면 `run_market_refresh()`가 runner를 생략하고 이력을 기록하지 않았다.
+- Verification:
+  `python -m py_compile src\dashboard\data.py src\dashboard\runtime.py src\dashboard\tabs.py src\ui\panels.py src\data_sources\warehouse.py tests\test_dashboard_data.py tests\test_dashboard_runtime.py tests\test_dashboard_tabs.py tests\test_ui_components.py tests\test_warehouse_cli.py` -> passed
+  `python -m pytest -q tests/test_dashboard_data.py -k "resolve_market_end_date or cached_signals_merges_cached_theme_proxy_inputs" --basetemp "$env:TEMP\pytest-dashboard-date-theme-2"` -> `3 passed, 13 deselected`
+  `python -m pytest -q tests/test_dashboard_runtime.py -k "run_market_refresh" --basetemp "$env:TEMP\pytest-market-refresh-history-2"` -> `4 passed, 25 deselected`
+  `python -m pytest -q tests/test_warehouse_cli.py -k "collection_run_history" --basetemp "$env:TEMP\pytest-collection-history"` -> `7 passed, 14 deselected`
+  `python -m pytest -q tests/test_dashboard_tabs.py::test_cached_monitoring_data_reads_manual_refresh_history --basetemp "$env:TEMP\pytest-monitoring-reasons-2"` -> `1 passed`
+  `python -m pytest -q tests/test_ui_components.py -k "overview_review_candidate_group or overview_theme_proxy_frame or render_overview_review_candidates" --basetemp "$env:TEMP\pytest-overview-candidate-ui"` -> `8 passed, 98 deselected`
+  `python -m pytest -q tests/test_dashboard_data.py tests/test_dashboard_runtime.py tests/test_dashboard_tabs.py tests/test_ui_components.py tests/test_warehouse_cli.py tests/test_theme_lens.py tests/test_signal_pipeline_integration.py --basetemp "$env:TEMP\pytest-dashboard-theme-refresh-related"` -> `238 passed`
+  `python -m pytest -q --basetemp "$env:TEMP\pytest-dashboard-theme-refresh-full-2"` -> `721 passed`
+  actual local date smoke -> dashboard market end date `2026-05-15`; 18/18 KR market universe codes latest `20260515`.
+  actual no-op market refresh smoke -> notice `Market data already current`; latest history row `market_prices manual_refresh 20260515~20260515 CACHED row_count 109088 completion_pct 100.0`.
+  actual theme overview smoke -> theme proxy monitor lists `전력/AI전력인프라`, `원자력`, `우주항공/UAM`, `로봇`, `방산`, `조선`, `화장품/K-뷰티`; buy candidates with desktop limit 6 include `전력/AI전력인프라`, `원자력`, `로봇`.
+  cleanup -> removed two agent-created zero-row no-op smoke history rows; latest market history row remains row_count `109088`.
+  Streamlit restart -> single conda process PID `16648`, `http://localhost:8501` returned HTTP 200.

@@ -135,6 +135,81 @@ themes:
     assert rows[0]["primary_proxy_name"] == "SOL 조선기자재"
 
 
+def test_load_theme_proxy_signal_inputs_builds_cache_only_signal_rows(monkeypatch, tmp_path):
+    config_path = tmp_path / "theme_lens.yml"
+    config_path.write_text(
+        """
+themes:
+  - theme_id: "robotics"
+    name: "로봇"
+    representative_etfs:
+      - code: "445290"
+        name: "KODEX K-로봇액티브"
+""",
+        encoding="utf-8",
+    )
+    sys.modules.pop("pykrx", None)
+    dates = pd.date_range("2025-03-21", periods=300, freq="B")
+    cached = pd.DataFrame(
+        {
+            "ticker": ["445290"] * len(dates),
+            "ticker_name": ["KODEX K-로봇액티브"] * len(dates),
+            "close": [100.0 + idx for idx in range(len(dates))],
+        },
+        index=dates,
+    )
+    monkeypatch.setattr(theme_lens, "read_stock_ohlcv", lambda *args, **kwargs: cached)
+
+    status, prices, universe_rows = theme_lens.load_theme_proxy_signal_inputs(
+        asof_date=dates[-1].strftime("%Y%m%d"),
+        config_path=config_path,
+    )
+
+    assert status == "CACHED"
+    assert "pykrx" not in sys.modules
+    assert prices["index_code"].unique().tolist() == ["445290"]
+    assert prices["index_name"].unique().tolist() == ["로봇"]
+    assert universe_rows == [
+        {
+            "index_code": "445290",
+            "index_name": "로봇",
+            "family": "theme_lens_etf_proxy",
+            "is_benchmark": False,
+            "is_active": True,
+            "export_sector": False,
+            "taxonomy_kind": "THEME",
+            "taxonomy_label": "로봇",
+            "theme_id": "robotics",
+            "primary_proxy_code": "445290",
+            "primary_proxy_name": "KODEX K-로봇액티브",
+            "reference_only": True,
+        }
+    ]
+
+
+def test_load_theme_proxy_signal_inputs_excludes_stale_cache(monkeypatch, tmp_path):
+    config_path = tmp_path / "theme_lens.yml"
+    _write_config(config_path)
+    cached = pd.DataFrame(
+        {
+            "ticker": ["487240"],
+            "ticker_name": ["KODEX AI전력핵심설비"],
+            "close": [100.0],
+        },
+        index=pd.to_datetime(["2026-04-01"]),
+    )
+    monkeypatch.setattr(theme_lens, "read_stock_ohlcv", lambda *args, **kwargs: cached)
+
+    status, prices, universe_rows = theme_lens.load_theme_proxy_signal_inputs(
+        asof_date="20260516",
+        config_path=config_path,
+    )
+
+    assert status == "UNAVAILABLE"
+    assert prices.empty
+    assert universe_rows == []
+
+
 def test_refresh_theme_lens_etf_ohlcv_calls_pykrx_and_upserts(monkeypatch, tmp_path):
     config_path = tmp_path / "theme_lens.yml"
     _write_config(config_path)

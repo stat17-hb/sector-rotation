@@ -77,7 +77,7 @@ _SETTINGS = {
 _HYBRID_SETTINGS = {
     **_SETTINGS,
     "momentum_method": "hybrid_return_rank_v1",
-    "momentum_skip_recent_days": 21,
+    "momentum_skip_recent_days": 0,
     "momentum_lookback_6m_days": 126,
     "momentum_lookback_12m_days": 252,
     "momentum_rank_threshold_pct": 0.60,
@@ -357,7 +357,7 @@ class TestSignalPipelineIntegration:
     def test_hybrid_price_below_200dma_blocks_momentum(self):
         dates = pd.bdate_range("2024-01-01", periods=320)
         bench = pd.Series([100.0 + idx * 0.05 for idx in range(len(dates))], index=dates)
-        sec01_values = [100.0 + idx * 0.9 for idx in range(300)] + [50.0 - idx * 0.5 for idx in range(20)]
+        sec01_values = [100.0 + idx * 0.9 for idx in range(300)] + [250.0 - idx * 0.5 for idx in range(20)]
         sec02_values = [100.0 + idx * 0.1 for idx in range(len(dates))]
         sec01 = pd.Series(sec01_values, index=dates)
         sec02 = pd.Series(sec02_values, index=dates)
@@ -426,3 +426,38 @@ class TestSignalPipelineIntegration:
         assert by_code["5064"].macro_context_regime == "Recovery"
         assert by_code["5064"].macro_fit is False
         assert by_code["5064"].macro_regime == "Unassigned"
+
+    def test_kr_theme_proxy_universe_row_can_be_strong_buy_signal(self):
+        bench = _make_prices(320, seed=0, trend=0.0)
+        robotics = _make_prices(320, seed=1, trend=0.009)
+        df = pd.concat(
+            [
+                _sector_prices_df("1001", "KOSPI", bench),
+                _sector_prices_df("445290", "로봇", robotics),
+            ]
+        ).sort_index()
+
+        signals = build_signal_table(
+            sector_prices=df,
+            benchmark_prices=bench,
+            macro_result=_macro_result("Recovery"),
+            sector_map={"regimes": {}},
+            settings=_HYBRID_SETTINGS,
+            market_id="KR",
+            sector_universe_rows=[
+                {
+                    "index_code": "445290",
+                    "index_name": "로봇",
+                    "export_sector": False,
+                    "taxonomy_kind": "THEME",
+                    "taxonomy_label": "로봇",
+                }
+            ],
+            fx_change_pct=None,
+        )
+        by_code = {signal.index_code: signal for signal in signals}
+
+        assert by_code["445290"].action_policy == "KR_MOMENTUM_ONLY"
+        assert by_code["445290"].action == "Strong Buy"
+        assert by_code["445290"].taxonomy_kind == "THEME"
+        assert by_code["445290"].taxonomy_label == "로봇"
