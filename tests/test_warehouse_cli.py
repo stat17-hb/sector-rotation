@@ -92,6 +92,19 @@ def test_get_dataset_artifact_key_survives_external_read_only_connection():
     assert artifact_key[2:] == ("20240131", "LIVE", "20240131")
 
 
+def test_get_dataset_artifact_key_survives_same_process_read_write_connection():
+    _seed_market_status()
+
+    external_rw = duckdb.connect(str(warehouse.WAREHOUSE_PATH), read_only=False)
+    try:
+        artifact_key = warehouse.get_dataset_artifact_key("market_prices")
+    finally:
+        external_rw.close()
+        warehouse.close_cached_read_only_connection()
+
+    assert artifact_key[2:] == ("20240131", "LIVE", "20240131")
+
+
 def test_read_dataset_data_bounds_returns_actual_stored_ranges():
     market_frame = pd.DataFrame(
         {
@@ -527,6 +540,69 @@ def test_bootstrap_warehouse_cli_reports_success(monkeypatch):
     assert all(call["kwargs"]["force"] is True for call in warm_calls)
 
 
+def test_bootstrap_warehouse_cli_fails_when_theme_taxonomy_incomplete(monkeypatch):
+    monkeypatch.setattr(
+        bootstrap_script,
+        "_parse_args",
+        lambda: Namespace(prices_years=5, macro_years=10, as_of="20260306"),
+    )
+    monkeypatch.setattr(
+        bootstrap_script,
+        "_load_configs",
+        lambda: (
+            {"benchmark": {"code": "1001"}, "regimes": {"Recovery": {"sectors": [{"code": "5044"}]}}},
+            {"ecos": {}, "kosis": {}},
+        ),
+    )
+    monkeypatch.setattr(bootstrap_script, "get_last_business_day", lambda **kwargs: datetime(2026, 3, 6).date())
+    monkeypatch.setattr(
+        bootstrap_script,
+        "sync_theme_taxonomy_warehouse",
+        lambda **kwargs: (
+            "LIVE",
+            pd.DataFrame({"index_code": ["5044"]}),
+            {"coverage_complete": False, "index_codes": ["5044"]},
+        ),
+    )
+    monkeypatch.setattr(
+        bootstrap_script,
+        "warm_sector_price_cache",
+        lambda *args, **kwargs: (
+            ("LIVE", pd.DataFrame({"index_code": ["1001"], "index_name": ["KOSPI"], "close": [1.0]}, index=pd.DatetimeIndex(["2026-03-06"]))),
+            {"coverage_complete": True},
+        ),
+    )
+    monkeypatch.setattr(
+        bootstrap_script,
+        "sync_macro_warehouse",
+        lambda **kwargs: (
+            "LIVE",
+            pd.DataFrame(
+                {
+                    "series_id": ["722Y001/0101000"],
+                    "value": [1.0],
+                    "source": ["ECOS"],
+                    "fetched_at": [datetime.now(timezone.utc)],
+                    "is_provisional": [False],
+                },
+                index=pd.period_range("2026-03", periods=1, freq="M"),
+            ),
+            {"coverage_complete": True},
+        ),
+    )
+    monkeypatch.setattr(
+        bootstrap_script,
+        "read_market_prices",
+        lambda *args, **kwargs: pd.DataFrame(
+            {"index_code": ["1001"], "index_name": ["KOSPI"], "close": [1.0]},
+            index=pd.DatetimeIndex(["2026-03-06"]),
+        ),
+    )
+    monkeypatch.setattr(bootstrap_script, "is_market_coverage_complete", lambda *args, **kwargs: True)
+
+    assert bootstrap_script.main() == 1
+
+
 def test_sync_warehouse_cli_reports_success(monkeypatch):
     monkeypatch.setattr(
         sync_script,
@@ -579,6 +655,69 @@ def test_sync_warehouse_cli_reports_success(monkeypatch):
     )
 
     assert sync_script.main() == 0
+
+
+def test_sync_warehouse_cli_fails_when_theme_taxonomy_incomplete(monkeypatch):
+    monkeypatch.setattr(
+        sync_script,
+        "_parse_args",
+        lambda: Namespace(prices_years=5, macro_years=10, as_of="20260306"),
+    )
+    monkeypatch.setattr(
+        sync_script,
+        "_load_configs",
+        lambda: (
+            {"benchmark": {"code": "1001"}, "regimes": {"Recovery": {"sectors": [{"code": "5044"}]}}},
+            {"ecos": {}, "kosis": {}},
+        ),
+    )
+    monkeypatch.setattr(sync_script, "get_last_business_day", lambda **kwargs: datetime(2026, 3, 6).date())
+    monkeypatch.setattr(sync_script, "get_market_latest_dates", lambda codes: {})
+    monkeypatch.setattr(
+        sync_script,
+        "sync_theme_taxonomy_warehouse",
+        lambda **kwargs: (
+            "LIVE",
+            pd.DataFrame({"index_code": ["5044"]}),
+            {"coverage_complete": False, "index_codes": ["5044"]},
+        ),
+    )
+    monkeypatch.setattr(
+        sync_script,
+        "warm_sector_price_cache",
+        lambda *args, **kwargs: (
+            ("LIVE", pd.DataFrame({"index_code": ["1001"], "index_name": ["KOSPI"], "close": [1.0]}, index=pd.DatetimeIndex(["2026-03-06"]))),
+            {"coverage_complete": True},
+        ),
+    )
+    monkeypatch.setattr(
+        sync_script,
+        "read_market_prices",
+        lambda *args, **kwargs: pd.DataFrame(
+            {"index_code": ["1001"], "index_name": ["KOSPI"], "close": [1.0]},
+            index=pd.DatetimeIndex(["2026-03-06"]),
+        ),
+    )
+    monkeypatch.setattr(
+        sync_script,
+        "sync_macro_warehouse",
+        lambda **kwargs: (
+            "CACHED",
+            pd.DataFrame(
+                {
+                    "series_id": ["722Y001/0101000"],
+                    "value": [1.0],
+                    "source": ["ECOS"],
+                    "fetched_at": [datetime.now(timezone.utc)],
+                    "is_provisional": [False],
+                },
+                index=pd.period_range("2026-03", periods=1, freq="M"),
+            ),
+            {"coverage_complete": True},
+        ),
+    )
+
+    assert sync_script.main() == 1
 
 
 def test_backfill_investor_flow_history_cli_reports_success(monkeypatch):
@@ -677,6 +816,15 @@ def test_sync_warehouse_cli_uses_incremental_market_start(monkeypatch):
                 index=pd.period_range("2026-03", periods=1, freq="M"),
             ),
             {"coverage_complete": True},
+        ),
+    )
+    monkeypatch.setattr(
+        sync_script,
+        "sync_theme_taxonomy_warehouse",
+        lambda **kwargs: (
+            "LIVE",
+            pd.DataFrame({"index_code": ["5044"]}),
+            {"coverage_complete": True, "index_codes": ["5044"]},
         ),
     )
 

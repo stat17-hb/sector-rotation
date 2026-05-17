@@ -185,6 +185,18 @@ def _resolve_display_sector_name(
     return name
 
 
+def _taxonomy_traceability_fields(taxonomy_lookup: Mapping[str, Any], sector_code: str) -> dict[str, Any]:
+    context = taxonomy_lookup.get(str(sector_code or "").strip())
+    if context is None:
+        return {}
+    return {
+        "taxonomy_label": context.taxonomy_label,
+        "taxonomy_base_labels": list(context.base_labels),
+        "taxonomy_cross_labels": list(context.cross_labels),
+        "taxonomy_theme_labels": list(context.theme_labels),
+    }
+
+
 def apply_stock_lookup_result(
     session_state: MutableMapping[str, Any],
     *,
@@ -213,9 +225,11 @@ def apply_stock_lookup_result(
 def build_stock_lookup_display_model(
     stock_lookup_result: Mapping[str, Any] | None,
     sector_map: Mapping[str, Any] | None,
+    taxonomy_context: Any | None = None,
 ) -> dict[str, Any]:
     normalized = normalize_stock_lookup_result(stock_lookup_result)
     name_lookup = _sector_name_lookup(sector_map)
+    taxonomy_lookup = taxonomy_context.by_sector_code() if hasattr(taxonomy_context, "by_sector_code") else {}
     candidates = [
         {
             **dict(item),
@@ -224,6 +238,7 @@ def build_stock_lookup_display_model(
                 str(dict(item).get("sector_name", "")).strip(),
                 name_lookup=name_lookup,
             ),
+            **_taxonomy_traceability_fields(taxonomy_lookup, str(dict(item).get("sector_code", "")).strip()),
         }
         for item in list(normalized.get("matched_sector_candidates", []))
     ]
@@ -249,6 +264,7 @@ def build_stock_lookup_display_model(
         "canonical_sector": {
             "sector_code": canonical_code,
             "sector_name": canonical_name,
+            **_taxonomy_traceability_fields(taxonomy_lookup, canonical_code),
         },
         "matched_sectors": matched_sectors,
     }

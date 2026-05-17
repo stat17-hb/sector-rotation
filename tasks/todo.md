@@ -1,3 +1,300 @@
+# 2026-05-17 - Remove Low-Value Overview Change Heatmap
+
+## Goal
+- 사용자가 지적한 `상위/하위 변화` 카드형 heatmap 블록을 overview evidence에서 제거한다.
+- 남는 영역은 섹터 원장, 상대강도 추이, 수출 추이 중심으로 재정렬한다.
+- 점수 계산, 정렬, taxonomy, 차트 데이터 계약은 변경하지 않는다.
+
+## Checklist
+- [x] screenshot 구간의 렌더 경로 확인
+- [x] heatmap 렌더러와 overview 호출 제거
+- [x] evidence column layout 및 copy 정리
+- [x] 관련 테스트 계약 갱신
+- [x] focused verification 및 screenshot smoke 실행
+- [x] 결과 기록
+
+## Review
+- Changed:
+  `상위/하위 변화` 카드형 heatmap renderer와 overview evidence 내 호출을 제거했다.
+  수출 지표가 없을 때의 evidence layout을 `원장 + 상대강도 추이` 2열로 바꿨다.
+  evidence header copy에서 제거된 보조 수익률 변화 언급을 걷어냈다.
+- Verification:
+  `python -m py_compile src\ui\panels.py src\ui\css.py tests\test_ui_components.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py -k "toss_overview_dashboard or render_toss_overview_dashboard_gives_export_chart_full_width" --basetemp "$env:TEMP\pytest-remove-overview-heatmap"` -> `3 passed, 101 deselected`
+  `python -m pytest -q tests/test_ui_theme.py tests/test_ui_components.py --basetemp "$env:TEMP\pytest-remove-overview-heatmap-ui"` -> `121 passed`
+  `python scripts\capture_streamlit_screenshot.py --output .omx\artifacts\overview-without-change-heatmap-desktop-20260517.png --app app.py --port 8552 --debug-port 9274 --url http://127.0.0.1:8552 --width 1440 --height 1100 --timeout 120 --min-text-len 300` -> passed, screenshot bytes `204225`
+  `python scripts\capture_streamlit_screenshot.py --output .omx\artifacts\overview-without-change-heatmap-mobile-20260517.png --app app.py --port 8553 --debug-port 9275 --url http://127.0.0.1:8553 --width 390 --height 900 --timeout 120 --min-text-len 240 --mobile-user-agent` -> passed, screenshot bytes `38511`
+  Browser DOM absence check -> `hasChangeTitle: false`, `heatmapNodes: 0`
+  `git diff --check -- src\ui\panels.py src\ui\css.py tests\test_ui_components.py tasks\todo.md tasks\lessons.md` -> passed with CRLF warnings only
+
+# 2026-05-17 - Designer Spacing Correction
+
+## Goal
+- 이전 spacing pass 이후에도 붙어 보이는 overview 섹션 리듬을 실제 DOM 측정 기준으로 재보정한다.
+- 단순 토큰 확대가 아니라 top workbench / controls / evidence를 분리된 작업 표면으로 재구성한다.
+- 계산, 라우팅, taxonomy 선택 상태, 표/차트 데이터 계약은 변경하지 않는다.
+
+## Frontend Notes
+- Visual thesis: 하나의 압축 카드 안에 모든 것이 붙어 있는 느낌을 줄이고, `분류/판단`, `조회/필터`, `증거`의 세 작업 표면을 명확히 분리한다.
+- Spacing thesis: major section gap은 28px 이상, related internal gap은 16~20px 기준으로 맞춘다.
+- Measured issue: desktop DOM에서 `overview-review-candidates` -> `overview-command-surface` gap이 1px, `overview-workbench-header` -> `overview-taxonomy-surface` gap이 16px였다.
+
+## Checklist
+- [x] 실제 렌더 DOM gap 측정
+- [x] overview top/control/evidence surface 구조 분리
+- [x] major/minor spacing token과 CSS 재보정
+- [x] desktop/mobile gap 재측정 및 screenshot smoke
+- [x] focused tests 실행
+- [x] 결과 기록
+
+## Review
+- Changed:
+  overview workbench를 `분류/판단`, `조회/필터`, `증거` 3개 표면으로 분리했다.
+  `section_gap` / `section_gap_tight` / `section_gap_loose` 토큰을 다시 보정하고, 모바일 override가 major gap을 다시 줄이지 않도록 수정했다.
+  후보 카드, market command, form, bordered Streamlit wrapper의 vertical rhythm을 같은 토큰 기준으로 정리했다.
+- DOM Evidence:
+  desktop `overview-workbench-header -> overview-taxonomy-surface`: 16px -> 30px
+  desktop `overview-review-candidates -> overview-command-surface`: 1px -> 60px
+  mobile `overview-workbench-header -> overview-taxonomy-surface`: 31px
+  mobile `overview-review-candidates -> overview-command-surface`: 60px
+  desktop/mobile horizontal overflow: false
+- Verification:
+  `python -m py_compile config\theme.py src\ui\css.py src\ui\panels.py tests\test_ui_theme.py tests\test_ui_components.py` -> passed
+  `python -m pytest -q tests/test_ui_theme.py tests/test_ui_components.py --basetemp "$env:TEMP\pytest-designer-spacing-ui"` -> `121 passed`
+  `python scripts\capture_streamlit_screenshot.py --output .omx\artifacts\designer-spacing-desktop-20260517.png --app app.py --port 8548 --debug-port 9268 --url http://127.0.0.1:8548 --width 1440 --height 1100 --timeout 120 --min-text-len 300` -> passed, screenshot bytes `204225`
+  `python scripts\capture_streamlit_screenshot.py --output .omx\artifacts\designer-spacing-mobile-20260517.png --app app.py --port 8549 --debug-port 9269 --url http://127.0.0.1:8549 --width 390 --height 900 --timeout 120 --min-text-len 240 --mobile-user-agent` -> passed, screenshot bytes `38511`
+  `git diff --check -- config\theme.py src\ui\css.py src\ui\panels.py tests\test_ui_theme.py tasks\todo.md tasks\lessons.md` -> passed with CRLF warnings only
+  `rg -n "[ \t]$" config\theme.py src\ui\css.py src\ui\panels.py tests\test_ui_theme.py tasks\todo.md tasks\lessons.md` -> no trailing whitespace
+- Dev Server:
+  Running at `http://127.0.0.1:8550`, health `ok`.
+
+# 2026-05-17 - UX Section Spacing Audit
+
+## Goal
+- `design-taste-frontend` 기준으로 현재 Streamlit UI의 섹션 간격을 점검한다.
+- 특히 overview workbench, evidence, taxonomy, 후보/시장/차트 섹션 사이의 과밀한 리듬을 완화한다.
+- 데이터 계산, 라우팅, taxonomy 표시 계약은 변경하지 않는다.
+
+## Checklist
+- [x] current UI/CSS render path 확인
+- [x] 섹션 간격 토큰과 overview-specific spacing 조정
+- [x] CSS 계약 테스트 갱신
+- [x] focused verification 및 visual smoke 실행
+- [x] 결과 기록
+
+## Review
+- Changed:
+  `section_gap` 계열 토큰을 넓혀 페이지/패널/overview 섹션의 기본 vertical rhythm을 완화했다.
+  `overview` workbench, taxonomy, 후보 카드, 시장/조회, evidence, 차트 제목/보조 섹션의 margin/gap을 같은 토큰 체계로 맞췄다.
+  모바일 override도 기존 0.2~0.5rem대 간격 대신 `section_gap_tight` 기준으로 정리했다.
+- Verification:
+  `python -m py_compile config\theme.py src\ui\css.py tests\test_ui_theme.py` -> passed
+  `python -m pytest -q tests/test_ui_theme.py tests/test_ui_components.py --basetemp "$env:TEMP\pytest-spacing-ui-2"` -> `121 passed`
+  `python scripts\capture_streamlit_screenshot.py --output .omx\artifacts\ux-section-spacing-desktop-20260517.png --app app.py --port 8540 --debug-port 9260 --url http://127.0.0.1:8540 --width 1440 --height 1100 --timeout 120 --min-text-len 300` -> passed, screenshot bytes `216821`
+  `python scripts\capture_streamlit_screenshot.py --output .omx\artifacts\ux-section-spacing-mobile-20260517.png --app app.py --port 8541 --debug-port 9261 --url http://127.0.0.1:8541 --width 390 --height 900 --timeout 120 --min-text-len 240 --mobile-user-agent` -> passed, screenshot bytes `40060`
+  `git diff --check -- config\theme.py src\ui\css.py tests\test_ui_theme.py tasks\todo.md` -> passed with CRLF warnings only
+
+# 2026-05-17 - Overview Evidence Readability Pass
+
+## Goal
+- `섹터 원장과 차트` 구간의 과밀한 3열 배치를 줄여 표와 차트 가독성을 회복한다.
+- 같은 overview evidence container 안에서 확인 가능하게 유지한다.
+- 신호 계산, 정렬, 수출 지표 데이터 계약은 변경하지 않는다.
+
+## Frontend Notes
+- Visual thesis: 압축된 원장형 콘솔은 유지하되, 읽어야 하는 차트는 숨 쉴 수 있는 폭을 준다.
+- Content plan: 원장과 상대강도는 첫 행의 주 작업 영역, 수출 추이는 같은 섹션의 보조 행으로 분리한다.
+- Interaction thesis: 스크롤/hover 동작은 유지하고, x축과 범례가 겹치지 않도록 차트 tick 밀도만 낮춘다.
+
+## Checklist
+- [x] screenshot 기반 과밀 원인 확인
+- [x] evidence layout 3열 압축 해소
+- [x] export chart tick/marker density 조정
+- [x] focused verification 및 visual smoke 실행
+- [x] 결과 기록
+
+## Review
+- Changed:
+  수출 지표가 있는 `섹터 원장과 차트` 구간을 3열 단일 행에서 `원장 + 상대강도` 2열 행과 `수출 추이` 전체폭 보조 행으로 바꿨다.
+  수출 차트 기본 표시 기간은 18개월로 줄이고, 12개월 초과 시 월 tick을 2개월 간격으로 낮췄다.
+  marker 크기와 선 굵기를 조금 줄여 점/라벨 밀도를 낮췄고, 차트 높이는 360px로 늘렸다.
+- Verification:
+  `python -m py_compile src\ui\panels.py tests\test_ui_components.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py -k "toss_overview_dashboard or sector_export_trend_figure" --basetemp "$env:TEMP\pytest-evidence-readability-components"` -> `4 passed`
+  `python -m pytest -q tests/test_ui_components.py --basetemp "$env:TEMP\pytest-evidence-readability-ui-components"` -> `104 passed`
+  `git diff --check -- src\ui\panels.py tests\test_ui_components.py tasks\todo.md` -> passed with CRLF warnings only
+  `rg -n "[ \t]$" src\ui\panels.py tests\test_ui_components.py tasks\todo.md` -> no trailing whitespace
+  `python scripts\capture_streamlit_screenshot.py --output .omx\artifacts\overview-evidence-readability-20260517.png --app app.py --port 8534 --debug-port 9254 --url http://127.0.0.1:8534 --width 1440 --height 1200 --timeout 120 --min-text-len 300` -> passed, screenshot bytes `247177`, DOM text length `3664`
+  Running dev server at `http://127.0.0.1:8533`, health `ok`
+
+# 2026-05-17 - Unified Dashboard Workbench Rebuild
+
+## Goal
+- 중복되는 dashboard overview 화면 블록을 줄이고, 핵심 판단 정보를 첫 화면에서 최대한 확인하게 만든다.
+- 기존 신호 계산, taxonomy schema, 데이터 수집/갱신 라우팅은 변경하지 않는다.
+- 별도 페이지는 상세 분석용으로 유지하되, `overview`는 한 화면 워크벤치 역할을 하게 한다.
+
+## Frontend Notes
+- Visual thesis: 운용 데스크의 조밀한 리서치 터미널처럼, 무광 표면과 얇은 구분선으로 한 화면에서 분류축, 후보, 시장 상태, 원장, 차트를 동시에 스캔하게 한다.
+- Content plan: 상단 workbench는 taxonomy/검토 후보/시장 상태/조회/필터를 합치고, 하단은 섹터 원장과 상대강도·수출·변화 차트를 한 압축 grid로 배치한다.
+- Interaction thesis: taxonomy 레이어 전환과 기간/정렬 필터는 같은 작업 표면 안에 고정하고, 후보 카드 hover와 표/차트 스크롤은 기존보다 작은 이동으로 유지한다.
+
+## Checklist
+- [x] current overview/navigation render path 확인
+- [x] one-screen workbench 계획 기록
+- [x] 중복 컨테이너를 통합한 overview workbench 구현
+- [x] dense dashboard CSS 계약 갱신
+- [x] focused tests 및 visual smoke 검증
+- [x] 결과 기록
+
+## Review
+- Changed:
+  `signals`, `constituents`, `flow` top-level dashboard entries를 숨기고 old page id는 `overview`로 정규화했다.
+  `overview`는 unified workbench header, taxonomy/후보, 시장/조회, 필터, 섹터 원장, 상대강도/수출/히트맵을 두 개의 조밀한 container 안에서 한 흐름으로 보게 재구성했다.
+  기존 상세 `research`와 KR `quality` 화면은 유지했다.
+- Verification:
+  `python -m py_compile app.py src\dashboard\tabs.py src\ui\panels.py src\ui\css.py tests\test_dashboard_tabs.py tests\test_ui_components.py tests\test_ui_theme.py` -> passed
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "dashboard_page_options or normalize_dashboard_page_id or resolve_dashboard_page_title or render_dashboard_tabs_routes" --basetemp "$env:TEMP\pytest-unified-dashboard-tabs"` -> `7 passed`
+  `python -m pytest -q tests/test_ui_components.py -k "toss_overview_dashboard or overview_taxonomy_surface or overview_sector_table" --basetemp "$env:TEMP\pytest-unified-dashboard-components"` -> `5 passed`
+  `python -m pytest -q tests/test_ui_theme.py -k "inject_css_includes_new_dashboard_layout_classes" --basetemp "$env:TEMP\pytest-unified-dashboard-theme"` -> `1 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py tests/test_ui_components.py tests/test_ui_theme.py --basetemp "$env:TEMP\pytest-unified-dashboard-ui"` -> `162 passed`
+  `git diff --check -- app.py src\dashboard\tabs.py src\ui\panels.py src\ui\css.py tests\test_dashboard_tabs.py tests\test_ui_components.py tests\test_ui_theme.py tasks\todo.md` -> passed with CRLF warnings only
+  `rg -n "[ \t]$" app.py src\dashboard\tabs.py src\ui\panels.py src\ui\css.py tests\test_dashboard_tabs.py tests\test_ui_components.py tests\test_ui_theme.py tasks\todo.md` -> no trailing whitespace
+  `python scripts\capture_streamlit_screenshot.py --output .omx\artifacts\unified-dashboard-workbench-20260517.png --app app.py --port 8532 --debug-port 9252 --url http://127.0.0.1:8532 --width 1440 --height 1024 --timeout 120 --min-text-len 300` -> passed, screenshot bytes `215004`, DOM text length `3563`
+  Local dev server started at `http://127.0.0.1:8533`, health `ok`
+
+# 2026-05-17 - Theme Taxonomy First Page Recomposition
+
+## Goal
+- 첫 화면을 `theme_taxonomy`의 기본산업, 크로스테마, 상품테마 축이 먼저 보이도록 재구성한다.
+- 기존 신호 계산, `sector_map.yml`, taxonomy schema, warehouse sync 계약은 변경하지 않는다.
+- 검토 후보, 표, 히트맵은 taxonomy 표시명을 기본으로 유지하되 런타임 섹터명은 추적 문맥으로 보존한다.
+
+## Frontend Notes
+- Visual thesis: 운용 콘솔처럼 차분하고 조밀하게, 첫 화면은 시장 카드보다 분류축 지도와 후보 판단이 먼저 읽히는 taxonomy workbench로 만든다.
+- Content plan: taxonomy 상태/분류축 지도, 매수·매도 검토 후보, 시장·조회·필터, 섹터 원장, 추이/히트맵 순서로 재배치한다.
+- Interaction thesis: taxonomy/기존 섹터 레이어 전환은 유지하고, 후보 카드 hover와 표/차트 스크롤 반응은 기존 속도로 유지한다.
+
+## Checklist
+- [x] current overview/taxonomy render path 확인
+- [x] taxonomy-first 화면 계획 기록
+- [x] taxonomy 요약/분류축 지도 렌더러 추가
+- [x] overview 섹션 순서 재배치
+- [x] CSS와 테스트 계약 갱신
+- [x] focused verification 실행
+- [x] 결과 기록
+
+## Review
+- Changed:
+  overview 첫 화면 상단을 `Theme Taxonomy` workbench로 재배치했다.
+  taxonomy 버전, 커버리지, 기본산업/크로스테마/상품테마 수, 현재 표시 레이어를 같은 표면에서 보여준다.
+  기존 숨김 expander 문맥은 overview에서는 제거하고, 상위 신호 분류축 지도와 매수/매도 검토 후보를 taxonomy 표면 아래에 바로 배치했다.
+  시장/조회/필터는 후보 이후의 증거·조작 영역으로 낮췄고, 계산 로직과 taxonomy schema는 변경하지 않았다.
+- Verification:
+  `python -m py_compile src\ui\panels.py src\ui\css.py tests\test_ui_components.py tests\test_ui_theme.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py -k "overview_taxonomy or toss_overview_dashboard" --basetemp "$env:TEMP\pytest-taxonomy-page-recomposition-components"` -> `3 passed, 100 deselected`
+  `python -m pytest -q tests/test_ui_theme.py -k "inject_css_includes_new_dashboard_layout_classes" --basetemp "$env:TEMP\pytest-taxonomy-page-recomposition-theme"` -> `1 passed, 16 deselected`
+  `python -m pytest -q tests/test_ui_components.py tests/test_ui_theme.py --basetemp "$env:TEMP\pytest-taxonomy-page-recomposition-ui"` -> `120 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py tests/test_theme_taxonomy_adapter.py --basetemp "$env:TEMP\pytest-taxonomy-page-recomposition-tabs-adapter"` -> `45 passed`
+  `git diff --check -- src\ui\panels.py src\ui\css.py tests\test_ui_components.py tests\test_ui_theme.py tasks\todo.md` -> passed with CRLF warnings only
+  `rg -n "[ \t]$" src\ui\panels.py src\ui\css.py tests\test_ui_components.py tests\test_ui_theme.py` -> no trailing whitespace
+  `python scripts\capture_streamlit_screenshot.py --output .omx\artifacts\theme-taxonomy-page-recomposition-20260517.png --app app.py --port 8528 --debug-port 9248 --url http://127.0.0.1:8528 --width 1440 --height 1024 --timeout 120 --min-text-len 300` -> passed, screenshot bytes `206678`
+  Local dev server started at `http://127.0.0.1:8529`, health `ok`
+
+# 2026-05-17 - Overview Sector Table Intrinsic Width
+
+## Goal
+- `섹터 모멘텀 & 상대강도` 표의 각 컬럼을 내용 최대 길이 기준으로만 차지하게 한다.
+- full-width 섹션 배치는 유지하되, 표 자체는 불필요하게 패널 전체 폭으로 늘리지 않는다.
+- 기존 신호 계산, 정렬, 차트 데이터는 변경하지 않는다.
+
+## Frontend Notes
+- Visual thesis: 운영 대시보드 표는 원장처럼 조밀하게 정렬하고, 남는 폭은 빈 데이터 그리드가 아니라 주변 여백으로 남긴다.
+- Content plan: 표 컬럼은 순위, 섹터, 모멘텀, 상대강도, 3M의 실제 최대 텍스트 폭만 사용한다.
+- Interaction thesis: 기존 스크롤/차트 상호작용은 유지하고, 표는 intrinsic width로 더 빠르게 스캔되게 한다.
+
+## Checklist
+- [x] fixed percentage column CSS 확인
+- [x] intrinsic table/wrapper sizing으로 변경
+- [x] CSS 계약 테스트 갱신
+- [x] focused verification 실행
+- [x] 결과 기록
+
+## Review
+- Changed:
+  `.overview-sector-table`을 `table-layout: fixed` / `width: 100%`에서 `table-layout: auto` / `width: max-content`로 변경했다.
+  `.overview-sector-table-wrap`도 `width: fit-content`로 줄여 표 border가 내용 폭만 감싸게 했다.
+  숫자/섹터 컬럼은 `white-space: nowrap`을 유지해 각 컬럼이 가장 긴 셀 길이에 맞춰진다.
+- Verification:
+  `python -m py_compile src\ui\panels.py src\ui\css.py tests\test_ui_components.py tests\test_ui_theme.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py -k "overview_sector_table or toss_overview_dashboard_reflows" --basetemp "$env:TEMP\pytest-overview-table-intrinsic-components"` -> `3 passed, 98 deselected`
+  `python -m pytest -q tests/test_ui_theme.py -k "inject_css_includes_new_dashboard_layout_classes" --basetemp "$env:TEMP\pytest-overview-table-intrinsic-theme"` -> `1 passed, 16 deselected`
+  `python -m pytest -q tests/test_ui_components.py tests/test_ui_theme.py --basetemp "$env:TEMP\pytest-overview-table-intrinsic-regression"` -> `118 passed`
+  `python scripts\capture_streamlit_screenshot.py --output .omx\artifacts\overview-table-intrinsic-width-20260517.png --app app.py --port 8526 --debug-port 9246 --url http://127.0.0.1:8526 --width 1920 --height 1080 --timeout 120 --min-text-len 300` -> passed
+  CDP DOM check at 1920px -> panel `1390px`, table/wrap `524px`, `cellWidths=[38,317,49,59,61]`, `horizontalOverflow=false`, `tableLayout=auto`, `containsNan=false`
+
+# 2026-05-17 - Overview Sector Momentum Table Reflow
+
+## Goal
+- `섹터 모멘텀 & 상대강도` 표를 가로 스크롤 없이 한 화면 폭에서 읽히게 재배치한다.
+- 기존 신호 계산, 정렬, 차트 데이터는 변경하지 않는다.
+- 데스크톱에서는 표를 충분한 폭의 독립 섹션으로 올리고, 차트들은 아래에서 균형 있게 이어지게 한다.
+
+## Frontend Notes
+- Visual thesis: 데이터 작업대처럼 차분하고 조밀하되, 핵심 표는 좁은 보조 컬럼이 아니라 독립 원장으로 읽히게 한다.
+- Content plan: 필터/조회 컨텍스트, 핵심 섹터 표, 상대강도·수출 추이 차트, 변화 히트맵 순서로 배치한다.
+- Interaction thesis: 기존 필터와 차트 상호작용은 유지하고, 표는 이름 줄바꿈과 고정 숫자 폭으로 가로 이동 없이 스캔하게 한다.
+
+## Checklist
+- [x] 현재 overview 섹션 구조와 테이블 CSS 계약 확인
+- [x] 표를 독립 섹션으로 재배치하고 테이블 컬럼 폭/줄바꿈 보정
+- [x] 회귀 테스트로 섹션 순서와 CSS 계약 고정
+- [x] focused verification 실행
+- [x] 결과 기록
+
+## Review
+- Changed:
+  `섹터 모멘텀 & 상대강도` 표를 기존 1.08/2.08 좌측 컬럼에서 독립 full-width 섹션으로 올렸다.
+  하단 차트는 수출 지표가 있으면 상대강도/수출 추이를 2열로, 수출 지표가 없으면 상대강도/히트맵을 2열로 배치한다.
+  표는 `<colgroup>` 기반 fixed layout으로 바꾸고 섹터명 컬럼만 줄바꿈되게 해 가로 스크롤을 없앴다.
+  혼합 taxonomy row에서 optional 값이 `nan` 보조 문구로 노출되는 케이스도 방지했다.
+- Verification:
+  `python -m py_compile src\ui\panels.py src\ui\css.py tests\test_ui_components.py tests\test_ui_theme.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py -k "overview_sector_table or toss_overview_dashboard_reflows" --basetemp "$env:TEMP\pytest-overview-table-reflow-components-2"` -> `3 passed, 98 deselected`
+  `python -m pytest -q tests/test_ui_theme.py -k "inject_css_includes_new_dashboard_layout_classes" --basetemp "$env:TEMP\pytest-overview-table-reflow-theme-2"` -> `1 passed, 16 deselected`
+  `python -m pytest -q tests/test_ui_components.py tests/test_ui_theme.py --basetemp "$env:TEMP\pytest-overview-table-reflow-regression-2"` -> `118 passed`
+  `python scripts\capture_streamlit_screenshot.py --output .omx\artifacts\overview-table-reflow-20260517.png --app app.py --port 8523 --debug-port 9243 --url http://127.0.0.1:8523 --width 1920 --height 1080 --timeout 120 --min-text-len 300` -> passed
+  CDP DOM check at 1920px -> `.overview-sector-table-wrap` `clientWidth=1378`, `scrollWidth=1378`, `horizontalOverflow=false`, `tableLayout=fixed`, `containsNan=false`
+  `git diff --check -- src\ui\panels.py src\ui\css.py tests\test_ui_components.py tests\test_ui_theme.py tasks\todo.md` -> passed with CRLF warnings only
+
+# 2026-05-17 - DuckDB Status Probe Connection Conflict
+
+## Goal
+- 상대강도 분석 페이지 로딩 중 `same database file with a different configuration` 오류를 제거한다.
+- DuckDB 읽기 캐시는 read-only 우선 정책을 유지한다.
+- 같은 Python 프로세스에 이미 read/write 연결이 열린 경우 상태 조회가 예외로 중단되지 않게 한다.
+
+## Checklist
+- [x] 연결 생성 지점과 상태 probe 경로 확인
+- [x] 같은 프로세스 read/write 연결과 read-only 캐시 충돌 원인 재현
+- [x] 읽기 캐시에 동일 설정 충돌 폴백 추가
+- [x] 회귀 테스트 추가
+- [x] focused verification
+- [x] 결과 기록
+
+## Review
+- Root cause:
+  DuckDB는 같은 Python 프로세스에서 기본 read/write 연결이 열린 동안 같은 DB 파일을 `read_only=True`로 다시 열면 `same database file with a different configuration` 예외를 낸다.
+- Changed:
+  읽기 캐시는 기존처럼 `read_only=True`를 우선 사용한다.
+  동일 DB/다른 설정 충돌일 때만 현재 프로세스의 기존 연결 설정에 맞춰 read/write 연결로 폴백한다.
+  캐시 키에 DB 경로를 추가해 테스트/런타임에서 `WAREHOUSE_PATH`가 바뀌어도 이전 연결을 재사용하지 않게 했다.
+- Verification:
+  `.venv\Scripts\python -m py_compile src\data_sources\warehouse.py tests\test_warehouse_cli.py` -> passed
+  `pytest -q tests/test_warehouse_cli.py -k "artifact_key_survives" --basetemp "$env:TEMP\pytest-duckdb-conflict-artifact-conda"` -> `2 passed, 16 deselected`
+  `pytest -q tests/test_warehouse_cli.py --basetemp "$env:TEMP\pytest-duckdb-conflict-warehouse-cli"` -> `18 passed`
+  `.venv\Scripts\python` same-process read/write conflict probe calling `warehouse.probe_dataset_mode("macro_data")` -> returned `SAMPLE` without exception
+
 # 2026-05-16 - Sidebar Reopen Control Fix
 
 ## Goal
@@ -1949,3 +2246,317 @@
 - Residual risk:
   `config/sector_map.yml` has unrelated pre-existing dirty changes and was not treated as Ralph-owned scope.
   Full repository pytest was not run because the worktree contains broad unrelated changes; verification was scoped to affected theme/dashboard/UI/warehouse boundaries.
+
+# 2026-05-17 - Ralplan Theme Lens Sector Group Taxonomy
+
+## Goal
+- `테마렌즈`를 기존 sector_map replacement가 아니라 별도 KR theme taxonomy authority layer로 계획한다.
+- 1차 범위는 taxonomy config, loader, validation tests로 제한한다.
+- 운용사/ETF 상품과 benchmark/comparison theme index를 우선 source authority로 둔다.
+
+## Checklist
+- [x] deep-interview spec 확인
+- [x] 현행 `theme_lens.yml`, loader, UI/cache boundary 확인
+- [x] PRD 작성
+- [x] test spec 작성
+- [x] ralplan 작성
+- [x] Architect ITERATE 반영
+- [x] Architect 승인
+- [x] Critic 승인
+
+## Review
+- Plan artifacts:
+  `.omx/specs/deep-interview-theme-lens-sector-group-taxonomy.md`
+  `.omx/plans/prd-theme-lens-sector-group-taxonomy-20260517.md`
+  `.omx/plans/test-spec-theme-lens-sector-group-taxonomy-20260517.md`
+  `.omx/plans/ralplan-theme-lens-sector-group-taxonomy-20260517.md`
+- Decision:
+  `config/sector_map.yml`은 교체하지 않는다.
+  새 taxonomy는 `config/theme_taxonomy.yml` + `src/data_sources/theme_taxonomy.py`로 분리한다.
+  기존 7개 theme_id는 adapter continuity를 위해 그대로 보존한다.
+  `authority_priority`, `primary_authority.basis_type`, conflict-priority, secondary anchor non-authority를 테스트로 고정한다.
+- Validation:
+  Architect cycle1 -> ITERATE: ID continuity / authority priority / basis enum / conflict tests 필요.
+  Architect cycle2 -> APPROVE.
+  Critic -> APPROVE.
+  `git diff --check -- .omx/plans/... .omx/specs/... .omx/interviews/... .omx/context/...` -> passed.
+
+# 2026-05-17 - Ralph Theme Taxonomy Implementation
+
+## Goal
+- 승인된 `ralplan-theme-lens-sector-group-taxonomy-20260517.md`를 구현한다.
+- `config/sector_map.yml`은 건드리지 않고 별도 KR theme taxonomy authority layer를 추가한다.
+- 기존 theme lens 가격 proxy/refresh 경계는 유지한다.
+
+## Checklist
+- [x] Ralph context snapshot 작성
+- [x] `config/theme_taxonomy.yml` 추가
+- [x] `src/data_sources/theme_taxonomy.py` static loader/validator 추가
+- [x] `tests/test_theme_taxonomy.py` 추가
+- [x] taxonomy focused tests 실행
+- [x] 기존 theme lens 회귀 테스트 실행
+- [x] Architect verification 승인
+- [x] Ralph deslop pass 수행
+- [x] post-deslop 회귀 테스트 실행
+
+## Review
+- Changed scope:
+  `config/theme_taxonomy.yml`
+  `src/data_sources/theme_taxonomy.py`
+  `tests/test_theme_taxonomy.py`
+  `.omx/context/theme-lens-sector-group-taxonomy-implementation-20260517T052046Z.md`
+- Decision:
+  새 taxonomy는 `sector_map.yml` 및 기존 `theme_lens.py`와 분리했다.
+  기존 7개 theme_id를 유지하고, 추가 ETF-product-backed theme로 `semiconductors`를 추가했다.
+  `authority_priority`, `basis_type`, source evidence, product code string, secondary anchor non-override를 validator/test로 고정했다.
+- Validation:
+  `python -m py_compile src\data_sources\theme_taxonomy.py tests\test_theme_taxonomy.py` -> passed
+  `python -m pytest -q tests/test_theme_taxonomy.py --basetemp "$env:TEMP\pytest-theme-taxonomy"` -> `11 passed`
+  `python -m pytest -q tests/test_theme_lens.py --basetemp "$env:TEMP\pytest-theme-lens-regression"` -> `8 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "theme_lens or dashboard_page" --basetemp "$env:TEMP\pytest-theme-taxonomy-tabs"` -> `5 passed, 36 deselected`
+  Architect verification -> APPROVE
+  Deslop pass -> deterministic product authority basis ordering cleanup only
+  post-deslop `py_compile` -> passed
+  post-deslop `tests/test_theme_taxonomy.py` -> `11 passed`
+  post-deslop `tests/test_theme_lens.py` -> `8 passed`
+  post-deslop `tests/test_dashboard_tabs.py -k "theme_lens or dashboard_page"` -> `5 passed, 36 deselected`
+  `git diff --check -- <Ralph-owned files>` -> passed with CRLF warning only for `tasks/todo.md`
+
+# 2026-05-17 - Ralplan Theme Taxonomy Official Source Expansion
+
+## Goal
+- `theme_taxonomy.yml` 확장을 운용사 공식 URL 중심으로 계획한다.
+- K-ETF는 보조 URL로만 쓰고, 단독 최종 권위로 쓰지 않는다.
+- `sector_map.yml` 교체 금지와 기존 taxonomy/theme lens 분리를 유지한다.
+
+## Checklist
+- [x] 기존 taxonomy config/loader와 autoresearch 결과 확인
+- [x] 운용사 공식 URL/K-ETF 보조 URL 근거 정책 확인
+- [x] context snapshot 작성
+- [x] PRD 작성
+- [x] test spec 작성
+- [x] ralplan 초안 작성
+- [x] Architect 검토 반영
+- [x] Critic 승인 반영
+
+## Review
+- Plan artifacts:
+  `.omx/context/theme-taxonomy-official-source-expansion-20260517T055004Z.md`
+  `.omx/plans/prd-theme-taxonomy-official-source-expansion-20260517.md`
+  `.omx/plans/test-spec-theme-taxonomy-official-source-expansion-20260517.md`
+  `.omx/plans/ralplan-theme-taxonomy-official-source-expansion-20260517.md`
+- Architect cycle1 -> ITERATE:
+  legacy K-ETF primary URL 예외가 validator 정책과 충돌하므로 accepted entry는 기존/신규 모두 공식 primary URL을 요구하도록 수정했다.
+  `config/sector_map.yml` diff guard와 `k-etf.com` primary URL 차단 테스트를 추가했다.
+- Architect cycle2 -> ITERATE:
+  PRD risk section의 "기존 항목은 opportunistic" 표현이 strict migration과 충돌해 제거했다.
+- Architect cycle3 -> ITERATE:
+  기존 accepted theme_id 안정성과 "제외 가능" 문구가 충돌해, 기존 ID는 반드시 공식 근거로 backfill하거나 blocker 보고로 중단하도록 고정했다.
+- Architect cycle4 -> APPROVE:
+  공식 primary URL 정책, 기존 ID blocker rule, `sector_map.yml` diff guard, K-ETF supporting-only 테스트가 승인됐다.
+- Critic -> APPROVE:
+  Option A 방향, acceptance criteria, verification, 기존 seed blocker rule 모두 승인됐다.
+  비차단 표현 정리로 PRD의 "Accepted source roles"를 "Allowed source roles"로 바꿨다.
+
+# 2026-05-17 - Ralph Theme Taxonomy Official Source Expansion
+
+## Goal
+- 승인된 ralplan대로 `theme_taxonomy.yml`을 공식-primary URL 기반 schema로 확장한다.
+- K-ETF는 보조 URL로만 유지한다.
+- 기존 `sector_map.yml`과 `theme_lens.yml` 경계는 변경하지 않는다.
+
+## Checklist
+- [x] Ralph context/plan/test spec 확인
+- [x] loader에 `source_role`/`supporting_urls` dataclass 및 validation 추가
+- [x] accepted primary `k-etf.com` URL 차단 추가
+- [x] 기존 seed theme ID 공식-primary URL로 migration
+- [x] first expansion batch 12개 theme 추가
+- [x] taxonomy unit tests 확장
+- [x] focused compile/test 실행
+- [x] theme lens/dashboard focused regression 실행
+- [ ] architect verification
+- [x] deslop pass
+- [x] post-deslop regression
+
+## Review
+- Changed scope:
+  `config/theme_taxonomy.yml`
+  `src/data_sources/theme_taxonomy.py`
+  `tests/test_theme_taxonomy.py`
+  `.omx/context/theme-taxonomy-official-source-evidence-20260517.md`
+- Implementation:
+  accepted entry는 `source_role`과 non-K-ETF primary `source_url`을 요구한다.
+  K-ETF URL은 `supporting_urls`의 `AGGREGATOR_REFERENCE`로만 허용한다.
+  taxonomy는 20개 theme ID를 로드한다.
+- Verification so far:
+  `python -m py_compile src\data_sources\theme_taxonomy.py tests\test_theme_taxonomy.py` -> passed
+  `python -m pytest -q tests/test_theme_taxonomy.py --basetemp "$env:TEMP\pytest-theme-taxonomy-official-source-initial"` -> `16 passed`
+  loader smoke check -> 20 theme IDs loaded, `primary_ketf []`
+  `python -m pytest -q tests/test_theme_lens.py --basetemp "$env:TEMP\pytest-theme-lens-source-regression"` -> `8 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "theme_lens or dashboard_page" --basetemp "$env:TEMP\pytest-theme-taxonomy-source-tabs"` -> `5 passed, 36 deselected`
+  `git diff --exit-code -- config\sector_map.yml` -> passed
+  `git diff --check -- <Ralph-owned files>` -> passed with `tasks/todo.md` CRLF warning only
+- Architect verification -> APPROVE
+- Deslop pass:
+  fallback-like 검색 결과 없음.
+  미사용 `PRIMARY_SOURCE_ROLES` 상수만 제거했다.
+- Post-deslop verification:
+  `python -m py_compile src\data_sources\theme_taxonomy.py tests\test_theme_taxonomy.py` -> passed
+  `python -m pytest -q tests/test_theme_taxonomy.py --basetemp "$env:TEMP\pytest-theme-taxonomy-official-source-post-deslop"` -> `16 passed`
+  `python -m pytest -q tests/test_theme_lens.py --basetemp "$env:TEMP\pytest-theme-lens-source-post-deslop"` -> `8 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "theme_lens or dashboard_page" --basetemp "$env:TEMP\pytest-theme-taxonomy-source-tabs-post-deslop"` -> `5 passed, 36 deselected`
+  final loader smoke -> 20 theme IDs loaded, accepted primary K-ETF URLs `[]`
+  final `git diff --exit-code -- config\sector_map.yml` -> passed
+  final `git diff --check -- <Ralph-owned files>` -> passed with `tasks/todo.md` CRLF warning only
+
+# 2026-05-17 - Autopilot Theme Taxonomy Dual Axis Improvement
+
+## Goal
+- `한국 주식시장 테마 분류의 적절성 평가와 개선안_260517.md` 권고를 반영한다.
+- 기존 ETF/product-backed `themes`는 유지하고, master taxonomy용 기본산업 + 교차테마 축을 추가한다.
+- `sector_map.yml`은 변경하지 않는다.
+
+## Checklist
+- [x] source evaluation 문서 읽기
+- [x] Autopilot context snapshot 작성
+- [x] ralplan PRD/test-spec/plan 작성
+- [x] Architect ITERATE 반영: `K-뷰티` cross-theme와 `axis_id/tag_id` 주소 규칙 추가
+- [x] Critic ITERATE 반영: alias/history 검증 추가
+- [x] loader dataclass/parser 확장
+- [x] `classification_axes` config 추가
+- [x] taxonomy tests 확장
+- [x] focused verification
+- [x] Ralph architect verification
+- [x] Ralph deslop + post-regression
+- [x] code-review clean gate
+
+## Review
+- Plan artifacts:
+  `.omx/context/theme-taxonomy-dual-axis-improvement-20260517T074418Z.md`
+  `.omx/plans/prd-theme-taxonomy-dual-axis-improvement-20260517.md`
+  `.omx/plans/test-spec-theme-taxonomy-dual-axis-improvement-20260517.md`
+  `.omx/plans/ralplan-theme-taxonomy-dual-axis-improvement-20260517.md`
+- Implementation evidence:
+  `.omx/context/theme-taxonomy-dual-axis-implementation-evidence-20260517.md`
+- Verification so far:
+  `python -m py_compile src\data_sources\theme_taxonomy.py tests\test_theme_taxonomy.py` -> passed
+  `python -m pytest -q tests/test_theme_taxonomy.py --basetemp "$env:TEMP\pytest-theme-taxonomy-dual-axis-initial"` -> `23 passed`
+  `python -m pytest -q tests/test_theme_lens.py --basetemp "$env:TEMP\pytest-theme-lens-dual-axis"` -> `8 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "theme_lens or dashboard_page" --basetemp "$env:TEMP\pytest-theme-taxonomy-dual-axis-tabs"` -> `5 passed, 36 deselected`
+  loader smoke -> 20 themes, 7 base axes, 5 cross axes, `k_beauty` aliases preserved
+  `git diff --exit-code -- config\sector_map.yml` -> passed
+- Ralph architect verification -> APPROVE
+- Deslop:
+  fallback-like search -> no findings.
+  behavior lock `tests/test_theme_taxonomy.py` -> `23 passed`.
+  no cleanup edits needed.
+- Post-deslop verification:
+  `python -m py_compile src\data_sources\theme_taxonomy.py tests\test_theme_taxonomy.py` -> passed
+  `python -m pytest -q tests/test_theme_taxonomy.py --basetemp "$env:TEMP\pytest-theme-taxonomy-dual-axis-post-deslop"` -> `23 passed`
+  `python -m pytest -q tests/test_theme_lens.py --basetemp "$env:TEMP\pytest-theme-lens-dual-axis-post-deslop"` -> `8 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "theme_lens or dashboard_page" --basetemp "$env:TEMP\pytest-theme-taxonomy-dual-axis-tabs-post-deslop"` -> `5 passed, 36 deselected`
+  final `git diff --exit-code -- config\sector_map.yml` -> passed
+  final `git diff --check -- <Autopilot-owned files>` -> passed with `tasks/todo.md` CRLF warning only
+- Code-review -> APPROVE / CLEAR:
+  findings none.
+  reviewer evidence included 0 scoped diagnostics, compile pass, taxonomy/theme_lens/dashboard focused tests pass, loader smoke pass, `sector_map.yml` guard pass, scoped diff check pass.
+
+# 2026-05-17 - Autopilot Theme Taxonomy Warehouse Layer
+
+## Goal
+- `theme_taxonomy` 기준 실행 매핑을 수집 파이프라인에 포함한다.
+- `theme_taxonomy`를 기존 KRX 수집 레이어와 같은 warehouse 상태/이력 화면에서 확인한다.
+- `sector_map.yml`은 변경하지 않는다.
+
+## Checklist
+- [x] 기존 taxonomy/dashboard/warehouse 접점 확인
+- [x] `theme_taxonomy` warehouse 수집 상태 기록 구현
+- [x] sync/bootstrap 수집 코드 집합에 taxonomy 실행 매핑 반영
+- [x] 품질 대시보드 데이터셋 표시에 `theme_taxonomy` 추가
+- [x] 회귀 테스트와 smoke 검증
+- [x] Architect ITERATE 반영: mapping coverage completeness 검증
+- [x] Code-review REQUEST CHANGES 반영: CLI success gate와 monitoring reasons 보강
+- [x] 최종 code-review clean gate
+
+## Review
+- Implementation:
+  `src/data_sources/theme_taxonomy_sync.py`를 추가해 `theme_taxonomy` 실행 매핑을 warehouse ingest dataset으로 기록한다.
+  `theme_taxonomy`는 `market_prices`, `macro_data`, `investor_flow`와 같은 `COLLECTION_HISTORY_DATASETS` 경로에 포함된다.
+  `scripts/sync_warehouse.py`와 `scripts/bootstrap_warehouse.py`는 taxonomy 실행 인덱스 코드를 KRX 수집 코드 집합에 병합한다.
+  품질 대시보드는 `테마분류`를 같은 상태/이력 테이블에서 표시한다.
+- Verification so far:
+  `python -m py_compile src\data_sources\theme_taxonomy_sync.py src\data_sources\warehouse.py src\dashboard\tabs.py scripts\sync_warehouse.py scripts\bootstrap_warehouse.py tests\test_theme_taxonomy.py tests\test_theme_taxonomy_sync.py tests\test_dashboard_tabs.py tests\test_warehouse_cli.py` -> passed
+  `python -m pytest -q tests/test_theme_taxonomy.py tests/test_theme_taxonomy_adapter.py tests/test_theme_taxonomy_sync.py tests/test_warehouse_cli.py tests/test_dashboard_tabs.py -k "theme_taxonomy or collection or monitoring or warehouse_cli or cached_monitoring" --basetemp "$env:TEMP\pytest-theme-taxonomy-warehouse"` -> `71 passed, 32 deselected`
+  `python -m pytest -q tests/test_theme_taxonomy.py tests/test_theme_taxonomy_adapter.py tests/test_theme_taxonomy_sync.py tests/test_warehouse_cli.py tests/test_dashboard_tabs.py --basetemp "$env:TEMP\pytest-theme-taxonomy-warehouse-full"` -> `103 passed`
+  `python -m pytest -q tests/test_dashboard_state.py tests/test_theme_lens.py tests/test_dashboard_runtime.py --basetemp "$env:TEMP\pytest-theme-taxonomy-runtime"` -> `49 passed`
+  Architect initial review -> ITERATE: 부분 runtime mapping 누락 시 녹색 처리 가능.
+  coverage fix 후 `python -m pytest -q tests/test_theme_taxonomy_sync.py --basetemp "$env:TEMP\pytest-theme-taxonomy-sync-coverage"` -> `3 passed`
+  coverage fix 후 `python -m pytest -q tests/test_theme_taxonomy.py tests/test_theme_taxonomy_adapter.py tests/test_theme_taxonomy_sync.py tests/test_warehouse_cli.py tests/test_dashboard_tabs.py --basetemp "$env:TEMP\pytest-theme-taxonomy-warehouse-full"` -> `104 passed`
+  coverage fix 후 `python -m pytest -q tests/test_dashboard_state.py tests/test_theme_lens.py tests/test_dashboard_runtime.py tests/test_dashboard_data.py tests/test_krx_indices.py tests/test_warehouse_multimarket.py --basetemp "$env:TEMP\pytest-theme-taxonomy-runtime-extra"` -> `70 passed`
+  Architect re-review -> APPROVE / CLEAR
+  Code-review initial -> REQUEST CHANGES: CLI success gate must require taxonomy coverage; quality history must include sync/bootstrap reasons.
+  review fix smoke -> `python -m pytest -q tests/test_warehouse_cli.py::test_bootstrap_warehouse_cli_fails_when_theme_taxonomy_incomplete tests/test_warehouse_cli.py::test_sync_warehouse_cli_fails_when_theme_taxonomy_incomplete tests/test_dashboard_tabs.py::test_cached_monitoring_data_reads_manual_refresh_history --basetemp "$env:TEMP\pytest-theme-taxonomy-review-fixes"` -> `3 passed`
+  review fix full targeted -> `python -m pytest -q tests/test_theme_taxonomy.py tests/test_theme_taxonomy_adapter.py tests/test_theme_taxonomy_sync.py tests/test_warehouse_cli.py tests/test_dashboard_tabs.py --basetemp "$env:TEMP\pytest-theme-taxonomy-warehouse-full"` -> `106 passed`
+  review fix extra regression -> `python -m pytest -q tests/test_dashboard_state.py tests/test_theme_lens.py tests/test_dashboard_runtime.py tests/test_dashboard_data.py tests/test_krx_indices.py tests/test_warehouse_multimarket.py --basetemp "$env:TEMP\pytest-theme-taxonomy-runtime-extra"` -> `70 passed`
+  `git diff --exit-code -- config\sector_map.yml` -> passed
+  `git diff --check -- <Autopilot-owned files>` -> passed with CRLF warnings only
+  `rg -n "[ \t]$" <Autopilot-owned code/test files>` -> no trailing whitespace
+  Final code-review -> APPROVE / CLEAR
+
+# 2026-05-17 - Autopilot Theme Taxonomy Feedback Improvements
+
+## Goal
+- `피드백_한국 주식시장 테마 분류의 적절성 평가와 개선안_260517.md`의 구현 피드백을 taxonomy 레이어에 반영한다.
+- `theme_mappings`, verification freshness, missing base/cross axes, value-up overlay, network rename을 추가한다.
+- `sector_map.yml`은 변경하지 않는다.
+
+## Checklist
+- [x] Autopilot ralplan artifacts 작성
+- [x] Architect ITERATE 반영: all-theme mapping coverage, mapping cardinality, stale-date behavior, preservation tests
+- [x] Architect ITERATE 반영: 부동산/리츠 base axis 추가
+- [x] Architect ITERATE 반영: `network_infrastructure` aliases 및 value-up semantics 테스트 강화
+- [x] loader에 verification/theme_mappings dataclass와 validation 추가
+- [x] taxonomy YAML에 verification, 20개 mappings, 확장 axes/tags 추가
+- [x] taxonomy tests 확장
+- [x] focused regression 실행
+- [x] code-review clean gate
+
+## Review
+- Plan artifacts:
+  `.omx/context/theme-taxonomy-feedback-improvements-20260517T082423Z.md`
+  `.omx/plans/prd-theme-taxonomy-feedback-improvements-20260517.md`
+  `.omx/plans/test-spec-theme-taxonomy-feedback-improvements-20260517.md`
+  `.omx/plans/ralplan-theme-taxonomy-feedback-improvements-20260517.md`
+- Verification so far:
+  `python -m py_compile src\data_sources\theme_taxonomy.py tests\test_theme_taxonomy.py` -> passed
+  loader smoke -> 20 themes, 20 mappings, 11 base axes, 7 cross axes, `verified`
+  `python -m pytest -q tests/test_theme_taxonomy.py --basetemp "$env:TEMP\pytest-theme-taxonomy-feedback"` -> `36 passed`
+  `python -m pytest -q tests/test_theme_lens.py --basetemp "$env:TEMP\pytest-theme-lens-feedback"` -> `8 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py -k "theme_lens or dashboard_page" --basetemp "$env:TEMP\pytest-theme-taxonomy-feedback-tabs"` -> `5 passed, 36 deselected`
+  `git diff --exit-code -- config\sector_map.yml` -> passed
+  `git diff --check -- <tracked scoped files>` -> passed with `tasks/*.md` CRLF warnings only
+  `rg -n "[ \t]$" <scoped files>` -> no trailing whitespace
+  code-review -> `APPROVE / CLEAR`
+
+# 2026-05-17 - Overview Review Cards Theme Taxonomy Projection
+
+## Goal
+- 첫 화면의 `매수 검토 후보` / `매도 검토 후보` 카드도 theme_taxonomy 기준 표시명을 사용한다.
+- 기존 KRX 섹터명은 내부 신호/런타임 추적용으로 보존한다.
+
+## Checklist
+- [x] overview review candidate 렌더링 경로 확인
+- [x] taxonomy display label/subtext projection 구현
+- [x] 회귀 테스트 실행
+- [x] 실행 중인 대시보드 상태 확인
+
+## Review
+- Implementation:
+  overview 검토 후보 카드, 섹터 표, 3M 히트맵이 `Theme Taxonomy` 선택 시 `theme_labels`를 우선 표시한다.
+  기존 KRX 섹터명은 `sector_name`/`원섹터`로 보존하고 화면에는 `런타임:` 보조 문구로 남긴다.
+- Verification:
+  `python -m py_compile src\ui\panels.py tests\test_ui_components.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py --basetemp "$env:TEMP\pytest-theme-taxonomy-ui-components-full"` -> `100 passed`
+  `python -m pytest -q tests/test_dashboard_tabs.py tests/test_theme_taxonomy_adapter.py --basetemp "$env:TEMP\pytest-theme-taxonomy-tabs-adapter-full"` -> `45 passed`
+  `git diff --check -- src\ui\panels.py tests\test_ui_components.py tasks\todo.md tasks\lessons.md` -> passed with CRLF warnings only
+  `Invoke-WebRequest http://localhost:8502` -> `HTTP 200 OK`

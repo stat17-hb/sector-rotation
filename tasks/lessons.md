@@ -1,5 +1,12 @@
 # Lessons Learned
 
+## 2026-05-17
+- Pattern: 사용자가 섹션 간격이 여전히 타이트하다고 재지적했는데, 이전 수정은 CSS 토큰 확대 위주라 실제 Streamlit DOM에서 붙어 보이는 구간을 충분히 해소하지 못했다.
+- Rule: 프론트엔드 spacing 피드백은 토큰 변경만으로 끝내지 말고, 실제 렌더 DOM gap을 측정해 major section gap과 internal gap을 분리해서 검증한다.
+- Rule: Streamlit `st.container(border=True)` 안에 여러 작업 흐름이 섞이면 CSS margin만으로 시각적 분리가 약하다. 의미가 다른 흐름은 컨테이너 구조부터 분리한 뒤 spacing token을 적용한다.
+- Pattern: 카드형 `상위/하위 변화` heatmap은 이미 원장/차트에서 읽히는 정보를 반복해 화면 밀도만 높였다.
+- Rule: 대시보드 보조 시각화는 의사결정에 새 정보를 추가하지 못하면 유지하지 않는다. 제거 요청이 나오면 렌더러, 호출부, CSS, 테스트 계약을 함께 정리한다.
+
 ## 2026-05-12
 - Pattern: User asked for export data, and the first implementation exposed only aggregate Korean export YoY while the intended decision question required sector-level export trends.
 - Rule: When the user asks for a data signal "by sector", verify the output granularity before implementation. Aggregate macro indicators are not sufficient unless the user explicitly accepts aggregate-only scope.
@@ -126,7 +133,12 @@
 - Rule: When repairing an older requested window, ensure the latest raw-cache snapshot label is updated or merged so a newer poisoned snapshot cannot keep winning `_latest_raw_cache_file()`.
 
 ## 2026-05-17
+- Pattern: Theme taxonomy feedback was partly structural, but review caught that whole-universe readiness also required real estate/REITs and semantic aliases/rules for value-up and network infrastructure.
+- Rule: When implementing taxonomy feedback, do not stop at axis/tag IDs. Convert every feedback-listed semantic phrase into either a required alias, inclusion-rule assertion, mapping rule, or explicit scoped-out non-goal.
+- Rule: For taxonomy rename requests, add negative tests for the removed ID and positive tests for all required replacement aliases, not just the first alias.
 - Pattern: 테마 ETF 기능이 cache-only loader와 refresh button 테스트는 통과했지만, 실제 환경에서는 warehouse에 0건이라 화면이 `UNAVAILABLE`였고 Streamlit/Python 프로세스의 DuckDB write lock 때문에 button refresh 결과도 저장되지 않았다.
 - Rule: 새 warehouse-backed UI 기능은 구현 검증 시 `read_*` 실제 row count와 live refresh의 persistence 결과를 둘 다 수동 재현한다. 단위 테스트의 fake upsert 성공만으로 완료 처리하지 않는다.
 - Rule: Streamlit 내부 refresh가 DuckDB에 write해야 하는 기능은 write lock 실패 시에도 live fetch 결과를 화면에 표시할 session snapshot 또는 equivalent fallback을 제공한다.
 - Rule: 여러 representative ETF를 둔 proxy lens는 첫 번째 코드만 신뢰하지 않는다. 캐시/live 데이터가 있는 대표 ETF를 선택하는 fallback을 테스트로 고정한다.
+- Pattern: theme_taxonomy 수집/품질 레이어는 구현했지만 첫 화면 검토 후보 카드는 여전히 runtime `sector_name`을 직접 렌더해 KRX 섹터명으로 보였다.
+- Rule: 분류 체계를 바꾸거나 overlay를 추가할 때는 데이터 수집/상태 패널뿐 아니라 첫 화면 카드, 표, 히트맵처럼 사용자가 결론으로 읽는 모든 주요 렌더링 경로에 표시 모델이 연결됐는지 확인한다.

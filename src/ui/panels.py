@@ -419,6 +419,17 @@ def _format_overview_pct(value: object, *, decimals: int = 2) -> str:
     return f"{numeric:+.{decimals}f}%"
 
 
+def _overview_optional_text(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    return str(value).strip()
+
+
 def _series_change_pct(series: pd.Series, periods: int = 1) -> float | None:
     clean = pd.to_numeric(series, errors="coerce").dropna()
     if isinstance(clean.index, pd.DatetimeIndex):
@@ -561,12 +572,303 @@ def _render_sector_trade_lens(
     )
 
 
+def _overview_taxonomy_lookup(taxonomy_context: Any | None) -> dict[str, object]:
+    if taxonomy_context is None:
+        return {}
+    by_sector_code = getattr(taxonomy_context, "by_sector_code", None)
+    if callable(by_sector_code):
+        try:
+            lookup = by_sector_code()
+        except Exception:
+            lookup = {}
+        if isinstance(lookup, Mapping):
+            return {
+                str(code).strip(): context
+                for code, context in lookup.items()
+                if str(code).strip()
+            }
+    contexts = getattr(taxonomy_context, "sector_contexts", ()) or ()
+    return {
+        str(getattr(context, "sector_code", "")).strip(): context
+        for context in contexts
+        if str(getattr(context, "sector_code", "")).strip()
+    }
+
+
+def _overview_text_values(values: object) -> list[str]:
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+        return []
+    deduped: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if text and text not in deduped:
+            deduped.append(text)
+    return deduped
+
+
+def _overview_compact_label(labels: Sequence[str], *, limit: int = 2) -> str:
+    clean_labels = [label for label in labels if str(label).strip()]
+    if not clean_labels:
+        return ""
+    if len(clean_labels) <= limit:
+        return " · ".join(clean_labels)
+    return f"{' · '.join(clean_labels[:limit])} 외 {len(clean_labels) - limit}"
+
+
+def _overview_taxonomy_context_for_signal(signal: object, taxonomy_context: Any | None) -> object | None:
+    lookup = _overview_taxonomy_lookup(taxonomy_context)
+    sector_code = str(getattr(signal, "index_code", "") or "").strip()
+    if sector_code and sector_code in lookup:
+        return lookup[sector_code]
+    sector_name = str(getattr(signal, "sector_name", "") or "").strip()
+    for context in lookup.values():
+        if sector_name and sector_name == str(getattr(context, "sector_name", "") or "").strip():
+            return context
+    return None
+
+
+def _overview_taxonomy_primary_label(context: object | None, *, fallback: str) -> str:
+    if context is None:
+        return fallback
+    for attr_name in ("theme_labels", "base_labels"):
+        label = _overview_compact_label(_overview_text_values(getattr(context, attr_name, ())))
+        if label:
+            return label
+    for attr_name in ("taxonomy_label", "sector_name"):
+        label = str(getattr(context, attr_name, "") or "").strip()
+        if label:
+            return label
+    return fallback
+
+
+def _overview_taxonomy_basis_label(context: object | None) -> str:
+    if context is None:
+        return ""
+    base_label = _overview_compact_label(_overview_text_values(getattr(context, "base_labels", ())))
+    cross_label = _overview_compact_label(_overview_text_values(getattr(context, "cross_labels", ())), limit=1)
+    parts = []
+    if base_label:
+        parts.append(f"기본: {base_label}")
+    if cross_label:
+        parts.append(f"크로스: {cross_label}")
+    return " · ".join(parts)
+
+
+def _overview_taxonomy_display_payload(
+    signal: object,
+    taxonomy_context: Any | None,
+    *,
+    fallback_sector_name: str,
+) -> dict[str, object]:
+    context = _overview_taxonomy_context_for_signal(signal, taxonomy_context)
+    if context is None:
+        return {}
+    display_name = _overview_taxonomy_primary_label(context, fallback=fallback_sector_name)
+    runtime_name = str(getattr(context, "sector_name", "") or "").strip() or fallback_sector_name
+    subtexts = []
+    if runtime_name and runtime_name != display_name:
+        subtexts.append(f"런타임: {runtime_name}")
+    basis = _overview_taxonomy_basis_label(context)
+    if basis:
+        subtexts.append(basis)
+    return {
+        "display_sector_name": display_name,
+        "runtime_sector_name": runtime_name,
+        "taxonomy_subtext": " · ".join(subtexts),
+        "taxonomy_layer": "theme_taxonomy",
+    }
+
+
+def _overview_taxonomy_unique_labels(contexts: Sequence[object], attr_name: str) -> list[str]:
+    labels: list[str] = []
+    for context in contexts:
+        for label in _overview_text_values(getattr(context, attr_name, ())):
+            if label not in labels:
+                labels.append(label)
+    return labels
+
+
+def _overview_taxonomy_context_for_sector_label(
+    taxonomy_context: Any | None,
+    sector_label: str,
+) -> object | None:
+    target = str(sector_label or "").strip()
+    if not target:
+        return None
+    for context in _overview_taxonomy_lookup(taxonomy_context).values():
+        runtime_name = str(getattr(context, "sector_name", "") or "").strip()
+        taxonomy_label = str(getattr(context, "taxonomy_label", "") or "").strip()
+        primary_label = _overview_taxonomy_primary_label(context, fallback=runtime_name)
+        if target in {runtime_name, taxonomy_label, primary_label}:
+            return context
+    return None
+
+
+def _build_overview_taxonomy_map_rows(
+    sector_frame: pd.DataFrame,
+    taxonomy_context: Any | None,
+    *,
+    limit: int = 8,
+) -> list[dict[str, str]]:
+    if taxonomy_context is None or sector_frame.empty:
+        return []
+
+    rows: list[dict[str, str]] = []
+    for _, row in sector_frame.iterrows():
+        visible_sector = _overview_optional_text(row.get("섹터"))
+        runtime_sector = _overview_optional_text(row.get("원섹터")) or visible_sector
+        context = _overview_taxonomy_context_for_sector_label(taxonomy_context, runtime_sector)
+        if context is None:
+            context = _overview_taxonomy_context_for_sector_label(taxonomy_context, visible_sector)
+        if context is None:
+            continue
+        display_sector = _overview_taxonomy_primary_label(context, fallback=runtime_sector or visible_sector)
+        rows.append(
+            {
+                "sector": display_sector,
+                "runtime": str(getattr(context, "sector_name", "") or runtime_sector),
+                "base": _overview_compact_label(_overview_text_values(getattr(context, "base_labels", ())), limit=2) or "미지정",
+                "cross": _overview_compact_label(_overview_text_values(getattr(context, "cross_labels", ())), limit=2) or "없음",
+                "theme": _overview_compact_label(_overview_text_values(getattr(context, "theme_labels", ())), limit=2) or "없음",
+                "action": _overview_optional_text(row.get("액션")) or "N/A",
+            }
+        )
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def _render_overview_taxonomy_surface(
+    taxonomy_context: Any | None,
+    sector_frame: pd.DataFrame,
+    *,
+    selected_layer: str,
+    market_id: str,
+) -> None:
+    """Render a first-screen taxonomy summary for the overview page."""
+    if taxonomy_context is None:
+        return
+
+    contexts = list(getattr(taxonomy_context, "sector_contexts", ()) or ())
+    diagnostics = list(getattr(taxonomy_context, "diagnostics", ()) or ())
+    coverage_label = "완료" if not diagnostics else f"확인 필요 {len(diagnostics)}건"
+    version = str(getattr(taxonomy_context, "taxonomy_version", "") or "")
+    base_labels = _overview_taxonomy_unique_labels(contexts, "base_labels")
+    cross_labels = _overview_taxonomy_unique_labels(contexts, "cross_labels")
+    theme_labels = _overview_taxonomy_unique_labels(contexts, "theme_labels")
+    stat_items = [
+        ("시장", str(market_id or "KR")),
+        ("버전", f"v{version}" if version else "N/A"),
+        ("커버리지", coverage_label),
+        ("기본산업", f"{len(base_labels)}개"),
+        ("크로스테마", f"{len(cross_labels)}개"),
+        ("상품테마", f"{len(theme_labels)}개"),
+        ("표시 레이어", selected_layer),
+    ]
+    stats_html = "".join(
+        (
+            '<div class="overview-taxonomy-stat">'
+            f"<span>{html.escape(label)}</span>"
+            f"<strong>{html.escape(value)}</strong>"
+            "</div>"
+        )
+        for label, value in stat_items
+    )
+
+    map_rows = _build_overview_taxonomy_map_rows(sector_frame, taxonomy_context, limit=8)
+    if map_rows:
+        row_html = "".join(
+            (
+                '<div class="overview-taxonomy-row">'
+                '<div class="overview-taxonomy-row__sector">'
+                f"<strong>{html.escape(row['sector'])}</strong>"
+                f"<span>런타임: {html.escape(row['runtime'])}</span>"
+                "</div>"
+                '<div class="overview-taxonomy-row__cell">'
+                "<span>기본</span>"
+                f"<strong>{html.escape(row['base'])}</strong>"
+                "</div>"
+                '<div class="overview-taxonomy-row__cell">'
+                "<span>크로스</span>"
+                f"<strong>{html.escape(row['cross'])}</strong>"
+                "</div>"
+                '<div class="overview-taxonomy-row__cell">'
+                "<span>상품</span>"
+                f"<strong>{html.escape(row['theme'])}</strong>"
+                "</div>"
+                '<div class="overview-taxonomy-row__action">'
+                f"<strong>{html.escape(row['action'])}</strong>"
+                "</div>"
+                "</div>"
+            )
+            for row in map_rows
+        )
+    else:
+        row_html = (
+            '<div class="overview-taxonomy-empty">'
+            "현재 필터 기준으로 표시할 taxonomy 매핑 행이 없습니다."
+            "</div>"
+        )
+
+    diagnostics_html = (
+        '<div class="overview-taxonomy-diagnostics">'
+        f"{html.escape(' / '.join(str(item) for item in diagnostics[:3]))}"
+        "</div>"
+        if diagnostics
+        else ""
+    )
+
+    st.markdown(
+        (
+            '<section class="overview-taxonomy-surface" '
+            f'data-coverage="{html.escape("complete" if not diagnostics else "attention")}">'
+            '<div class="overview-taxonomy-surface__header">'
+            "<div>"
+            '<div class="overview-taxonomy-surface__eyebrow">KR TAXONOMY WORKBENCH</div>'
+            '<div class="overview-taxonomy-surface__title">Theme Taxonomy</div>'
+            '<div class="overview-taxonomy-surface__copy">'
+            "기본산업, 크로스테마, 상품테마 축으로 기존 섹터 신호를 먼저 정렬합니다."
+            "</div>"
+            "</div>"
+            f'<div class="overview-taxonomy-stats">{stats_html}</div>'
+            "</div>"
+            f"{diagnostics_html}"
+            '<div class="overview-taxonomy-map">'
+            '<div class="overview-taxonomy-map__header">'
+            "<span>분류축 지도</span>"
+            f"<strong>상위 {len(map_rows)}개 신호</strong>"
+            "</div>"
+            f"{row_html}"
+            "</div>"
+            "</section>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
+def _render_overview_market_command_surface(cards: Sequence[str]) -> None:
+    st.markdown(
+        '<section class="overview-reference-shell overview-command-surface">'
+        '<div class="overview-command-surface__header">'
+        '<div>'
+        '<div class="overview-section-title">시장/조회</div>'
+        '<div class="overview-command-surface__copy">국면, 데이터 상태, 종목 조회 조건을 한곳에서 확인합니다.</div>'
+        '</div>'
+        f'<div class="overview-market-grid">{"".join(cards)}</div>'
+        '</div>'
+        '</section>',
+        unsafe_allow_html=True,
+    )
+
+
 def _build_overview_sector_frame(
     signals: Sequence,
     *,
     sort_key: str,
     sector_export_trends: Mapping[str, float] | None = None,
     has_sector_export_indicators: bool = True,
+    taxonomy_context: Any | None = None,
+    use_taxonomy_display: bool = False,
 ) -> pd.DataFrame:
     rows: list[dict[str, object]] = []
     export_trends = {
@@ -584,15 +886,30 @@ def _build_overview_sector_frame(
         if mom_score is None:
             mom_score = rs_gap
         export_basis = _sector_export_display_label(sector_name) if sector_name in export_trends else ""
+        taxonomy_item = (
+            _overview_taxonomy_context_for_signal(signal, taxonomy_context)
+            if use_taxonomy_display
+            else None
+        )
+        display_sector_name = (
+            _overview_taxonomy_primary_label(taxonomy_item, fallback=sector_name)
+            if taxonomy_item is not None
+            else sector_name
+        )
         row: dict[str, object] = {
             "순위": rank,
-            "섹터": sector_name,
+            "섹터": display_sector_name,
             "모멘텀 점수": mom_score,
             "상대강도": rs_gap,
             "1M": ret_1m,
             "3M": ret_3m,
             "액션": format_action_label(str(getattr(signal, "action", "N/A"))),
         }
+        if taxonomy_item is not None:
+            row["원섹터"] = sector_name
+            taxonomy_basis = _overview_taxonomy_basis_label(taxonomy_item)
+            if taxonomy_basis:
+                row["분류 근거"] = taxonomy_basis
         if has_sector_export_indicators:
             row["수출 기준"] = export_basis
         rows.append(row)
@@ -638,10 +955,19 @@ def _render_overview_sector_table(frame: pd.DataFrame, *, has_sector_export_indi
         ret_3m = _safe_float(row.get("3M"))
         ret_tone = "positive" if (ret_3m or 0.0) >= 0 else "negative"
         sector_name = str(row["섹터"])
-        export_basis = str(row.get("수출 기준") or "")
+        original_sector_name = _overview_optional_text(row.get("원섹터"))
+        taxonomy_basis = _overview_optional_text(row.get("분류 근거"))
+        export_basis = _overview_optional_text(row.get("수출 기준"))
         sector_cell = html.escape(sector_name)
+        subtexts = []
+        if original_sector_name and original_sector_name != sector_name:
+            subtexts.append(f"런타임: {original_sector_name}")
+        if taxonomy_basis:
+            subtexts.append(taxonomy_basis)
         if has_sector_export_indicators and export_basis:
-            sector_cell += f'<span class="overview-sector-subtext">수출 기준: {html.escape(export_basis)}</span>'
+            subtexts.append(f"수출 기준: {export_basis}")
+        if subtexts:
+            sector_cell += f'<span class="overview-sector-subtext">{html.escape(" · ".join(subtexts))}</span>'
         rows.append(
             "<tr>"
             f"<td>{int(row['순위'])}</td>"
@@ -654,6 +980,13 @@ def _render_overview_sector_table(frame: pd.DataFrame, *, has_sector_export_indi
     st.markdown(
         '<div class="overview-sector-table-wrap">'
         '<table class="overview-sector-table">'
+        "<colgroup>"
+        '<col class="overview-sector-table__rank">'
+        '<col class="overview-sector-table__sector">'
+        '<col class="overview-sector-table__momentum">'
+        '<col class="overview-sector-table__strength">'
+        '<col class="overview-sector-table__return">'
+        "</colgroup>"
         "<thead><tr>"
         "<th>순위</th><th>섹터</th><th>모멘텀</th><th>상대강도</th><th>3M</th>"
         "</tr></thead>"
@@ -804,7 +1137,7 @@ def _build_sector_export_trend_figure(
     sector_export_history: Mapping[str, pd.Series] | None,
     signals: Sequence,
     theme_mode: str,
-    window_months: int = 24,
+    window_months: int = 18,
 ) -> go.Figure:
     template = get_plotly_template(theme_mode)
     tokens = get_theme_tokens(theme_mode)
@@ -833,11 +1166,13 @@ def _build_sector_export_trend_figure(
     ordered_names.extend(sector_name for sector_name in history if sector_name not in ordered_names)
 
     line_end_annotations: list[dict[str, object]] = []
+    month_count = max(1, int(window_months))
+    x_axis_dtick = "M2" if month_count > 12 else "M1"
     for trace_index, sector_name in enumerate(dict.fromkeys(ordered_names).keys()):
         series = pd.to_numeric(history.get(sector_name), errors="coerce").dropna()
         if series.empty:
             continue
-        visible = series.tail(max(1, int(window_months)))
+        visible = series.tail(month_count)
         x_values = [_to_month_timestamp(idx) for idx in visible.index]
         month_labels = [pd.Timestamp(value).strftime("%Y-%m") if isinstance(value, pd.Timestamp) else str(value) for value in x_values]
         color = str(colorway[trace_index % len(colorway)])
@@ -848,8 +1183,8 @@ def _build_sector_export_trend_figure(
                 y=visible.values,
                 mode="lines+markers",
                 name=trace_name,
-                line={"color": color, "width": 2.1},
-                marker={"color": color, "size": 5.5, "line": {"color": chart_tokens["background"], "width": 1}},
+                line={"color": color, "width": 1.9},
+                marker={"color": color, "size": 4.2, "line": {"color": chart_tokens["background"], "width": 0.8}},
                 customdata=[[sector_name, month_label] for month_label in month_labels],
                 hovertemplate="%{fullData.name}<br>%{customdata[0]}<br>%{customdata[1]}<br>수출 YoY %{y:.1f}%<extra></extra>",
             )
@@ -887,10 +1222,10 @@ def _build_sector_export_trend_figure(
     fig.update_layout(**template)
     fig.update_layout(
         title="섹터별 수출 YoY 월별 추이",
-        height=330,
-        margin={"l": 34, "r": 138, "t": 42, "b": 72},
+        height=360,
+        margin={"l": 42, "r": 150, "t": 42, "b": 66},
         hovermode="x unified",
-        legend={"orientation": "h", "x": 0.0, "y": -0.30, "xanchor": "left"},
+        legend={"orientation": "h", "x": 0.0, "y": -0.22, "xanchor": "left"},
         annotations=line_end_annotations,
     )
     fig.add_hline(y=0, line_width=1, line_dash="dot", line_color=chart_tokens["axis"])
@@ -898,40 +1233,13 @@ def _build_sector_export_trend_figure(
     fig.update_xaxes(
         title="",
         tickformat="%b\n%Y",
-        dtick="M1",
+        dtick=x_axis_dtick,
         showspikes=True,
         spikemode="across",
         spikecolor=chart_tokens["axis"],
         spikethickness=1,
     )
     return fig
-
-
-def _render_overview_heatmap(signals: Sequence) -> None:
-    ordered = sorted(
-        [signal for signal in signals if str(getattr(signal, "action", "N/A")) != "N/A"],
-        key=lambda signal: (_pct_value(getattr(signal, "returns", {}).get("3M")) or -999.0),
-        reverse=True,
-    )[:10]
-    if not ordered:
-        st.info("히트맵에 표시할 섹터 수익률 데이터가 없습니다.")
-        return
-    tiles: list[str] = []
-    for signal in ordered:
-        ret_3m = _pct_value(getattr(signal, "returns", {}).get("3M"))
-        tone = "positive" if (ret_3m or 0.0) >= 0 else "negative"
-        magnitude = min(100, max(18, int(abs(ret_3m or 0.0) * 8)))
-        tiles.append(
-            '<div class="overview-heatmap-tile" '
-            f'data-tone="{tone}" style="--tile-strength:{magnitude}%">'
-            f'<span>{html.escape(str(getattr(signal, "sector_name", "")))}</span>'
-            f'<strong>{html.escape(_format_overview_pct(ret_3m, decimals=2))}</strong>'
-            "</div>"
-        )
-    st.markdown(
-        '<div class="overview-heatmap-grid">' + "".join(tiles) + "</div>",
-        unsafe_allow_html=True,
-    )
 
 
 def _render_overview_mobile_decision_strip(frame: pd.DataFrame) -> None:
@@ -1215,6 +1523,7 @@ def _format_overview_candidate_edge(value: object) -> str:
 def _build_overview_review_candidate_projection(
     signal: object,
     *,
+    taxonomy_context: Any | None = None,
     locale: UiLocale = DEFAULT_UI_LOCALE,
 ) -> dict[str, object] | None:
     if str(getattr(signal, "action", "N/A")) == "N/A":
@@ -1258,8 +1567,9 @@ def _build_overview_review_candidate_projection(
         ("복합점수", _format_overview_candidate_score(candidate_score)),
     ]
 
-    return {
-        "sector_name": str(getattr(signal, "sector_name", "")).strip(),
+    sector_name = str(getattr(signal, "sector_name", "")).strip()
+    candidate: dict[str, object] = {
+        "sector_name": sector_name,
         "decision": str(thesis.get("decision", "")),
         "reason_parts": reason_parts,
         "invalidation": str(thesis.get("invalidation", "")),
@@ -1282,6 +1592,14 @@ def _build_overview_review_candidate_projection(
         "bearish_evidence": proxy_bundle["bearish_evidence"],
         "metrics": metrics,
     }
+    candidate.update(
+        _overview_taxonomy_display_payload(
+            signal,
+            taxonomy_context,
+            fallback_sector_name=sector_name,
+        )
+    )
+    return candidate
 
 
 def _build_overview_review_candidates(
@@ -1289,6 +1607,7 @@ def _build_overview_review_candidates(
     sector_frame: pd.DataFrame,
     *,
     limit: int = 3,
+    taxonomy_context: Any | None = None,
     locale: UiLocale = DEFAULT_UI_LOCALE,
 ) -> list[dict[str, object]]:
     """Build first-screen review candidates from composite signal projections."""
@@ -1296,16 +1615,20 @@ def _build_overview_review_candidates(
         return []
 
     sectors_in_frame = {
-        str(row.get("섹터", "")).strip()
+        str(row.get("원섹터", row.get("섹터", ""))).strip()
         for _, row in sector_frame.iterrows()
-        if str(row.get("섹터", "")).strip()
+        if str(row.get("원섹터", row.get("섹터", ""))).strip()
     }
     candidates: list[dict[str, object]] = []
     for signal in signals:
         sector_name = str(getattr(signal, "sector_name", "")).strip()
         if sector_name not in sectors_in_frame:
             continue
-        candidate = _build_overview_review_candidate_projection(signal, locale=locale)
+        candidate = _build_overview_review_candidate_projection(
+            signal,
+            taxonomy_context=taxonomy_context,
+            locale=locale,
+        )
         if candidate is not None:
             candidates.append(candidate)
 
@@ -1346,6 +1669,7 @@ def _build_overview_review_candidate_groups(
     sector_frame: pd.DataFrame,
     *,
     limit_per_group: int = 3,
+    taxonomy_context: Any | None = None,
     locale: UiLocale = DEFAULT_UI_LOCALE,
 ) -> dict[str, list[dict[str, object]]]:
     """Build directional first-screen review candidates from composite projections."""
@@ -1354,15 +1678,19 @@ def _build_overview_review_candidate_groups(
         return groups
 
     sectors_in_frame = {
-        str(row.get("섹터", "")).strip()
+        str(row.get("원섹터", row.get("섹터", ""))).strip()
         for _, row in sector_frame.iterrows()
-        if str(row.get("섹터", "")).strip()
+        if str(row.get("원섹터", row.get("섹터", ""))).strip()
     }
     for signal in signals:
         sector_name = str(getattr(signal, "sector_name", "")).strip()
         if sector_name not in sectors_in_frame:
             continue
-        candidate = _build_overview_review_candidate_projection(signal, locale=locale)
+        candidate = _build_overview_review_candidate_projection(
+            signal,
+            taxonomy_context=taxonomy_context,
+            locale=locale,
+        )
         if candidate is None:
             continue
         group_key = _overview_review_candidate_group(candidate)
@@ -1407,6 +1735,13 @@ def _render_review_candidate_card(
     )
     rank_html = f'<span class="overview-review-card__rank">{rank}</span>' if rank is not None else ""
     risk_chip = _render_decision_card_chip("추가 위험", tone="warning") if risk_flag else ""
+    display_sector_name = str(candidate.get("display_sector_name") or candidate.get("sector_name", "")).strip()
+    taxonomy_subtext = str(candidate.get("taxonomy_subtext") or "").strip()
+    taxonomy_html = (
+        f'<span class="overview-sector-subtext">{html.escape(taxonomy_subtext)}</span>'
+        if taxonomy_subtext
+        else ""
+    )
     invalidation = str(candidate.get("invalidation", "")).strip()
     invalidation_html = (
         '<div class="overview-review-card__invalidation">'
@@ -1423,7 +1758,7 @@ def _render_review_candidate_card(
         f'{_render_decision_card_chip(str(candidate.get("decision", "검토 후보")), tone=action_tone)}'
         f"{risk_chip}"
         "</div>"
-        f'<div class="overview-review-card__sector">{html.escape(str(candidate.get("sector_name", "")))}</div>'
+        f'<div class="overview-review-card__sector">{html.escape(display_sector_name)}{taxonomy_html}</div>'
         f'<div class="overview-review-card__reasons">{reason_chips}</div>'
         f'<div class="overview-review-card__metrics">{metrics_html}</div>'
         f"{invalidation_html}"
@@ -1834,13 +2169,76 @@ def _theme_lens_etf_label(row: Mapping[str, object]) -> str:
     return " / ".join(labels[:3]) if labels else "대표 ETF 없음"
 
 
+def render_taxonomy_context_panel(
+    taxonomy_context: Any | None,
+    *,
+    page: str,
+    expanded: bool = True,
+) -> None:
+    """Render taxonomy-first traceability for KR dashboard pages."""
+    if taxonomy_context is None:
+        return
+    contexts = list(getattr(taxonomy_context, "sector_contexts", ()) or ())
+    diagnostics = list(getattr(taxonomy_context, "diagnostics", ()) or ())
+    status = "완료" if not diagnostics else f"확인 필요 {len(diagnostics)}건"
+    summary = f"theme_taxonomy v{getattr(taxonomy_context, 'taxonomy_version', '')} · {len(contexts)}개 런타임 섹터 · {status}"
+    with st.expander("Theme Taxonomy Context", expanded=expanded):
+        st.caption(
+            "대시보드의 기존 섹터 신호를 theme_taxonomy 분류축으로 투영합니다. "
+            "sector_map.yml은 실행 입력으로 유지하고, 이 패널은 별도 해석 레이어입니다."
+        )
+        st.markdown(
+            (
+                '<section class="sector-momentum-decision-boards theme-lens-panel">'
+                '<div class="overview-review-candidates__header">'
+                "<div>"
+                '<div class="overview-section-title">테마/섹터 분류 레이어</div>'
+                f'<div class="overview-command-surface__copy">{html.escape(summary)}</div>'
+                "</div>"
+                f'<span class="overview-review-candidates__basis">{html.escape(str(page))}</span>'
+                "</div>"
+                "</section>"
+            ),
+            unsafe_allow_html=True,
+        )
+        if diagnostics:
+            st.warning(" / ".join(str(item) for item in diagnostics[:3]))
+        display = pd.DataFrame(
+            [
+                {
+                    "섹터": context.sector_name,
+                    "기본 분류": " / ".join(context.base_labels),
+                    "크로스 테마": " / ".join(context.cross_labels) or "없음",
+                    "상품 테마": " / ".join(context.theme_labels) or "없음",
+                    "기존 국면": context.legacy_regime,
+                    "점수 역할": context.score_role,
+                }
+                for context in contexts
+            ]
+        )
+        if not display.empty:
+            st.dataframe(
+                display,
+                hide_index=True,
+                width="stretch",
+                column_config={
+                    "섹터": st.column_config.TextColumn("섹터", width="medium"),
+                    "기본 분류": st.column_config.TextColumn("기본 분류", width="large"),
+                    "크로스 테마": st.column_config.TextColumn("크로스 테마", width="large"),
+                    "상품 테마": st.column_config.TextColumn("상품 테마", width="medium"),
+                    "기존 국면": st.column_config.TextColumn("기존 국면", width="small"),
+                    "점수 역할": st.column_config.TextColumn("점수 역할", width="small"),
+                },
+            )
+
+
 def render_theme_lens_panel(
     rows: Sequence[Mapping[str, object]] | None,
     *,
     status: str = "UNAVAILABLE",
     show_refresh_button: bool = False,
 ) -> bool:
-    """Render the KR theme lens as a non-authoritative ETF proxy support layer."""
+    """Render the KR theme lens as ETF proxy evidence under the taxonomy layer."""
     theme_rows = list(rows or [])
     status_label = str(status or "UNAVAILABLE").strip().upper() or "UNAVAILABLE"
     summary = f"{len(theme_rows)}개 테마 · {status_label}"
@@ -1851,8 +2249,8 @@ def render_theme_lens_panel(
             "<div>"
             '<div class="overview-section-title">테마 렌즈</div>'
             '<div class="overview-command-surface__copy">'
-            "전력, 조선, 원자력, 로봇, 방산, 우주항공, 화장품을 대표 ETF 가격 기반 proxy로만 확인합니다. "
-            "canonical sector action과 macro-regime scoring에는 반영하지 않습니다."
+            "대표 ETF 가격 기반 proxy로 상품 기반 테마 모멘텀을 확인합니다. "
+            "theme_taxonomy 분류 레이어의 보조 증거로 표시하며 기존 섹터 신호 원장(canonical sector action)은 별도 추적합니다."
             "</div>"
             "</div>"
             f'<span class="overview-review-candidates__basis">{html.escape(summary)}</span>'
@@ -1908,6 +2306,36 @@ def render_theme_lens_panel(
     return clicked
 
 
+def _render_overview_workbench_header(
+    *,
+    market_id: str,
+    signal_count: int,
+    review_candidate_count: int,
+    selected_layer: str,
+    period: str,
+) -> None:
+    st.markdown(
+        (
+            '<section class="overview-workbench-header">'
+            '<div>'
+            '<div class="overview-workbench-header__eyebrow">UNIFIED DASHBOARD</div>'
+            f'<div class="overview-workbench-header__title">{html.escape(str(market_id).upper())} 통합 워크벤치</div>'
+            '<div class="overview-workbench-header__copy">'
+            "분류축, 검토 후보, 시장 상태, 섹터 원장, 차트를 한 화면 흐름으로 압축했습니다."
+            "</div>"
+            "</div>"
+            '<div class="overview-workbench-header__meta">'
+            f"<span><b>신호</b>{html.escape(str(signal_count))}개</span>"
+            f"<span><b>후보</b>{html.escape(str(review_candidate_count))}개</span>"
+            f"<span><b>레이어</b>{html.escape(selected_layer)}</span>"
+            f"<span><b>기간</b>{html.escape(period)}</span>"
+            "</div>"
+            "</section>"
+        ),
+        unsafe_allow_html=True,
+    )
+
+
 def render_toss_overview_dashboard(
     *,
     market_id: str,
@@ -1931,10 +2359,11 @@ def render_toss_overview_dashboard(
     sector_export_history: Mapping[str, pd.Series] | None = None,
     has_trade_indicators: bool = False,
     has_sector_export_indicators: bool = True,
+    taxonomy_context: Any | None = None,
     locale: UiLocale = DEFAULT_UI_LOCALE,
     is_mobile: bool = False,
 ) -> tuple[str, bool]:
-    """Render the reference-style overview and return stock lookup submission state."""
+    """Render the unified overview workbench and return stock lookup submission state."""
     cards = _build_overview_market_cards(
         prices_wide=prices_wide,
         benchmark_label=benchmark_label,
@@ -1951,47 +2380,66 @@ def render_toss_overview_dashboard(
     lookup_query = str(lookup_query_value or "")
     lookup_submitted = False
     sort_key = "모멘텀 점수"
+    taxonomy_options = ["Theme Taxonomy", "기존 섹터"]
+    taxonomy_layer_key = f"overview_sector_layer_{market_id}"
+    default_taxonomy_layer = taxonomy_options[0] if taxonomy_context is not None else taxonomy_options[1]
+    session_taxonomy_layer = st.session_state.get(taxonomy_layer_key)
+    selected_taxonomy_layer = str(session_taxonomy_layer or default_taxonomy_layer)
+    if taxonomy_context is None:
+        selected_taxonomy_layer = taxonomy_options[1]
+    elif selected_taxonomy_layer not in taxonomy_options:
+        selected_taxonomy_layer = default_taxonomy_layer
+    if session_taxonomy_layer is not None and str(session_taxonomy_layer) != selected_taxonomy_layer:
+        st.session_state[taxonomy_layer_key] = selected_taxonomy_layer
+    use_taxonomy_layer = taxonomy_context is not None and selected_taxonomy_layer == taxonomy_options[0]
     sector_frame = _build_overview_sector_frame(
         signals,
         sort_key=sort_key,
         sector_export_trends=sector_export_trends,
         has_sector_export_indicators=has_sector_export_indicators,
+        taxonomy_context=taxonomy_context,
+        use_taxonomy_display=use_taxonomy_layer,
     )
+    review_candidate_groups = _build_overview_review_candidate_groups(
+        signals,
+        sector_frame,
+        limit_per_group=3,
+        taxonomy_context=taxonomy_context if use_taxonomy_layer else None,
+        locale=locale,
+    )
+    review_candidate_count = sum(len(items[:3]) for items in review_candidate_groups.values())
+    period = "3M"
+    compare_basis = "벤치마크 대비"
+    sector_group = selected_taxonomy_layer
     with st.container(border=True):
-        st.markdown(
-            '<section class="overview-reference-shell overview-command-surface">'
-            '<div class="overview-command-surface__header">'
-            '<div>'
-            '<div class="overview-section-title">시장/조회</div>'
-            '<div class="overview-command-surface__copy">국면, 데이터 상태, 종목 조회를 먼저 확인합니다.</div>'
-            '</div>'
-            f'<div class="overview-market-grid">{"".join(cards)}</div>'
-            '</div>'
-            '</section>',
-            unsafe_allow_html=True,
+        _render_overview_workbench_header(
+            market_id=market_id,
+            signal_count=len([signal for signal in signals if str(getattr(signal, "action", "N/A")) != "N/A"]),
+            review_candidate_count=review_candidate_count,
+            selected_layer=selected_taxonomy_layer,
+            period=period,
         )
-        _render_sector_trade_lens(sector_trade_lens, limit=6 if not is_mobile else 3)
-        if is_mobile:
+        if taxonomy_context is not None:
+            _render_overview_taxonomy_surface(
+                taxonomy_context,
+                sector_frame,
+                selected_layer=selected_taxonomy_layer,
+                market_id=market_id,
+            )
             _render_overview_review_candidates(
-                _build_overview_review_candidate_groups(
-                    signals,
-                    sector_frame,
-                    limit_per_group=3,
-                    locale=locale,
-                ),
-                compact=True,
+                review_candidate_groups,
+                compact=is_mobile,
                 locale=locale,
             )
         else:
             _render_overview_review_candidates(
-                _build_overview_review_candidate_groups(
-                    signals,
-                    sector_frame,
-                    limit_per_group=3,
-                    locale=locale,
-                ),
+                review_candidate_groups,
+                compact=is_mobile,
                 locale=locale,
             )
+    with st.container(border=True):
+        _render_overview_market_command_surface(cards)
+        _render_sector_trade_lens(sector_trade_lens, limit=6 if not is_mobile else 3)
         lookup_context = st.expander("종목-섹터 조회", expanded=False) if is_mobile else nullcontext()
         with lookup_context:
             with st.form("overview_stock_lookup_form"):
@@ -2061,7 +2509,15 @@ def render_toss_overview_dashboard(
                 sort_options = ["모멘텀 점수", "수익률(3M)", "상대강도"]
                 sort_key = st.selectbox("정렬 기준", options=sort_options, index=0)
             with filter_col_4:
-                sector_group = st.selectbox("섹터 그룹", options=["WICS 대분류", "전체"], index=0)
+                sector_group = st.selectbox(
+                    "분류 레이어",
+                    options=taxonomy_options,
+                    index=taxonomy_options.index(selected_taxonomy_layer),
+                    key=taxonomy_layer_key,
+                    disabled=taxonomy_context is None,
+                )
+                selected_taxonomy_layer = str(sector_group or selected_taxonomy_layer)
+                use_taxonomy_layer = taxonomy_context is not None and selected_taxonomy_layer == taxonomy_options[0]
     del compare_basis, sector_group, sector_map
 
     sector_frame = _build_overview_sector_frame(
@@ -2069,38 +2525,71 @@ def render_toss_overview_dashboard(
         sort_key=str(sort_key),
         sector_export_trends=sector_export_trends,
         has_sector_export_indicators=has_sector_export_indicators,
+        taxonomy_context=taxonomy_context,
+        use_taxonomy_display=use_taxonomy_layer,
     )
-    left_col, right_col = st.columns([1.08, 2.08], gap="medium")
-    with left_col:
-        with st.container(border=True):
-            st.markdown('<div class="overview-section-title">섹터 모멘텀 & 상대강도</div>', unsafe_allow_html=True)
-            _render_overview_sector_table(
-                sector_frame,
-                has_sector_export_indicators=has_sector_export_indicators,
-            )
-    with right_col:
-        with st.container(border=True):
-            st.markdown('<div class="overview-section-title">섹터 상대강도 추이</div>', unsafe_allow_html=True)
-            fig = _build_overview_trend_figure(
-                prices_wide=prices_wide,
-                signals=signals,
-                benchmark_label=benchmark_label,
-                period=str(period or "3M"),
-                theme_mode=theme_mode,
-            )
-            st.plotly_chart(fig, width="stretch")
+    with st.container(border=True):
+        st.markdown(
+            (
+                '<section class="overview-evidence-shell">'
+                '<div>'
+                '<div class="overview-section-title">섹터 원장과 차트</div>'
+                '<div class="overview-command-surface__copy">'
+                "정렬된 섹터 원장과 상대강도 추이를 같은 기준으로 봅니다."
+                "</div>"
+                "</div>"
+                f'<span class="overview-review-candidates__basis">{html.escape(str(sort_key))} · {html.escape(str(period or "3M"))}</span>'
+                "</section>"
+            ),
+            unsafe_allow_html=True,
+        )
+
         if has_sector_export_indicators:
-            with st.container(border=True):
-                st.markdown('<div class="overview-section-title">섹터별 수출 YoY 월별 추이</div>', unsafe_allow_html=True)
-                export_fig = _build_sector_export_trend_figure(
-                    sector_export_history=sector_export_history,
+            ledger_col, trend_col = st.columns([0.92, 1.58], gap="large")
+            with ledger_col:
+                st.markdown('<div class="overview-section-title">섹터 모멘텀 & 상대강도</div>', unsafe_allow_html=True)
+                _render_overview_sector_table(
+                    sector_frame,
+                    has_sector_export_indicators=has_sector_export_indicators,
+                )
+            with trend_col:
+                st.markdown('<div class="overview-section-title">섹터 상대강도 추이</div>', unsafe_allow_html=True)
+                fig = _build_overview_trend_figure(
+                    prices_wide=prices_wide,
                     signals=signals,
+                    benchmark_label=benchmark_label,
+                    period=str(period or "3M"),
                     theme_mode=theme_mode,
                 )
-                st.plotly_chart(export_fig, width="stretch")
-        with st.container(border=True):
-            st.markdown('<div class="overview-section-title">상위/하위 섹터 변화 (3M)</div>', unsafe_allow_html=True)
-            _render_overview_heatmap(signals)
+                st.plotly_chart(fig, width="stretch")
+            st.markdown(
+                '<div class="overview-section-title overview-section-title--sub">섹터별 수출 YoY 월별 추이</div>',
+                unsafe_allow_html=True,
+            )
+            export_fig = _build_sector_export_trend_figure(
+                sector_export_history=sector_export_history,
+                signals=signals,
+                theme_mode=theme_mode,
+            )
+            st.plotly_chart(export_fig, width="stretch")
+        else:
+            ledger_col, trend_col = st.columns([0.95, 1.55], gap="large")
+            with ledger_col:
+                st.markdown('<div class="overview-section-title">섹터 모멘텀 & 상대강도</div>', unsafe_allow_html=True)
+                _render_overview_sector_table(
+                    sector_frame,
+                    has_sector_export_indicators=has_sector_export_indicators,
+                )
+            with trend_col:
+                st.markdown('<div class="overview-section-title">섹터 상대강도 추이</div>', unsafe_allow_html=True)
+                fig = _build_overview_trend_figure(
+                    prices_wide=prices_wide,
+                    signals=signals,
+                    benchmark_label=benchmark_label,
+                    period=str(period or "3M"),
+                    theme_mode=theme_mode,
+                )
+                st.plotly_chart(fig, width="stretch")
 
     return lookup_query, lookup_submitted
 

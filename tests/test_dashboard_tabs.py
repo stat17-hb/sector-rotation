@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 from datetime import date
 from types import SimpleNamespace
 
@@ -7,7 +8,6 @@ import pandas as pd
 
 from src.dashboard import tabs
 import src.data_sources.krx_stock_screening as screening_mod
-import src.data_sources.warehouse as warehouse
 from src.signals.flow import summarize_sector_investor_flow
 import src.ui.components as ui_components
 
@@ -208,26 +208,17 @@ def test_build_dashboard_page_options_returns_kr_pages_in_expected_order():
 
     assert [option.page_id for option in options] == [
         "overview",
-        "signals",
         "research",
-        "constituents",
-        "flow",
         "quality",
     ]
     assert [option.label for option in options] == [
         "대시보드",
-        "섹터 모멘텀",
         "상대강도 분석",
-        "구성종목",
-        "투자자 수급",
         "데이터 수집 이력",
     ]
     assert [option.url_path for option in options] == [
         "kr-overview",
-        "kr-signals",
         "kr-research",
-        "kr-constituents",
-        "kr-flow",
         "kr-quality",
     ]
 
@@ -237,24 +228,15 @@ def test_build_dashboard_page_options_returns_us_pages_without_monitoring():
 
     assert [option.page_id for option in options] == [
         "overview",
-        "signals",
         "research",
-        "constituents",
-        "flow",
     ]
     assert [option.label for option in options] == [
         "대시보드",
-        "섹터 모멘텀",
         "상대강도 분석",
-        "구성종목",
-        "ETF 수급 프록시",
     ]
     assert [option.url_path for option in options] == [
         "us-overview",
-        "us-signals",
         "us-research",
-        "us-constituents",
-        "us-flow",
     ]
 
 
@@ -262,12 +244,14 @@ def test_normalize_dashboard_page_id_falls_back_to_summary_when_page_is_unavaila
     assert tabs.normalize_dashboard_page_id("quality", "US") == "overview"
     assert tabs.normalize_dashboard_page_id("missing", "KR") == "overview"
     assert tabs.normalize_dashboard_page_id(None, "KR") == "overview"
-    assert tabs.normalize_dashboard_page_id("flow", "US") == "flow"
+    assert tabs.normalize_dashboard_page_id("flow", "US") == "overview"
+    assert tabs.normalize_dashboard_page_id("signals", "KR") == "overview"
+    assert tabs.normalize_dashboard_page_id("constituents", "KR") == "overview"
 
 
 def test_resolve_dashboard_page_title_uses_current_market_and_page_label():
-    assert tabs.resolve_dashboard_page_title("signals", "KR") == "KR 섹터 모멘텀"
-    assert tabs.resolve_dashboard_page_title("flow", "US") == "US ETF 수급 프록시"
+    assert tabs.resolve_dashboard_page_title("research", "KR") == "KR 상대강도 분석"
+    assert tabs.resolve_dashboard_page_title("flow", "US") == "US 대시보드"
     assert tabs.resolve_dashboard_page_title("quality", "US") == "US 대시보드"
 
 
@@ -381,18 +365,18 @@ def test_render_sidebar_controls_hides_kr_flow_profile_for_us(monkeypatch):
     assert not any("투자자 수급" in call for call in markdown_calls)
 
 
-def test_render_dashboard_tabs_routes_flow_page_for_kr_and_us(monkeypatch):
-    calls: list[dict[str, object]] = []
+def test_render_dashboard_tabs_routes_hidden_flow_page_to_overview_for_kr_and_us(monkeypatch):
+    summary_calls: list[dict[str, object]] = []
     blocked_renderers: list[str] = []
 
     monkeypatch.setattr(tabs.st, "tabs", _fail_st_tabs)
     monkeypatch.setattr(tabs.st, "container", lambda: _DummyContext())
-    monkeypatch.setattr(tabs, "render_summary_tab", lambda **_kwargs: blocked_renderers.append("summary"))
+    monkeypatch.setattr(tabs, "render_summary_tab", lambda **kwargs: summary_calls.append(kwargs))
     monkeypatch.setattr(tabs, "render_charts_tab", lambda **_kwargs: blocked_renderers.append("charts"))
     monkeypatch.setattr(tabs, "render_all_signals_tab", lambda **_kwargs: blocked_renderers.append("all_signals"))
     monkeypatch.setattr(tabs, "render_screening_tab", lambda **_kwargs: blocked_renderers.append("screening"))
     monkeypatch.setattr(tabs, "render_monitoring_tab", lambda **_kwargs: blocked_renderers.append("monitoring"))
-    monkeypatch.setattr(tabs, "render_investor_flow_tab", lambda **kwargs: calls.append(kwargs))
+    monkeypatch.setattr(tabs, "render_investor_flow_tab", lambda **_kwargs: blocked_renderers.append("flow"))
     monkeypatch.setattr(
         tabs,
         "render_top_bar_filters",
@@ -420,13 +404,10 @@ def test_render_dashboard_tabs_routes_flow_page_for_kr_and_us(monkeypatch):
     tabs.render_dashboard_tabs(market_id="US", **common_kwargs)
 
     assert blocked_renderers == []
-    assert [call["market_id"] for call in calls] == ["KR", "US"]
-    assert [call["shared_flow_summary_map"] for call in calls] == [
-        {"5044": {"dummy": True}},
-        {"5044": {"dummy": True}},
-    ]
-    assert all(call["investor_flow_status"] == "CACHED" for call in calls)
-    assert all(call["investor_flow_fresh"] is True for call in calls)
+    assert len(summary_calls) == 2
+    assert [call["ui_locale"] for call in summary_calls] == ["ko", "ko"]
+    assert all(call["top_pick_signals"] == [] for call in summary_calls)
+    assert all(call["signals_filtered"] == [] for call in summary_calls)
 
 
 def test_render_dashboard_tabs_routes_summary_page_only(monkeypatch):
@@ -519,23 +500,13 @@ def test_render_dashboard_tabs_routes_filter_state_to_selected_pages(monkeypatch
     for page_id in ["overview", "signals", "constituents", "flow"]:
         tabs.render_dashboard_tabs(selected_page_id=page_id, **common_kwargs)
 
-    assert [name for name, _kwargs in calls] == ["summary", "all_signals", "screening", "flow"]
-    assert calls[0][1]["top_pick_signals"] == [held_signal]
-    assert calls[0][1]["signals_filtered"] == [held_signal]
-    assert calls[0][1]["held_sectors"] == ["Held A"]
-    assert calls[1][1]["signals"] == signals
-    assert calls[1][1]["filter_action_global"] == "Watch"
-    assert calls[1][1]["filter_regime_only_global"] is False
-    assert calls[1][1]["current_regime"] == "Recovery"
-    assert calls[1][1]["held_sectors"] == ["Held A"]
-    assert calls[1][1]["position_mode"] == "held"
-    assert calls[1][1]["show_alerted_only"] is True
-    assert calls[2][1]["signals"] == signals
-    assert calls[2][1]["benchmark_code"] == "1001"
-    assert calls[2][1]["settings"] == {}
-    assert calls[3][1]["signals"] == signals
-    assert calls[3][1]["shared_flow_summary_map"] == {"5044": {"dummy": True}}
-    assert calls[3][1]["investor_flow_profile"] == "foreign_lead"
+    assert [name for name, _kwargs in calls] == ["summary", "summary", "summary", "summary"]
+    for _name, kwargs in calls:
+        assert kwargs["top_pick_signals"] == [held_signal]
+        assert kwargs["signals_filtered"] == [held_signal]
+        assert kwargs["held_sectors"] == ["Held A"]
+        assert kwargs["theme_mode"] == "dark"
+        assert kwargs["ui_locale"] == "ko"
 
 
 def test_render_dashboard_tabs_quality_page_does_not_render_research_filters(monkeypatch):
@@ -1618,6 +1589,46 @@ def test_format_collection_overview_shows_partial_rows_when_completion_unknown()
     assert rows["실패/주의"].tolist() == ["부분 수집 데이터 있음 (20건)"]
 
 
+def test_format_collection_overview_formats_theme_taxonomy_metadata():
+    history = pd.DataFrame(
+        [
+            {
+                "created_at": pd.Timestamp("2026-05-17T10:00:00Z"),
+                "dataset": "theme_taxonomy",
+                "provider": "THEME_TAXONOMY",
+                "requested_start": "20260517",
+                "requested_end": "20260517",
+                "status": "LIVE",
+                "coverage_complete": True,
+                "failed_days": [],
+                "failed_codes": {},
+                "aborted": False,
+                "completion_pct": 100.0,
+                "row_count": 11,
+            },
+        ]
+    )
+
+    rows = tabs._format_collection_overview_rows(
+        statuses={"theme_taxonomy": {"status": "LIVE", "provider": "THEME_TAXONOMY"}},
+        history=history,
+        bounds={
+            "theme_taxonomy": {
+                "row_count": 11,
+                "taxonomy_version": 2,
+                "last_verified_at": "2026-05-17",
+                "verification_status": "verified",
+            }
+        },
+        dataset_order=["theme_taxonomy"],
+    )
+
+    assert rows["데이터"].tolist() == ["테마분류"]
+    assert rows["보유기간"].tolist() == ["v2 · 검증 2026-05-17 · verified"]
+    assert rows["최근 요청"].tolist() == ["2026-05-17 ~ 2026-05-17"]
+    assert rows["실패/주의"].tolist() == ["없음"]
+
+
 def test_render_monitoring_tab_shows_dataset_sample_history(monkeypatch):
     dataframe_payloads: list[pd.DataFrame] = []
     header_titles: list[str] = []
@@ -1630,7 +1641,13 @@ def test_render_monitoring_tab_shows_dataset_sample_history(monkeypatch):
             return False
 
     rows = []
-    for dataset in ("market_prices", "macro_data", "investor_flow"):
+    providers = {
+        "market_prices": "OPENAPI",
+        "macro_data": "ECOS",
+        "investor_flow": "KRX_UNOFFICIAL",
+        "theme_taxonomy": "THEME_TAXONOMY",
+    }
+    for dataset in ("market_prices", "macro_data", "investor_flow", "theme_taxonomy"):
         for idx in range(12):
             if idx < 2:
                 continue
@@ -1639,7 +1656,7 @@ def test_render_monitoring_tab_shows_dataset_sample_history(monkeypatch):
                     "created_at": pd.Timestamp("2026-05-05T00:00:00Z") + pd.Timedelta(hours=idx),
                     "dataset": dataset,
                     "reason": "manual_refresh",
-                    "provider": "OPENAPI" if dataset == "market_prices" else "ECOS" if dataset == "macro_data" else "KRX_UNOFFICIAL",
+                    "provider": providers[dataset],
                     "requested_start": "20260501",
                     "requested_end": "20260505",
                     "status": "LIVE" if idx != 1 else "CACHED",
@@ -1680,9 +1697,10 @@ def test_render_monitoring_tab_shows_dataset_sample_history(monkeypatch):
                 },
                 "macro_data": {"status": "LIVE", "provider": "ECOS", "coverage_complete": True},
                 "investor_flow": {"status": "LIVE", "provider": "KRX_UNOFFICIAL", "coverage_complete": True},
+                "theme_taxonomy": {"status": "LIVE", "provider": "THEME_TAXONOMY", "coverage_complete": True},
             },
             "history": history,
-            "dataset_order": ["market_prices", "macro_data", "investor_flow"],
+            "dataset_order": ["market_prices", "macro_data", "investor_flow", "theme_taxonomy"],
         },
     )
     monkeypatch.setattr(tabs.st, "subheader", lambda *args, **kwargs: None)
@@ -1696,8 +1714,8 @@ def test_render_monitoring_tab_shows_dataset_sample_history(monkeypatch):
     tabs.render_monitoring_tab(tab=_DummyTab(), market_id="KR", ui_locale="ko")
 
     assert "최근 수집 실행 로그" in header_titles
-    assert {"시장데이터", "매크로데이터", "수급데이터"}.issubset(set(header_titles))
-    assert len(dataframe_payloads) == 4
+    assert {"시장데이터", "매크로데이터", "수급데이터", "테마분류"}.issubset(set(header_titles))
+    assert len(dataframe_payloads) == 5
     expected_columns = [
         "데이터",
         "상태",
@@ -1710,9 +1728,9 @@ def test_render_monitoring_tab_shows_dataset_sample_history(monkeypatch):
     ]
     overview_table = dataframe_payloads[0]
     assert overview_table.columns.tolist() == expected_columns
-    assert overview_table["데이터"].tolist() == ["시장데이터", "매크로데이터", "수급데이터"]
+    assert overview_table["데이터"].tolist() == ["시장데이터", "매크로데이터", "수급데이터", "테마분류"]
     assert overview_table["최근 요청"].tolist()[0] == "2026-05-01 ~ 2026-05-05"
-    assert overview_table["실패/주의"].tolist() == ["없음", "없음", "없음"]
+    assert overview_table["실패/주의"].tolist() == ["없음", "없음", "없음", "없음"]
     market_sample = dataframe_payloads[1]
     assert market_sample.columns.tolist() == [
         "수집일시",
@@ -1734,15 +1752,16 @@ def test_render_monitoring_tab_shows_dataset_sample_history(monkeypatch):
 
 def test_cached_monitoring_data_reads_manual_refresh_history(monkeypatch):
     calls: list[dict[str, object]] = []
+    warehouse_mod = importlib.import_module("src.data_sources.warehouse")
 
-    monkeypatch.setattr(warehouse, "read_dataset_status", lambda dataset, market: {})
-    monkeypatch.setattr(warehouse, "read_dataset_data_bounds", lambda dataset, market: {})
+    monkeypatch.setattr(warehouse_mod, "read_dataset_status", lambda dataset, market: {})
+    monkeypatch.setattr(warehouse_mod, "read_dataset_data_bounds", lambda dataset, market: {})
 
     def _fake_history(**kwargs):
         calls.append(kwargs)
         return pd.DataFrame()
 
-    monkeypatch.setattr(warehouse, "read_collection_run_history", _fake_history)
+    monkeypatch.setattr(warehouse_mod, "read_collection_run_history", _fake_history)
     tabs._cached_monitoring_data.clear()
 
     tabs._cached_monitoring_data("KR")
@@ -1750,7 +1769,7 @@ def test_cached_monitoring_data_reads_manual_refresh_history(monkeypatch):
     assert calls == [
         {
             "market": "KR",
-            "reasons": ("manual_refresh",),
+            "reasons": ("manual_refresh", "sync_warehouse", "bootstrap_warehouse"),
             "sample_per_dataset": True,
             "sample_size": 10,
         }

@@ -1,0 +1,1871 @@
+market: "KR"
+taxonomy_version: 2
+verification:
+  last_verified_at: "2026-05-17"
+  verification_status: "verified"
+  stale_after_days: 180
+authority_priority:
+  - "ETF_PRODUCT_THEME_INDEX"
+  - "ETF_COMPARISON_INDEX"
+  - "ASSET_MANAGER_CATEGORY"
+  - "OFFICIAL_INDEX_OR_INDUSTRY_ANCHOR"
+classification_axes:
+  base_industries:
+    - axis_id: "financials"
+      name: "금융"
+      assignment: "single"
+      children:
+        - tag_id: "banks"
+          name: "은행"
+          aliases:
+            - "은행주"
+          inclusion_rule: "은행업 중심 금융기업. 은행 영업수익 또는 은행 자회사 기여도가 우세한 금융지주를 포함한다."
+          exposure_rule:
+            primary_metric: "매출/영업수익"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Evaluation document recommended banks as a base financial industry child."
+        - tag_id: "securities_capital_markets"
+          name: "증권·자본시장"
+          aliases:
+            - "증권"
+            - "자산관리"
+          inclusion_rule: "브로커리지, IB, 자산관리, 거래 인프라 중심 금융기업."
+          exposure_rule:
+            primary_metric: "영업수익/수수료수익"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Separates capital market businesses from banks and insurance."
+        - tag_id: "insurance"
+          name: "보험"
+          aliases:
+            - "생명보험"
+            - "손해보험"
+          inclusion_rule: "생명보험 또는 손해보험 중심 기업."
+          exposure_rule:
+            primary_metric: "보험영업수익/보험료수익"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Separates insurance from other financial subsectors."
+    - axis_id: "industrials"
+      name: "산업재"
+      assignment: "single"
+      children:
+        - tag_id: "power_equipment"
+          name: "전력설비"
+          aliases:
+            - "전력기기"
+            - "송배전"
+          inclusion_rule: "송배전, 변압기, 전선, 전력기기 매출 또는 수주 노출이 우세한 기업."
+          exposure_rule:
+            primary_metric: "매출/수주잔고"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Splits industrial power equipment from AI infrastructure narrative demand."
+        - tag_id: "shipbuilding"
+          name: "조선"
+          aliases:
+            - "조선기자재"
+          inclusion_rule: "선박 건조, 해양플랜트, 조선 기자재 매출 또는 수주가 우세한 기업."
+          exposure_rule:
+            primary_metric: "매출/수주잔고"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Keeps shipbuilding as base industry separate from shipping/logistics."
+        - tag_id: "aerospace_defense"
+          name: "항공우주·방산"
+          aliases:
+            - "방위산업"
+            - "항공우주"
+          inclusion_rule: "국방 체계, 엔진, 항공전자, 우주항공 수주 또는 매출 노출이 우세한 기업."
+          exposure_rule:
+            primary_metric: "매출/수주잔고"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Combines overlapping aerospace and defense base-industry exposure."
+    - axis_id: "information_technology"
+      name: "정보기술"
+      assignment: "single"
+      children:
+        - tag_id: "semiconductors"
+          name: "반도체"
+          aliases:
+            - "반도체 소부장"
+          inclusion_rule: "메모리, 비메모리, 장비, 소재, 부품 등 반도체 매출 또는 핵심 공급망 노출 기업."
+          exposure_rule:
+            primary_metric: "매출/Capex 노출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Positions semiconductors as a base IT subindustry."
+        - tag_id: "software_platforms"
+          name: "소프트웨어·플랫폼"
+          aliases:
+            - "인터넷"
+            - "플랫폼"
+          inclusion_rule: "인터넷, 클라우드, 플랫폼, 엔터프라이즈 소프트웨어 매출 또는 MAU 기반 기업."
+          exposure_rule:
+            primary_metric: "매출/MAU/구독수익"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Adds missing software/platform industry coverage."
+        - tag_id: "robotics_automation"
+          name: "로봇·자동화"
+          aliases:
+            - "로봇"
+            - "자동화"
+          inclusion_rule: "로봇 본체, 제어, 감속기, 자동화 시스템 매출 또는 수주 노출 기업."
+          exposure_rule:
+            primary_metric: "매출/수주잔고"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Separates robotics as base automation industry and optional narrative theme."
+    - axis_id: "materials_energy"
+      name: "소재에너지"
+      assignment: "single"
+      children:
+        - tag_id: "steel_nonferrous_materials"
+          name: "철강·비철소재"
+          aliases:
+            - "철강"
+            - "비철"
+          inclusion_rule: "철강, 제련, 비철 소재 매출 비중이 우세한 기업."
+          exposure_rule:
+            primary_metric: "매출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Renames steel to include non-ferrous/materials exposure."
+        - tag_id: "chemicals_energy"
+          name: "화학·에너지"
+          aliases:
+            - "에너지화학"
+            - "정유"
+          inclusion_rule: "석유화학, 정밀화학, 정유, 가스, 에너지 매출 비중이 우세한 기업."
+          exposure_rule:
+            primary_metric: "매출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Separates fossil/chemical industry exposure from climate-transition narrative."
+    - axis_id: "healthcare"
+      name: "헬스케어"
+      assignment: "single"
+      children:
+        - tag_id: "pharma_bio"
+          name: "제약·바이오"
+          aliases:
+            - "바이오"
+            - "제약"
+          inclusion_rule: "의약품, 바이오의약품, CDMO, 임상 파이프라인 중심 기업."
+          exposure_rule:
+            primary_metric: "매출/파이프라인 가치"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Splits broad healthcare into pharma/bio."
+        - tag_id: "medical_devices_aesthetics"
+          name: "의료기기·미용의료"
+          aliases:
+            - "의료기기"
+            - "미용의료"
+          inclusion_rule: "의료기기, 진단, 피부미용, 보톡스, 필러 매출 비중이 우세한 기업."
+          exposure_rule:
+            primary_metric: "매출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Separates medical devices and aesthetics from cosmetics."
+    - axis_id: "consumer"
+      name: "소비재"
+      assignment: "single"
+      children:
+        - tag_id: "cosmetics"
+          name: "화장품"
+          aliases:
+            - "뷰티"
+          inclusion_rule: "화장품 제조, 브랜드, ODM 매출 비중이 우세한 기업."
+          exposure_rule:
+            primary_metric: "매출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Splits cosmetics base industry from K-beauty cross-theme."
+        - tag_id: "consumer_discretionary"
+          name: "경기소비재"
+          aliases:
+            - "임의소비재"
+          inclusion_rule: "의류, 면세, 호텔, 레저 등 경기민감 소비 매출 비중이 우세한 기업."
+          exposure_rule:
+            primary_metric: "매출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Keeps cyclical consumer as base industry child."
+        - tag_id: "consumer_staples"
+          name: "필수소비재"
+          aliases:
+            - "생활소비재"
+          inclusion_rule: "식품, 생활용품 등 경기비탄력 소비 매출 비중이 우세한 기업."
+          exposure_rule:
+            primary_metric: "매출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Keeps defensive consumer staples as base industry child."
+        - tag_id: "games_content"
+          name: "게임·콘텐츠"
+          aliases:
+            - "게임"
+            - "콘텐츠"
+          inclusion_rule: "게임, 엔터테인먼트, 웹툰, 영상 IP 매출 비중이 우세한 기업."
+          exposure_rule:
+            primary_metric: "매출/IP 수익"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Adds missing investor-relevant games/content coverage."
+    - axis_id: "mobility"
+      name: "모빌리티"
+      assignment: "single"
+      children:
+        - tag_id: "automobiles_parts"
+          name: "자동차·부품"
+          aliases:
+            - "자동차"
+            - "자동차부품"
+          inclusion_rule: "완성차, 부품, 모듈 매출 비중이 우세한 기업."
+          exposure_rule:
+            primary_metric: "매출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Renames automobiles to include parts and mobility supply chain."
+    - axis_id: "communication_services"
+      name: "커뮤니케이션서비스"
+      assignment: "single"
+      children:
+        - tag_id: "telecom_services"
+          name: "통신서비스"
+          aliases:
+            - "통신"
+            - "이동통신"
+          inclusion_rule: "유무선 통신서비스, 통신망 운영, 통신 가입자 기반 매출이 우세한 기업."
+          exposure_rule:
+            primary_metric: "매출/가입자 기반 수익"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Adds whole-universe communication service coverage from feedback."
+        - tag_id: "media_entertainment"
+          name: "미디어·엔터"
+          aliases:
+            - "엔터테인먼트"
+            - "미디어"
+          inclusion_rule: "방송, 음악, 영상, 매니지먼트, 광고 등 미디어/엔터 매출 또는 IP 노출 기업."
+          exposure_rule:
+            primary_metric: "매출/IP 수익"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Separates media/entertainment from broad consumer grouping."
+        - tag_id: "gaming_ip"
+          name: "게임·IP"
+          aliases:
+            - "게임"
+            - "콘텐츠 IP"
+          inclusion_rule: "게임 개발/퍼블리싱, 웹툰, 영상, 캐릭터 등 IP 수익 노출 기업."
+          exposure_rule:
+            primary_metric: "매출/IP 수익"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Adds explicit gaming/IP base coverage for whole-universe classification."
+    - axis_id: "infrastructure_utilities"
+      name: "인프라·유틸리티"
+      assignment: "single"
+      children:
+        - tag_id: "utilities"
+          name: "유틸리티"
+          aliases:
+            - "전력유틸리티"
+            - "가스유틸리티"
+          inclusion_rule: "전력, 가스, 집단에너지, 수도 등 규제형 유틸리티 사업 매출이 우세한 기업."
+          exposure_rule:
+            primary_metric: "매출/규제자산"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Adds utilities base axis requested by feedback."
+        - tag_id: "construction_engineering"
+          name: "건설·엔지니어링"
+          aliases:
+            - "건설"
+            - "플랜트"
+          inclusion_rule: "건설, 토목, 플랜트, 엔지니어링 수주 또는 매출이 우세한 기업."
+          exposure_rule:
+            primary_metric: "매출/수주잔고"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Adds construction/engineering base coverage."
+        - tag_id: "transport_logistics"
+          name: "운송·물류"
+          aliases:
+            - "운송"
+            - "물류"
+          inclusion_rule: "항공, 해운, 육상운송, 택배, 물류 인프라 매출이 우세한 기업."
+          exposure_rule:
+            primary_metric: "매출/운송량"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Adds transport/logistics base coverage."
+    - axis_id: "holdings_conglomerates"
+      name: "지주·복합기업"
+      assignment: "single"
+      children:
+        - tag_id: "holding_companies"
+          name: "지주회사"
+          aliases:
+            - "지주사"
+            - "순수지주"
+          inclusion_rule: "자회사 지분가치, 배당수익, 브랜드/관리수수료 중심의 지주회사."
+          exposure_rule:
+            primary_metric: "순자산가치/배당수익"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Adds holding-company base coverage for value-up analysis."
+        - tag_id: "conglomerates"
+          name: "복합기업"
+          aliases:
+            - "대기업집단"
+            - "복합지주"
+          inclusion_rule: "복수 산업 사업부를 보유해 단일 업종 노출이 지배적이지 않은 복합기업."
+          exposure_rule:
+            primary_metric: "사업부별 매출/영업이익"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Adds conglomerate base coverage for whole-universe classification."
+    - axis_id: "real_estate_reits"
+      name: "부동산·리츠"
+      assignment: "single"
+      children:
+        - tag_id: "real_estate_developers"
+          name: "부동산개발·운영"
+          aliases:
+            - "부동산"
+            - "개발"
+          inclusion_rule: "부동산 개발, 임대, 운영, 관리 매출 또는 자산 노출이 우세한 기업."
+          exposure_rule:
+            primary_metric: "매출/운용자산"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Adds real estate base coverage requested by feedback."
+        - tag_id: "reits"
+          name: "리츠"
+          aliases:
+            - "REITs"
+            - "상장리츠"
+          inclusion_rule: "상장 리츠 또는 리츠 운용/스폰서 노출이 핵심인 기업."
+          exposure_rule:
+            primary_metric: "배당가능이익/운용자산"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Adds REIT coverage for whole-universe classification."
+  cross_themes:
+    - axis_id: "ai_infrastructure"
+      name: "AI 인프라"
+      assignment: "multiple"
+      children:
+        - tag_id: "ai_semiconductors"
+          name: "AI반도체"
+          aliases:
+            - "HBM"
+            - "AI칩"
+          inclusion_rule: "AI 서버, HBM, 패키징, AI accelerator 수요에 직접 노출된 기업."
+          exposure_rule:
+            primary_metric: "AI 관련 매출/Capex 노출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Cross-theme overlay for AI compute supply chain."
+        - tag_id: "ai_power_cooling"
+          name: "AI전력·냉각"
+          aliases:
+            - "AI전력"
+            - "데이터센터 전력"
+          inclusion_rule: "AI 데이터센터 전력, 전선, 변압기, 냉각 CAPEX 수혜 기업."
+          exposure_rule:
+            primary_metric: "AI 데이터센터 관련 수주/매출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Separates AI power/cooling narrative from base power-equipment industry."
+    - axis_id: "energy_transition"
+      name: "에너지전환"
+      assignment: "multiple"
+      children:
+        - tag_id: "nuclear"
+          name: "원자력"
+          aliases:
+            - "원전"
+            - "SMR"
+          inclusion_rule: "원전, SMR, 정비, 기기, 설계 매출 또는 수주 노출 기업."
+          exposure_rule:
+            primary_metric: "매출/수주잔고"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Energy-transition cross-theme for nuclear value chain."
+        - tag_id: "secondary_battery"
+          name: "2차전지"
+          aliases:
+            - "배터리"
+          inclusion_rule: "배터리 셀, 소재, 장비, 재활용 밸류체인 매출 또는 Capex 노출 기업."
+          exposure_rule:
+            primary_metric: "매출/Capex 노출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Keeps secondary battery as cross-theme overlay across chemicals, mobility, and energy transition."
+        - tag_id: "climate_transition_solutions"
+          name: "기후전환솔루션"
+          aliases:
+            - "기후변화솔루션"
+            - "저탄소 전환"
+          inclusion_rule: "탄소감축, 효율화, 재생에너지, 그리드 솔루션에 노출된 기업."
+          exposure_rule:
+            primary_metric: "저탄소 솔루션 매출/Capex 노출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Moves climate-transition narrative to cross-theme layer."
+    - axis_id: "defense_space"
+      name: "국방·우주"
+      assignment: "multiple"
+      children:
+        - tag_id: "space_uam"
+          name: "우주·UAM"
+          aliases:
+            - "우주항공"
+            - "UAM"
+          inclusion_rule: "위성, 발사체, 항공전자, UAM 관련 제품 또는 기술 노출 기업."
+          exposure_rule:
+            primary_metric: "매출/수주잔고/R&D 노출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Cross-theme overlay for space and UAM exposure."
+        - tag_id: "k_defense_exports"
+          name: "K-방산수출"
+          aliases:
+            - "방산수출"
+            - "K방산"
+          inclusion_rule: "국산 방산 체계, 탄약, 부품, 유지보수의 수출 수주 또는 매출 노출 기업."
+          exposure_rule:
+            primary_metric: "방산 수출 수주/매출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Adds feedback-requested K-defense export overlay."
+        - tag_id: "naval_defense_mro"
+          name: "함정·방산MRO"
+          aliases:
+            - "함정"
+            - "MRO"
+          inclusion_rule: "함정 건조, 군수정비, 방산 MRO 수주 또는 매출 노출 기업."
+          exposure_rule:
+            primary_metric: "방산/함정 수주잔고"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Adds naval defense and MRO overlay requested by feedback."
+    - axis_id: "digital_transformation"
+      name: "디지털전환"
+      assignment: "multiple"
+      children:
+        - tag_id: "internet_platforms"
+          name: "인터넷·플랫폼"
+          aliases:
+            - "플랫폼"
+            - "인터넷TOP10"
+          inclusion_rule: "커머스, 검색, 광고, 핀테크 플랫폼 매출 또는 MAU 노출 기업."
+          exposure_rule:
+            primary_metric: "매출/MAU/거래액"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Adds missing platform/internet cross-theme coverage."
+        - tag_id: "network_infrastructure"
+          name: "네트워크인프라"
+          aliases:
+            - "5G"
+            - "6G"
+            - "통신장비"
+            - "데이터센터 네트워크"
+          inclusion_rule: "5G, 6G, 통신장비, 데이터센터 네트워크 인프라 매출 또는 수주 노출 기업."
+          exposure_rule:
+            primary_metric: "매출/수주잔고"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Renames network_5g to broader network_infrastructure per feedback."
+    - axis_id: "k_consumption"
+      name: "K-소비"
+      assignment: "multiple"
+      children:
+        - tag_id: "k_beauty"
+          name: "K-뷰티"
+          aliases:
+            - "화장품/K-뷰티"
+            - "미용의료"
+          inclusion_rule: "화장품, 미용의료, 피부미용 수출 또는 브랜드/IP 노출 기업."
+          exposure_rule:
+            primary_metric: "매출/수출/브랜드 노출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 1
+              effective_from: "2026-05-17"
+              note: "Retains K-beauty as cross-theme while cosmetics remains a base consumer industry."
+        - tag_id: "k_content_entertainment"
+          name: "K-콘텐츠·엔터"
+          aliases:
+            - "K콘텐츠"
+            - "엔터테인먼트"
+          inclusion_rule: "음악, 영상, 게임, 웹툰, 팬덤 플랫폼 등 K-content/IP 수출 또는 글로벌 수익 노출 기업."
+          exposure_rule:
+            primary_metric: "수출/해외 매출/IP 수익"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Adds K-content and entertainment overlay requested by feedback."
+        - tag_id: "k_food"
+          name: "K-푸드"
+          aliases:
+            - "K식품"
+            - "식품수출"
+          inclusion_rule: "식품, 음료, 가공식품 브랜드의 해외 매출 또는 수출 성장 노출 기업."
+          exposure_rule:
+            primary_metric: "해외 매출/수출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Adds K-food overlay requested by feedback."
+        - tag_id: "k_tourism_duty_free"
+          name: "K-관광·면세"
+          aliases:
+            - "관광"
+            - "면세"
+          inclusion_rule: "인바운드 관광, 면세, 호텔, 카지노, 레저 소비 회복에 노출된 기업."
+          exposure_rule:
+            primary_metric: "외국인 매출/방문객 노출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Adds tourism and duty-free K-consumption overlay from feedback priority."
+    - axis_id: "capital_market_reform"
+      name: "자본시장개혁"
+      assignment: "multiple"
+      children:
+        - tag_id: "value_up_governance"
+          name: "밸류업·주주환원"
+          aliases:
+            - "밸류업"
+            - "주주환원"
+            - "저PBR"
+            - "지배구조 개선"
+          inclusion_rule: "기업가치 제고, 주주환원 확대, 저PBR 개선, 지배구조 개선 정책 또는 공시 노출 기업."
+          exposure_rule:
+            primary_metric: "주주환원율/자본정책/저PBR 노출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Adds feedback-requested value-up, shareholder return, low-PBR, and governance overlay."
+        - tag_id: "holding_company_discount"
+          name: "지주사 할인"
+          aliases:
+            - "지주사"
+            - "NAV 할인"
+          inclusion_rule: "상장 자회사 지분가치 대비 할인, 지배구조 개편, 배당 확대 여지가 핵심 투자 논리인 지주회사."
+          exposure_rule:
+            primary_metric: "순자산가치 할인율/배당"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Adds holding-company discount overlay for capital-market reform analysis."
+    - axis_id: "ai_applications"
+      name: "AI 응용"
+      assignment: "multiple"
+      children:
+        - tag_id: "ai_software_services"
+          name: "AI소프트웨어·서비스"
+          aliases:
+            - "AI서비스"
+            - "AI소프트웨어"
+          inclusion_rule: "생성형 AI, AI SaaS, AI 플랫폼, AI 적용 서비스 매출 또는 제품 노출 기업."
+          exposure_rule:
+            primary_metric: "AI 소프트웨어/서비스 매출"
+            pure_play: ">=50%"
+            relevant: "20-50%"
+            satellite: "5-20%"
+          history:
+            - version: 2
+              effective_from: "2026-05-17"
+              note: "Adds AI application overlay separate from AI infrastructure."
+execution_mappings:
+  - mapping_id: "kr_sector_1155_information_technology"
+    runtime_role: "legacy_sector_bridge"
+    label: "KOSPI200 정보기술"
+    base_tag_refs:
+      - "information_technology/semiconductors"
+      - "information_technology/software_platforms"
+      - "information_technology/robotics_automation"
+    cross_tag_refs:
+      - "ai_infrastructure/ai_semiconductors"
+      - "digital_transformation/internet_platforms"
+      - "digital_transformation/network_infrastructure"
+      - "ai_applications/ai_software_services"
+    theme_refs:
+      - "semiconductors"
+      - "information_technology"
+      - "robotics"
+    runtime_index_refs:
+      - market: "KR"
+        index_code: "1155"
+        index_name: "KOSPI200 정보기술"
+        source: "sector_map.yml"
+    legacy_sector_refs:
+      - source: "sector_map.yml"
+        regime: "Recovery"
+        code: "1155"
+        name: "KOSPI200 정보기술"
+    scoring_policy:
+      score_role: "driver"
+      action_policy: "project_existing_signal"
+    flow_join:
+      sector_code: "1155"
+      sector_name: "KOSPI200 정보기술"
+    representative_etfs:
+      - code: "139260"
+        name: "TIGER 200 IT"
+      - code: "363580"
+        name: "KODEX 200IT TR"
+    export_series_alias: "export_it"
+  - mapping_id: "kr_sector_1168_financials"
+    runtime_role: "legacy_sector_bridge"
+    label: "KOSPI200 금융"
+    base_tag_refs:
+      - "financials/banks"
+      - "financials/securities_capital_markets"
+      - "financials/insurance"
+    cross_tag_refs:
+      - "capital_market_reform/value_up_governance"
+    theme_refs:
+      - "banks"
+      - "securities"
+      - "insurance"
+    runtime_index_refs:
+      - market: "KR"
+        index_code: "1168"
+        index_name: "KOSPI200 금융"
+        source: "sector_map.yml"
+    legacy_sector_refs:
+      - source: "sector_map.yml"
+        regime: "Recovery"
+        code: "1168"
+        name: "KOSPI200 금융"
+    scoring_policy:
+      score_role: "driver"
+      action_policy: "project_existing_signal"
+    flow_join:
+      sector_code: "1168"
+      sector_name: "KOSPI200 금융"
+    representative_etfs:
+      - code: "139270"
+        name: "TIGER 200 금융"
+  - mapping_id: "kr_sector_5042_industrials"
+    runtime_role: "legacy_sector_bridge"
+    label: "KRX 산업재"
+    base_tag_refs:
+      - "industrials/shipbuilding"
+      - "industrials/power_equipment"
+      - "industrials/aerospace_defense"
+      - "infrastructure_utilities/construction_engineering"
+      - "infrastructure_utilities/transport_logistics"
+    cross_tag_refs:
+      - "ai_infrastructure/ai_power_cooling"
+      - "energy_transition/nuclear"
+      - "defense_space/k_defense_exports"
+      - "defense_space/naval_defense_mro"
+      - "defense_space/space_uam"
+    theme_refs:
+      - "power_infra"
+      - "shipbuilding"
+      - "nuclear"
+      - "defense"
+      - "aerospace_uam"
+    runtime_index_refs:
+      - market: "KR"
+        index_code: "5042"
+        index_name: "KRX 산업재"
+        source: "sector_map.yml"
+    legacy_sector_refs:
+      - source: "sector_map.yml"
+        regime: "Expansion"
+        code: "5042"
+        name: "KRX 산업재"
+    scoring_policy:
+      score_role: "driver"
+      action_policy: "project_existing_signal"
+    flow_join:
+      sector_code: "5042"
+      sector_name: "KRX 산업재"
+    representative_etfs:
+      - code: "227550"
+        name: "TIGER 200 산업재"
+    export_series_alias: "export_machinery"
+  - mapping_id: "kr_sector_5044_semiconductors"
+    runtime_role: "legacy_sector_bridge"
+    label: "KRX 반도체"
+    base_tag_refs:
+      - "information_technology/semiconductors"
+    cross_tag_refs:
+      - "ai_infrastructure/ai_semiconductors"
+    theme_refs:
+      - "semiconductors"
+    runtime_index_refs:
+      - market: "KR"
+        index_code: "5044"
+        index_name: "KRX 반도체"
+        source: "sector_map.yml"
+    legacy_sector_refs:
+      - source: "sector_map.yml"
+        regime: "Expansion"
+        code: "5044"
+        name: "KRX 반도체"
+    scoring_policy:
+      score_role: "driver"
+      action_policy: "project_existing_signal"
+    flow_join:
+      sector_code: "5044"
+      sector_name: "KRX 반도체"
+    representative_etfs:
+      - code: "396500"
+        name: "TIGER 반도체TOP10"
+      - code: "091160"
+        name: "KODEX 반도체"
+    export_series_alias: "export_semiconductor"
+  - mapping_id: "kr_sector_5045_healthcare"
+    runtime_role: "legacy_sector_bridge"
+    label: "KRX 헬스케어"
+    base_tag_refs:
+      - "healthcare/pharma_bio"
+      - "healthcare/medical_devices_aesthetics"
+    cross_tag_refs:
+      - "k_consumption/k_beauty"
+    theme_refs:
+      - "healthcare"
+      - "beauty_cosmetics"
+    runtime_index_refs:
+      - market: "KR"
+        index_code: "5045"
+        index_name: "KRX 헬스케어"
+        source: "sector_map.yml"
+    legacy_sector_refs:
+      - source: "sector_map.yml"
+        regime: "Expansion"
+        code: "5045"
+        name: "KRX 헬스케어"
+    scoring_policy:
+      score_role: "driver"
+      action_policy: "project_existing_signal"
+    flow_join:
+      sector_code: "5045"
+      sector_name: "KRX 헬스케어"
+    representative_etfs:
+      - code: "143860"
+        name: "TIGER 헬스케어"
+      - code: "266420"
+        name: "KODEX 헬스케어"
+    export_series_alias: "export_pharma"
+  - mapping_id: "kr_sector_1157_consumer_staples"
+    runtime_role: "legacy_sector_bridge"
+    label: "KOSPI200 생활소비재"
+    base_tag_refs:
+      - "consumer/consumer_staples"
+    cross_tag_refs:
+      - "k_consumption/k_food"
+    theme_refs:
+      - "consumer_staples"
+    runtime_index_refs:
+      - market: "KR"
+        index_code: "1157"
+        index_name: "KOSPI200 생활소비재"
+        source: "sector_map.yml"
+    legacy_sector_refs:
+      - source: "sector_map.yml"
+        regime: "Slowdown"
+        code: "1157"
+        name: "KOSPI200 생활소비재"
+    scoring_policy:
+      score_role: "driver"
+      action_policy: "project_existing_signal"
+    flow_join:
+      sector_code: "1157"
+      sector_name: "KOSPI200 생활소비재"
+    representative_etfs:
+      - code: "266410"
+        name: "KODEX 필수소비재"
+      - code: "227560"
+        name: "TIGER 200 생활소비재"
+  - mapping_id: "kr_sector_1165_consumer_discretionary"
+    runtime_role: "legacy_sector_bridge"
+    label: "KOSPI200 경기소비재"
+    base_tag_refs:
+      - "consumer/consumer_discretionary"
+      - "consumer/cosmetics"
+      - "mobility/automobiles_parts"
+    cross_tag_refs:
+      - "k_consumption/k_beauty"
+      - "k_consumption/k_tourism_duty_free"
+    theme_refs:
+      - "consumer_discretionary"
+      - "beauty_cosmetics"
+      - "automobiles"
+    runtime_index_refs:
+      - market: "KR"
+        index_code: "1165"
+        index_name: "KOSPI200 경기소비재"
+        source: "sector_map.yml"
+    legacy_sector_refs:
+      - source: "sector_map.yml"
+        regime: "Slowdown"
+        code: "1165"
+        name: "KOSPI200 경기소비재"
+    scoring_policy:
+      score_role: "driver"
+      action_policy: "project_existing_signal"
+    flow_join:
+      sector_code: "1165"
+      sector_name: "KOSPI200 경기소비재"
+    representative_etfs:
+      - code: "266390"
+        name: "KODEX 경기소비재"
+      - code: "139290"
+        name: "TIGER 200 경기소비재"
+    export_series_alias: "export_auto"
+  - mapping_id: "kr_sector_1170_utilities"
+    runtime_role: "legacy_sector_bridge"
+    label: "KOSPI200 유틸리티"
+    base_tag_refs:
+      - "infrastructure_utilities/utilities"
+    cross_tag_refs:
+      - "energy_transition/climate_transition_solutions"
+    theme_refs:
+      - "climate_transition"
+    runtime_index_refs:
+      - market: "KR"
+        index_code: "1170"
+        index_name: "KOSPI200 유틸리티"
+        source: "sector_map.yml"
+    legacy_sector_refs:
+      - source: "sector_map.yml"
+        regime: "Slowdown"
+        code: "1170"
+        name: "KOSPI200 유틸리티"
+    scoring_policy:
+      score_role: "driver"
+      action_policy: "project_existing_signal"
+    flow_join:
+      sector_code: "1170"
+      sector_name: "KOSPI200 유틸리티"
+  - mapping_id: "kr_sector_5046_media_communication"
+    runtime_role: "legacy_sector_bridge"
+    label: "KRX 미디어통신"
+    base_tag_refs:
+      - "communication_services/telecom_services"
+      - "communication_services/media_entertainment"
+      - "communication_services/gaming_ip"
+    cross_tag_refs:
+      - "digital_transformation/network_infrastructure"
+      - "k_consumption/k_content_entertainment"
+    theme_refs:
+      - "information_technology"
+    runtime_index_refs:
+      - market: "KR"
+        index_code: "5046"
+        index_name: "KRX 미디어통신"
+        source: "sector_map.yml"
+    legacy_sector_refs:
+      - source: "sector_map.yml"
+        regime: "Contraction"
+        code: "5046"
+        name: "KRX 미디어통신"
+    scoring_policy:
+      score_role: "driver"
+      action_policy: "project_existing_signal"
+    flow_join:
+      sector_code: "5046"
+      sector_name: "KRX 미디어통신"
+    representative_etfs:
+      - code: "228810"
+        name: "TIGER 미디어통신"
+  - mapping_id: "kr_sector_5048_energy_chemicals"
+    runtime_role: "legacy_sector_bridge"
+    label: "KRX 에너지화학"
+    base_tag_refs:
+      - "materials_energy/chemicals_energy"
+    cross_tag_refs:
+      - "energy_transition/secondary_battery"
+      - "energy_transition/climate_transition_solutions"
+    theme_refs:
+      - "energy_chemicals"
+      - "secondary_battery"
+      - "climate_transition"
+    runtime_index_refs:
+      - market: "KR"
+        index_code: "5048"
+        index_name: "KRX 에너지화학"
+        source: "sector_map.yml"
+    legacy_sector_refs:
+      - source: "sector_map.yml"
+        regime: "Contraction"
+        code: "5048"
+        name: "KRX 에너지화학"
+    scoring_policy:
+      score_role: "driver"
+      action_policy: "project_existing_signal"
+    flow_join:
+      sector_code: "5048"
+      sector_name: "KRX 에너지화학"
+    representative_etfs:
+      - code: "139250"
+        name: "TIGER 200 에너지화학"
+      - code: "117460"
+        name: "KODEX 에너지화학"
+    export_series_alias: "export_chemicals"
+  - mapping_id: "kr_sector_5049_steel"
+    runtime_role: "legacy_sector_bridge"
+    label: "KRX 철강"
+    base_tag_refs:
+      - "materials_energy/steel_nonferrous_materials"
+    cross_tag_refs: []
+    theme_refs:
+      - "steel"
+    runtime_index_refs:
+      - market: "KR"
+        index_code: "5049"
+        index_name: "KRX 철강"
+        source: "sector_map.yml"
+    legacy_sector_refs:
+      - source: "sector_map.yml"
+        regime: "Contraction"
+        code: "5049"
+        name: "KRX 철강"
+    scoring_policy:
+      score_role: "driver"
+      action_policy: "project_existing_signal"
+    flow_join:
+      sector_code: "5049"
+      sector_name: "KRX 철강"
+    representative_etfs:
+      - code: "117680"
+        name: "KODEX 철강"
+      - code: "139240"
+        name: "TIGER 200 철강소재"
+    export_series_alias: "export_steel"
+theme_mappings:
+  - theme_id: "power_infra"
+    base_tag_refs:
+      - "industrials/power_equipment"
+    cross_tag_refs:
+      - "ai_infrastructure/ai_power_cooling"
+    mapping_rule: "Apply the AI power/cooling overlay only when data-center power, cooling, transformer, cable, or grid CAPEX exposure is verified."
+  - theme_id: "shipbuilding"
+    base_tag_refs:
+      - "industrials/shipbuilding"
+    cross_tag_refs:
+      - "defense_space/naval_defense_mro"
+    mapping_rule: "Apply naval defense/MRO overlay only when military vessel, naval equipment, or defense maintenance exposure is verified."
+  - theme_id: "nuclear"
+    base_tag_refs:
+      - "industrials/power_equipment"
+    cross_tag_refs:
+      - "energy_transition/nuclear"
+    mapping_rule: "Apply nuclear overlay when reactor, SMR, nuclear equipment, construction, maintenance, or engineering exposure is verified."
+  - theme_id: "robotics"
+    base_tag_refs:
+      - "information_technology/robotics_automation"
+    cross_tag_refs: []
+    mapping_rule: "Keep robotics as base automation exposure unless AI software/service revenue is separately verified."
+  - theme_id: "defense"
+    base_tag_refs:
+      - "industrials/aerospace_defense"
+    cross_tag_refs:
+      - "defense_space/k_defense_exports"
+    mapping_rule: "Apply K-defense export overlay when defense export orders, platforms, munitions, or related parts revenue is verified."
+  - theme_id: "aerospace_uam"
+    base_tag_refs:
+      - "industrials/aerospace_defense"
+    cross_tag_refs:
+      - "defense_space/space_uam"
+    mapping_rule: "Apply space/UAM overlay when satellite, launch, avionics, aerospace, or UAM technology exposure is verified."
+  - theme_id: "beauty_cosmetics"
+    base_tag_refs:
+      - "consumer/cosmetics"
+      - "healthcare/medical_devices_aesthetics"
+    cross_tag_refs:
+      - "k_consumption/k_beauty"
+    mapping_rule: "Apply K-beauty overlay when cosmetics, beauty devices, aesthetics, export, or brand/IP exposure is verified."
+  - theme_id: "semiconductors"
+    base_tag_refs:
+      - "information_technology/semiconductors"
+    cross_tag_refs:
+      - "ai_infrastructure/ai_semiconductors"
+    mapping_rule: "Apply AI semiconductor overlay only when AI, HBM, high-performance packaging, server, or accelerator exposure is verified."
+  - theme_id: "steel"
+    base_tag_refs:
+      - "materials_energy/steel_nonferrous_materials"
+    cross_tag_refs: []
+    mapping_rule: "Keep steel as base materials exposure unless a separate verified transition or infrastructure overlay applies."
+  - theme_id: "banks"
+    base_tag_refs:
+      - "financials/banks"
+    cross_tag_refs:
+      - "capital_market_reform/value_up_governance"
+    mapping_rule: "Apply value-up overlay when shareholder return, low-PBR improvement, capital policy, or governance reform exposure is verified."
+  - theme_id: "securities"
+    base_tag_refs:
+      - "financials/securities_capital_markets"
+    cross_tag_refs:
+      - "capital_market_reform/value_up_governance"
+    mapping_rule: "Apply value-up overlay when capital-market reform, shareholder return, valuation improvement, or governance exposure is verified."
+  - theme_id: "insurance"
+    base_tag_refs:
+      - "financials/insurance"
+    cross_tag_refs:
+      - "capital_market_reform/value_up_governance"
+    mapping_rule: "Apply value-up overlay when shareholder return, low-PBR improvement, capital policy, or governance reform exposure is verified."
+  - theme_id: "secondary_battery"
+    base_tag_refs:
+      - "materials_energy/chemicals_energy"
+      - "mobility/automobiles_parts"
+    cross_tag_refs:
+      - "energy_transition/secondary_battery"
+    mapping_rule: "Apply secondary-battery overlay when battery cell, material, equipment, recycling, EV, or energy-storage exposure is verified."
+  - theme_id: "automobiles"
+    base_tag_refs:
+      - "mobility/automobiles_parts"
+    cross_tag_refs:
+      - "capital_market_reform/value_up_governance"
+    mapping_rule: "Apply value-up overlay when shareholder return, low-PBR, governance, or capital policy exposure is verified."
+  - theme_id: "healthcare"
+    base_tag_refs:
+      - "healthcare/pharma_bio"
+      - "healthcare/medical_devices_aesthetics"
+    cross_tag_refs: []
+    mapping_rule: "Keep healthcare as base pharma/bio and medical-device exposure unless a separate verified K-beauty or AI application overlay applies."
+  - theme_id: "energy_chemicals"
+    base_tag_refs:
+      - "materials_energy/chemicals_energy"
+    cross_tag_refs:
+      - "energy_transition/climate_transition_solutions"
+    mapping_rule: "Apply climate-transition overlay when low-carbon, efficiency, renewable, grid, or transition-solution exposure is verified."
+  - theme_id: "consumer_discretionary"
+    base_tag_refs:
+      - "consumer/consumer_discretionary"
+    cross_tag_refs:
+      - "k_consumption/k_tourism_duty_free"
+    mapping_rule: "Apply tourism/duty-free overlay when inbound tourism, duty-free, hotel, casino, or leisure demand exposure is verified."
+  - theme_id: "consumer_staples"
+    base_tag_refs:
+      - "consumer/consumer_staples"
+    cross_tag_refs:
+      - "k_consumption/k_food"
+    mapping_rule: "Apply K-food overlay when overseas food, beverage, processed-food, brand, or export exposure is verified."
+  - theme_id: "information_technology"
+    base_tag_refs:
+      - "information_technology/semiconductors"
+      - "information_technology/software_platforms"
+      - "information_technology/robotics_automation"
+    cross_tag_refs:
+      - "ai_applications/ai_software_services"
+      - "digital_transformation/internet_platforms"
+      - "digital_transformation/network_infrastructure"
+    mapping_rule: "Apply cross-theme overlays only to constituents with verified AI software, platform, internet, telecom equipment, or data-center network exposure."
+  - theme_id: "climate_transition"
+    base_tag_refs:
+      - "industrials/power_equipment"
+      - "materials_energy/chemicals_energy"
+    cross_tag_refs:
+      - "energy_transition/climate_transition_solutions"
+    mapping_rule: "Apply climate-transition overlay when decarbonization, renewable, efficiency, grid, or transition-solution exposure is verified."
+themes:
+  - theme_id: "power_infra"
+    name: "전력/AI전력인프라"
+    aliases:
+      - "AI전력핵심설비"
+      - "전력인프라"
+    primary_authority:
+      provider: "iSelect"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "iSelect AI전력핵심설비 지수"
+      source_url: "https://wcomp.fnguide.com/Etp/EtnSnapshot?cmp_cd=487240"
+      source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+      evidence_note: "FnGuide/iSelect ETP metadata confirms the KODEX AI전력핵심설비 benchmark index."
+    products:
+      - code: "487240"
+        name: "KODEX AI전력핵심설비"
+        issuer: "삼성자산운용"
+        product_type: "ETF"
+        benchmark_index: "iSelect AI전력핵심설비 지수"
+        source_url: "https://wcomp.fnguide.com/Etp/EtnSnapshot?cmp_cd=487240"
+        source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+    secondary_anchors:
+      - provider: "WICS/GICS"
+        label: "전력설비·전기장비 부분 anchor"
+        evidence_note: "Official industry anchor only; does not override product/theme-index authority."
+  - theme_id: "shipbuilding"
+    name: "조선"
+    aliases:
+      - "조선해운"
+      - "조선기자재"
+    primary_authority:
+      provider: "FnGuide"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "FnGuide 조선해운 지수"
+      source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=441540"
+      source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/etf/441540"
+          label: "K-ETF HANARO Fn조선해운"
+      evidence_note: "FnGuide/CompanyGuide ETP metadata confirms HANARO Fn조선해운 benchmark metadata."
+    products:
+      - code: "441540"
+        name: "HANARO Fn조선해운"
+        issuer: "NH-Amundi자산운용"
+        product_type: "ETF"
+        benchmark_index: "FnGuide 조선해운 지수"
+        source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=441540"
+        source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/etf/441540"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "WICS/FICS"
+        label: "조선 industry anchor"
+        evidence_note: "Industry anchor only; product/theme-index authority remains primary."
+  - theme_id: "nuclear"
+    name: "원자력"
+    aliases:
+      - "원전"
+      - "원자력 밸류체인"
+    primary_authority:
+      provider: "DeepSearch"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "DeepSearch 원자력 테마"
+      source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=433500"
+      source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/etf/433500"
+          label: "K-ETF ACE 원자력TOP10"
+      evidence_note: "Official index/product metadata confirms ACE 원자력TOP10 benchmark metadata."
+    products:
+      - code: "433500"
+        name: "ACE 원자력TOP10"
+        issuer: "한국투자신탁운용"
+        product_type: "ETF"
+        benchmark_index: "DeepSearch 원자력 테마"
+        source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=433500"
+        source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/etf/433500"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "iSelect"
+        label: "원자력 밸류체인 theme"
+        evidence_note: "Secondary product-index evidence for nuclear value-chain products."
+  - theme_id: "robotics"
+    name: "로봇"
+    aliases:
+      - "K-로봇"
+      - "로봇테마"
+    primary_authority:
+      provider: "iSelect"
+      basis_type: "ETF_COMPARISON_INDEX"
+      index_name: "iSelect K-로봇테마 지수"
+      source_url: "https://m.samsungfund.com/sheet/20230408/2ETFH5_20230331.pdf"
+      source_role: "OFFICIAL_ISSUER_FACTSHEET"
+      evidence_note: "KODEX K-로봇액티브 official Samsung Fund factsheet confirms comparison index metadata."
+    products:
+      - code: "445290"
+        name: "KODEX K-로봇액티브"
+        issuer: "삼성자산운용"
+        product_type: "ETF"
+        comparison_index: "iSelect K-로봇테마 지수"
+        source_url: "https://m.samsungfund.com/sheet/20230408/2ETFH5_20230331.pdf"
+        source_role: "OFFICIAL_ISSUER_FACTSHEET"
+    secondary_anchors:
+      - provider: "WICS"
+        label: "산업용 기계 하위 부분 anchor"
+        evidence_note: "Industry anchor only; does not make robotics an official standalone sector."
+  - theme_id: "defense"
+    name: "방산"
+    aliases:
+      - "K-방산"
+      - "방위산업"
+    primary_authority:
+      provider: "FnGuide"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "FnGuide K-방위산업 지수"
+      source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=449450"
+      source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/etf/449450"
+          label: "K-ETF PLUS K방산"
+      evidence_note: "FnGuide/CompanyGuide ETP metadata confirms PLUS K방산 benchmark metadata."
+    products:
+      - code: "449450"
+        name: "PLUS K방산"
+        issuer: "한화자산운용"
+        product_type: "ETF"
+        benchmark_index: "FnGuide K-방위산업 지수"
+        source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=449450"
+        source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/etf/449450"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "WICS/GICS"
+        label: "우주항공과 국방 anchor"
+        evidence_note: "Official industry anchor only."
+  - theme_id: "aerospace_uam"
+    name: "우주항공/UAM"
+    aliases:
+      - "AeroSpace UAM"
+      - "우주항공"
+    primary_authority:
+      provider: "iSelect"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "iSelect AeroSpace UAM Index"
+      source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=421320"
+      source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/ja/etf/421320"
+          label: "K-ETF PLUS Aero&UAM"
+      evidence_note: "Official index/product metadata confirms PLUS Aero&UAM benchmark metadata."
+    products:
+      - code: "421320"
+        name: "PLUS Aero&UAM"
+        issuer: "한화자산운용"
+        product_type: "ETF"
+        benchmark_index: "iSelect AeroSpace UAM Index"
+        source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=421320"
+        source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/ja/etf/421320"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "WICS/GICS"
+        label: "우주항공과 국방 anchor"
+        evidence_note: "Official industry anchor only."
+  - theme_id: "beauty_cosmetics"
+    name: "화장품/K-뷰티"
+    aliases:
+      - "K-뷰티"
+      - "화장품"
+    primary_authority:
+      provider: "FnGuide"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "FnGuide K-뷰티 지수"
+      source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=479850"
+      source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/etf/479850"
+          label: "K-ETF HANARO K-뷰티"
+      evidence_note: "FnGuide/CompanyGuide ETP metadata confirms HANARO K-뷰티 benchmark metadata."
+    products:
+      - code: "479850"
+        name: "HANARO K-뷰티"
+        issuer: "NH-Amundi자산운용"
+        product_type: "ETF"
+        benchmark_index: "FnGuide K-뷰티 지수"
+        source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=479850"
+        source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/etf/479850"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "WICS"
+        label: "화장품 industry anchor"
+        evidence_note: "Official industry anchor only."
+  - theme_id: "semiconductors"
+    name: "반도체"
+    aliases:
+      - "AI반도체"
+      - "반도체 소부장"
+    primary_authority:
+      provider: "KRX"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "KRX 반도체 지수"
+      source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=091160"
+      source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/etf/091160"
+          label: "K-ETF KODEX 반도체"
+      evidence_note: "Official product/index metadata confirms KODEX 반도체 benchmark metadata."
+    products:
+      - code: "091160"
+        name: "KODEX 반도체"
+        issuer: "삼성자산운용"
+        product_type: "ETF"
+        benchmark_index: "KRX 반도체 지수"
+        source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=091160"
+        source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/etf/091160"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "WICS/GICS"
+        label: "반도체 및 반도체 장비 anchor"
+        evidence_note: "Industry anchor only; product/theme-index authority remains primary."
+  - theme_id: "steel"
+    name: "철강"
+    aliases:
+      - "소재/철강"
+      - "KRX 철강"
+    primary_authority:
+      provider: "KRX"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "KRX 철강"
+      source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=117680"
+      source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/etf/117680"
+          label: "K-ETF KODEX 철강"
+      evidence_note: "Official product/index metadata confirms KODEX 철강 tracks the KRX steel grouping."
+    products:
+      - code: "117680"
+        name: "KODEX 철강"
+        issuer: "삼성자산운용"
+        product_type: "ETF"
+        benchmark_index: "KRX 철강"
+        source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=117680"
+        source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/etf/117680"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "WICS/FICS"
+        label: "철강 industry anchor"
+        evidence_note: "Industry anchor only."
+  - theme_id: "banks"
+    name: "은행"
+    aliases:
+      - "KRX 은행"
+      - "은행주"
+    primary_authority:
+      provider: "KRX"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "KRX Banks"
+      source_url: "https://m.samsungfund.com/sheet/20110214/SHEET64859Kodex%EC%9D%80%ED%96%89.pdf"
+      source_role: "OFFICIAL_ISSUER_FACTSHEET"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/etf/091170"
+          label: "K-ETF KODEX 은행"
+      evidence_note: "Samsung Fund official factsheet confirms KODEX 은행 tracks KRX Banks."
+    products:
+      - code: "091170"
+        name: "KODEX 은행"
+        issuer: "삼성자산운용"
+        product_type: "ETF"
+        benchmark_index: "KRX Banks"
+        source_url: "https://m.samsungfund.com/sheet/20110214/SHEET64859Kodex%EC%9D%80%ED%96%89.pdf"
+        source_role: "OFFICIAL_ISSUER_FACTSHEET"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/etf/091170"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "WICS/FICS"
+        label: "은행 industry anchor"
+        evidence_note: "Industry anchor only."
+  - theme_id: "securities"
+    name: "증권"
+    aliases:
+      - "KRX 증권"
+      - "증권사"
+    primary_authority:
+      provider: "KRX"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "KRX 증권"
+      source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=102970"
+      source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/etf/102970"
+          label: "K-ETF KODEX 증권"
+      evidence_note: "Official product/index metadata confirms KODEX 증권 tracks the KRX securities grouping."
+    products:
+      - code: "102970"
+        name: "KODEX 증권"
+        issuer: "삼성자산운용"
+        product_type: "ETF"
+        benchmark_index: "KRX 증권"
+        source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=102970"
+        source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/etf/102970"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "WICS/FICS"
+        label: "증권 industry anchor"
+        evidence_note: "Industry anchor only."
+  - theme_id: "insurance"
+    name: "보험"
+    aliases:
+      - "KRX 보험"
+      - "보험주"
+    primary_authority:
+      provider: "KRX"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "KRX 보험"
+      source_url: "https://m.samsungfund.com/sheet/20230104/2ETF31_20221231.pdf"
+      source_role: "OFFICIAL_ISSUER_FACTSHEET"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/etf/140700"
+          label: "K-ETF KODEX 보험"
+      evidence_note: "Samsung Fund official factsheet confirms KODEX 보험 benchmark metadata."
+    products:
+      - code: "140700"
+        name: "KODEX 보험"
+        issuer: "삼성자산운용"
+        product_type: "ETF"
+        benchmark_index: "KRX 보험"
+        source_url: "https://m.samsungfund.com/sheet/20230104/2ETF31_20221231.pdf"
+        source_role: "OFFICIAL_ISSUER_FACTSHEET"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/etf/140700"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "WICS/FICS"
+        label: "보험 industry anchor"
+        evidence_note: "Industry anchor only."
+  - theme_id: "secondary_battery"
+    name: "2차전지"
+    aliases:
+      - "배터리"
+      - "2차전지 밸류체인"
+    primary_authority:
+      provider: "WISE"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "WISE 2차전지 테마 지수"
+      source_url: "https://www.tigeretf.com/ko/product/search/detail/index.do?ksdFund=KR7305540007"
+      source_role: "OFFICIAL_ISSUER_PRODUCT_PAGE"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/etf/305540/"
+          label: "K-ETF TIGER 2차전지테마"
+      evidence_note: "TIGER official product page confirms WISE 2차전지 테마 지수 benchmark metadata."
+    products:
+      - code: "305540"
+        name: "TIGER 2차전지테마"
+        issuer: "미래에셋자산운용"
+        product_type: "ETF"
+        benchmark_index: "WISE 2차전지 테마 지수"
+        source_url: "https://www.tigeretf.com/ko/product/search/detail/index.do?ksdFund=KR7305540007"
+        source_role: "OFFICIAL_ISSUER_PRODUCT_PAGE"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/etf/305540/"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "WICS/GICS"
+        label: "전기장비·화학·소재 battery value-chain anchor"
+        evidence_note: "Industry anchors only."
+  - theme_id: "automobiles"
+    name: "자동차"
+    aliases:
+      - "KRX 자동차"
+      - "자동차부품"
+    primary_authority:
+      provider: "KRX"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "KRX Autos"
+      source_url: "https://m.samsungfund.com/sheet/20230104/2ETF06_20221231.pdf"
+      source_role: "OFFICIAL_ISSUER_FACTSHEET"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/etf/091180"
+          label: "K-ETF KODEX 자동차"
+      evidence_note: "Samsung Fund official factsheet confirms KODEX 자동차 benchmark metadata."
+    products:
+      - code: "091180"
+        name: "KODEX 자동차"
+        issuer: "삼성자산운용"
+        product_type: "ETF"
+        benchmark_index: "KRX Autos"
+        source_url: "https://m.samsungfund.com/sheet/20230104/2ETF06_20221231.pdf"
+        source_role: "OFFICIAL_ISSUER_FACTSHEET"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/etf/091180"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "WICS/GICS"
+        label: "자동차 및 부품 anchor"
+        evidence_note: "Industry anchor only."
+  - theme_id: "healthcare"
+    name: "헬스케어"
+    aliases:
+      - "바이오"
+      - "의료"
+    primary_authority:
+      provider: "KRX"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "KRX Health Care 지수"
+      source_url: "https://www.tigeretf.com/ko/product/search/detail/index.do?ksdFund=KR7143860005"
+      source_role: "OFFICIAL_ISSUER_PRODUCT_PAGE"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/etf/143860"
+          label: "K-ETF TIGER 헬스케어"
+      evidence_note: "TIGER official product page confirms KRX Health Care benchmark metadata."
+    products:
+      - code: "143860"
+        name: "TIGER 헬스케어"
+        issuer: "미래에셋자산운용"
+        product_type: "ETF"
+        benchmark_index: "KRX Health Care 지수"
+        source_url: "https://www.tigeretf.com/ko/product/search/detail/index.do?ksdFund=KR7143860005"
+        source_role: "OFFICIAL_ISSUER_PRODUCT_PAGE"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/etf/143860"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "WICS/GICS"
+        label: "헬스케어·제약·바이오 anchor"
+        evidence_note: "Industry anchor only."
+  - theme_id: "energy_chemicals"
+    name: "에너지화학"
+    aliases:
+      - "KRX 에너지화학"
+      - "화학"
+    primary_authority:
+      provider: "KRX"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "KRX 에너지화학"
+      source_url: "https://m.samsungfund.com/sheet/20221206/2ETF21_20221130.pdf"
+      source_role: "OFFICIAL_ISSUER_FACTSHEET"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/etf/117460"
+          label: "K-ETF KODEX 에너지화학"
+      evidence_note: "Samsung Fund official factsheet confirms KODEX 에너지화학 benchmark metadata."
+    products:
+      - code: "117460"
+        name: "KODEX 에너지화학"
+        issuer: "삼성자산운용"
+        product_type: "ETF"
+        benchmark_index: "KRX 에너지화학"
+        source_url: "https://m.samsungfund.com/sheet/20221206/2ETF21_20221130.pdf"
+        source_role: "OFFICIAL_ISSUER_FACTSHEET"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/etf/117460"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "WICS/GICS"
+        label: "에너지·화학·소재 anchor"
+        evidence_note: "Industry anchor only."
+  - theme_id: "consumer_discretionary"
+    name: "경기소비재"
+    aliases:
+      - "KRX 경기소비재"
+      - "임의소비재"
+    primary_authority:
+      provider: "KRX"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "KRX 경기소비재"
+      source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=266390"
+      source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/etf/266390"
+          label: "K-ETF KODEX 경기소비재"
+      evidence_note: "Official product/index metadata confirms KODEX 경기소비재 benchmark metadata."
+    products:
+      - code: "266390"
+        name: "KODEX 경기소비재"
+        issuer: "삼성자산운용"
+        product_type: "ETF"
+        benchmark_index: "KRX 경기소비재"
+        source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=266390"
+        source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/etf/266390"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "GICS/WICS"
+        label: "Consumer discretionary anchor"
+        evidence_note: "Industry anchor only."
+  - theme_id: "consumer_staples"
+    name: "필수소비재"
+    aliases:
+      - "KRX 필수소비재"
+      - "생활소비재"
+    primary_authority:
+      provider: "KRX"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "KRX 필수소비재"
+      source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=266410"
+      source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/etf/266410"
+          label: "K-ETF KODEX 필수소비재"
+      evidence_note: "Official product/index metadata confirms KODEX 필수소비재 benchmark metadata."
+    products:
+      - code: "266410"
+        name: "KODEX 필수소비재"
+        issuer: "삼성자산운용"
+        product_type: "ETF"
+        benchmark_index: "KRX 필수소비재"
+        source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=266410"
+        source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/etf/266410"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "GICS/WICS"
+        label: "Consumer staples anchor"
+        evidence_note: "Industry anchor only."
+  - theme_id: "information_technology"
+    name: "정보기술"
+    aliases:
+      - "KRX 정보기술"
+      - "IT"
+    primary_authority:
+      provider: "KRX"
+      basis_type: "ETF_COMPARISON_INDEX"
+      index_name: "KRX 정보기술"
+      source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=471780"
+      source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/etf/471780"
+          label: "K-ETF TIGER 코리아테크액티브"
+      evidence_note: "Official product/index metadata confirms TIGER 코리아테크액티브 comparison index metadata."
+    products:
+      - code: "471780"
+        name: "TIGER 코리아테크액티브"
+        issuer: "미래에셋자산운용"
+        product_type: "ETF"
+        comparison_index: "KRX 정보기술"
+        source_url: "https://wcomp.fnguide.com/etp/etfSnapshot?cmp_cd=471780"
+        source_role: "OFFICIAL_INDEX_PROVIDER_PAGE"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/etf/471780"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "GICS/WICS"
+        label: "Information technology anchor"
+        evidence_note: "Industry anchor only."
+  - theme_id: "climate_transition"
+    name: "기후변화솔루션"
+    aliases:
+      - "기후변화"
+      - "저탄소 전환"
+    primary_authority:
+      provider: "KRX"
+      basis_type: "ETF_PRODUCT_THEME_INDEX"
+      index_name: "KRX 기후변화 솔루션 지수"
+      source_url: "https://www.tigeretf.com/ko/product/search/detail/index.do?ksdFund=KR7404540007"
+      source_role: "OFFICIAL_ISSUER_PRODUCT_PAGE"
+      supporting_urls:
+        - role: "AGGREGATOR_REFERENCE"
+          url: "https://www.k-etf.com/etf/404540"
+          label: "K-ETF TIGER KRX기후변화솔루션"
+      evidence_note: "TIGER official product page confirms KRX 기후변화 솔루션 지수 benchmark metadata."
+    products:
+      - code: "404540"
+        name: "TIGER KRX기후변화솔루션"
+        issuer: "미래에셋자산운용"
+        product_type: "ETF"
+        benchmark_index: "KRX 기후변화 솔루션 지수"
+        source_url: "https://www.tigeretf.com/ko/product/search/detail/index.do?ksdFund=KR7404540007"
+        source_role: "OFFICIAL_ISSUER_PRODUCT_PAGE"
+        supporting_urls:
+          - role: "AGGREGATOR_REFERENCE"
+            url: "https://www.k-etf.com/etf/404540"
+            label: "K-ETF"
+    secondary_anchors:
+      - provider: "KRX/MSCI"
+        label: "Climate transition solution anchor"
+        evidence_note: "Theme-index anchor only."

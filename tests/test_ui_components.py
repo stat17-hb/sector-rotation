@@ -1,6 +1,8 @@
 """UI component rendering tests for dashboard visuals and layout helpers."""
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 import src.dashboard.data as dashboard_data_module
@@ -94,6 +96,15 @@ def _signal(
         action_policy=action_policy,
         taxonomy_kind=taxonomy_kind,
         taxonomy_label=taxonomy_label,
+    )
+
+
+def _taxonomy_model(*contexts: SimpleNamespace) -> SimpleNamespace:
+    return SimpleNamespace(
+        taxonomy_version=2,
+        diagnostics=(),
+        sector_contexts=tuple(contexts),
+        by_sector_code=lambda: {context.sector_code: context for context in contexts},
     )
 
 
@@ -742,6 +753,77 @@ def test_overview_sector_frame_includes_sector_export_basis_when_capability_enab
     assert "수출 YoY" not in frame.columns
 
 
+def test_overview_sector_frame_can_project_theme_taxonomy_labels():
+    signal = _signal("5044", "Strong Buy", 1.10, 1.00)
+    signal.sector_name = "KRX 반도체"
+    taxonomy_context = _taxonomy_model(
+        SimpleNamespace(
+            sector_code="5044",
+            sector_name="KRX 반도체",
+            taxonomy_label="KRX 반도체",
+            base_labels=("반도체",),
+            cross_labels=("AI반도체",),
+            theme_labels=("반도체",),
+        )
+    )
+
+    frame = panels_module._build_overview_sector_frame(
+        [signal],
+        sort_key="모멘텀 점수",
+        sector_export_trends={"KRX 반도체": 18.4},
+        taxonomy_context=taxonomy_context,
+        use_taxonomy_display=True,
+    )
+
+    assert frame.iloc[0]["섹터"] == "반도체"
+    assert frame.iloc[0]["원섹터"] == "KRX 반도체"
+    assert frame.iloc[0]["분류 근거"] == "기본: 반도체 · 크로스: AI반도체"
+    assert frame.iloc[0]["수출 기준"] == "반도체 수출"
+
+
+def test_render_overview_taxonomy_surface_renders_axis_map(monkeypatch):
+    markdown_calls: list[str] = []
+    signal = _signal("5044", "Strong Buy", 1.10, 1.00)
+    signal.sector_name = "KRX 반도체"
+    taxonomy_context = _taxonomy_model(
+        SimpleNamespace(
+            sector_code="5044",
+            sector_name="KRX 반도체",
+            taxonomy_label="KRX 반도체",
+            base_labels=("반도체",),
+            cross_labels=("AI반도체",),
+            theme_labels=("반도체",),
+        )
+    )
+    frame = panels_module._build_overview_sector_frame(
+        [signal],
+        sort_key="모멘텀 점수",
+        taxonomy_context=taxonomy_context,
+        use_taxonomy_display=True,
+    )
+
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **_: markdown_calls.append(text))
+
+    panels_module._render_overview_taxonomy_surface(
+        taxonomy_context,
+        frame,
+        selected_layer="Theme Taxonomy",
+        market_id="KR",
+    )
+
+    assert markdown_calls
+    markup = markdown_calls[0]
+    assert "overview-taxonomy-surface" in markup
+    assert "Theme Taxonomy" in markup
+    assert "분류축 지도" in markup
+    assert "기본산업" in markup
+    assert "크로스테마" in markup
+    assert "상품테마" in markup
+    assert "반도체" in markup
+    assert "AI반도체" in markup
+    assert "런타임: KRX 반도체" in markup
+
+
 def test_render_overview_sector_table_omits_export_yoy_but_keeps_export_basis(monkeypatch):
     markdown_calls: list[str] = []
     monkeypatch.setattr("src.ui.panels.st.markdown", lambda text, **_: markdown_calls.append(text))
@@ -762,6 +844,8 @@ def test_render_overview_sector_table_omits_export_yoy_but_keeps_export_basis(mo
     )
 
     assert markdown_calls
+    assert "<colgroup>" in markdown_calls[0]
+    assert 'class="overview-sector-table__sector"' in markdown_calls[0]
     assert "수출 YoY" not in markdown_calls[0]
     assert "수출 기준: 자동차 수출" in markdown_calls[0]
     assert "+8.00%" in markdown_calls[0]
@@ -804,6 +888,8 @@ def test_render_overview_sector_table_omits_export_headers_when_capability_disab
                 {
                     "순위": 1,
                     "섹터": "Industrials",
+                    "원섹터": float("nan"),
+                    "분류 근거": float("nan"),
                     "모멘텀 점수": 84.0,
                     "상대강도": 4.2,
                     "3M": 8.0,
@@ -816,6 +902,236 @@ def test_render_overview_sector_table_omits_export_headers_when_capability_disab
     assert markdown_calls
     assert "수출 YoY" not in markdown_calls[0]
     assert "수출 기준" not in markdown_calls[0]
+    assert "nan" not in markdown_calls[0]
+
+
+def test_render_toss_overview_dashboard_reflows_sector_table_out_of_side_column(monkeypatch):
+    markdown_calls: list[str] = []
+    column_specs: list[list[float] | int] = []
+    plotly_calls: list[object] = []
+
+    def _columns(spec, **_kwargs):
+        normalized = list(spec) if isinstance(spec, (list, tuple)) else spec
+        column_specs.append(normalized)
+        count = len(spec) if isinstance(spec, (list, tuple)) else int(spec)
+        return [_DummyBlock() for _ in range(count)]
+
+    monkeypatch.setattr(panels_module.st, "session_state", {})
+    monkeypatch.setattr(panels_module.st, "container", lambda **_kwargs: _DummyBlock())
+    monkeypatch.setattr(panels_module.st, "form", lambda *_args, **_kwargs: _DummyBlock())
+    monkeypatch.setattr(panels_module.st, "columns", _columns)
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **_kwargs: markdown_calls.append(text))
+    monkeypatch.setattr(panels_module.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module.st, "text_input", lambda *_args, value="", **_kwargs: value)
+    monkeypatch.setattr(panels_module.st, "form_submit_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(panels_module.st, "segmented_control", lambda *_args, default=None, **_kwargs: default)
+    monkeypatch.setattr(
+        panels_module.st,
+        "selectbox",
+        lambda *_args, options, index=0, **_kwargs: options[index],
+    )
+    monkeypatch.setattr(panels_module.st, "plotly_chart", lambda fig, **_kwargs: plotly_calls.append(fig))
+
+    dates = pd.date_range("2026-01-01", periods=6, freq="D")
+    prices_wide = pd.DataFrame(
+        {
+            "KOSPI": [100, 101, 102, 103, 104, 105],
+            "Sector A": [100, 102, 104, 106, 108, 110],
+            "Sector B": [100, 101, 103, 104, 106, 107],
+        },
+        index=dates,
+    )
+
+    lookup_query, submitted = panels_module.render_toss_overview_dashboard(
+        market_id="KR",
+        current_regime="Recovery",
+        price_status="LIVE",
+        macro_status="LIVE",
+        prices_wide=prices_wide,
+        benchmark_label="KOSPI",
+        signals=[
+            _signal("A", "Strong Buy", 1.10, 1.00),
+            _signal("B", "Watch", 1.04, 1.00),
+        ],
+        theme_mode="light",
+        sector_map={},
+        lookup_query_value="",
+        has_sector_export_indicators=False,
+    )
+
+    assert lookup_query == ""
+    assert submitted is False
+    assert [1.08, 2.08] not in column_specs
+    assert [0.86, 1.28, 0.76] not in column_specs
+    assert [0.95, 1.55] in column_specs
+    assert any("overview-workbench-header" in markup for markup in markdown_calls)
+    assert any("overview-evidence-shell" in markup for markup in markdown_calls)
+    assert not any("상위/하위 변화" in markup for markup in markdown_calls)
+    table_title_index = next(
+        index for index, markup in enumerate(markdown_calls) if "섹터 모멘텀 & 상대강도" in markup
+    )
+    trend_title_index = next(index for index, markup in enumerate(markdown_calls) if "섹터 상대강도 추이" in markup)
+    assert table_title_index < trend_title_index
+    assert len(plotly_calls) == 1
+
+
+def test_render_toss_overview_dashboard_starts_with_taxonomy_surface(monkeypatch):
+    markdown_calls: list[str] = []
+    column_specs: list[list[float] | int] = []
+    plotly_calls: list[object] = []
+
+    def _columns(spec, **_kwargs):
+        normalized = list(spec) if isinstance(spec, (list, tuple)) else spec
+        column_specs.append(normalized)
+        count = len(spec) if isinstance(spec, (list, tuple)) else int(spec)
+        return [_DummyBlock() for _ in range(count)]
+
+    monkeypatch.setattr(panels_module.st, "session_state", {})
+    monkeypatch.setattr(panels_module.st, "container", lambda **_kwargs: _DummyBlock())
+    monkeypatch.setattr(panels_module.st, "form", lambda *_args, **_kwargs: _DummyBlock())
+    monkeypatch.setattr(panels_module.st, "columns", _columns)
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **_kwargs: markdown_calls.append(text))
+    monkeypatch.setattr(panels_module.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module.st, "text_input", lambda *_args, value="", **_kwargs: value)
+    monkeypatch.setattr(panels_module.st, "form_submit_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(panels_module.st, "segmented_control", lambda *_args, default=None, **_kwargs: default)
+    monkeypatch.setattr(
+        panels_module.st,
+        "selectbox",
+        lambda *_args, options, index=0, **_kwargs: options[index],
+    )
+    monkeypatch.setattr(panels_module.st, "plotly_chart", lambda fig, **_kwargs: plotly_calls.append(fig))
+
+    dates = pd.date_range("2026-01-01", periods=6, freq="D")
+    prices_wide = pd.DataFrame(
+        {
+            "KOSPI": [100, 101, 102, 103, 104, 105],
+            "Sector A": [100, 102, 104, 106, 108, 110],
+            "Sector B": [100, 101, 103, 104, 106, 107],
+        },
+        index=dates,
+    )
+    taxonomy_context = _taxonomy_model(
+        SimpleNamespace(
+            sector_code="A",
+            sector_name="Sector A",
+            taxonomy_label="Sector A",
+            base_labels=("반도체",),
+            cross_labels=("AI반도체",),
+            theme_labels=("반도체",),
+        ),
+        SimpleNamespace(
+            sector_code="B",
+            sector_name="Sector B",
+            taxonomy_label="Sector B",
+            base_labels=("자동차",),
+            cross_labels=("전동화",),
+            theme_labels=("모빌리티",),
+        ),
+    )
+
+    lookup_query, submitted = panels_module.render_toss_overview_dashboard(
+        market_id="KR",
+        current_regime="Recovery",
+        price_status="LIVE",
+        macro_status="LIVE",
+        prices_wide=prices_wide,
+        benchmark_label="KOSPI",
+        signals=[
+            _signal("A", "Strong Buy", 1.10, 1.00),
+            _signal("B", "Watch", 1.04, 1.00),
+        ],
+        theme_mode="light",
+        sector_map={},
+        lookup_query_value="",
+        has_sector_export_indicators=False,
+        taxonomy_context=taxonomy_context,
+    )
+
+    assert lookup_query == ""
+    assert submitted is False
+    header_index = next(index for index, markup in enumerate(markdown_calls) if "overview-workbench-header" in markup)
+    taxonomy_index = next(index for index, markup in enumerate(markdown_calls) if "overview-taxonomy-surface" in markup)
+    market_index = next(index for index, markup in enumerate(markdown_calls) if "시장/조회" in markup)
+    review_index = next(index for index, markup in enumerate(markdown_calls) if "overview-review-candidates" in markup)
+    table_index = next(index for index, markup in enumerate(markdown_calls) if "섹터 모멘텀 & 상대강도" in markup)
+    assert header_index < taxonomy_index < review_index < market_index < table_index
+    assert "분류축 지도" in markdown_calls[taxonomy_index]
+    assert "런타임: Sector A" in markdown_calls[taxonomy_index]
+    assert [0.86, 1.28, 0.76] not in column_specs
+    assert [0.95, 1.55] in column_specs
+    assert not any("상위/하위 변화" in markup for markup in markdown_calls)
+    assert len(plotly_calls) == 1
+
+
+def test_render_toss_overview_dashboard_gives_export_chart_full_width(monkeypatch):
+    markdown_calls: list[str] = []
+    column_specs: list[list[float] | int] = []
+    plotly_calls: list[object] = []
+
+    def _columns(spec, **_kwargs):
+        normalized = list(spec) if isinstance(spec, (list, tuple)) else spec
+        column_specs.append(normalized)
+        count = len(spec) if isinstance(spec, (list, tuple)) else int(spec)
+        return [_DummyBlock() for _ in range(count)]
+
+    monkeypatch.setattr(panels_module.st, "session_state", {})
+    monkeypatch.setattr(panels_module.st, "container", lambda **_kwargs: _DummyBlock())
+    monkeypatch.setattr(panels_module.st, "form", lambda *_args, **_kwargs: _DummyBlock())
+    monkeypatch.setattr(panels_module.st, "columns", _columns)
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **_kwargs: markdown_calls.append(text))
+    monkeypatch.setattr(panels_module.st, "caption", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(panels_module.st, "text_input", lambda *_args, value="", **_kwargs: value)
+    monkeypatch.setattr(panels_module.st, "form_submit_button", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(panels_module.st, "segmented_control", lambda *_args, default=None, **_kwargs: default)
+    monkeypatch.setattr(
+        panels_module.st,
+        "selectbox",
+        lambda *_args, options, index=0, **_kwargs: options[index],
+    )
+    monkeypatch.setattr(panels_module.st, "plotly_chart", lambda fig, **_kwargs: plotly_calls.append(fig))
+
+    dates = pd.date_range("2026-01-01", periods=6, freq="D")
+    prices_wide = pd.DataFrame(
+        {
+            "KOSPI": [100, 101, 102, 103, 104, 105],
+            "Sector A": [100, 102, 104, 106, 108, 110],
+            "Sector B": [100, 101, 103, 104, 106, 107],
+        },
+        index=dates,
+    )
+    export_index = pd.period_range("2025-01", periods=20, freq="M")
+
+    panels_module.render_toss_overview_dashboard(
+        market_id="KR",
+        current_regime="Recovery",
+        price_status="LIVE",
+        macro_status="LIVE",
+        prices_wide=prices_wide,
+        benchmark_label="KOSPI",
+        signals=[
+            _signal("A", "Strong Buy", 1.10, 1.00),
+            _signal("B", "Watch", 1.04, 1.00),
+        ],
+        theme_mode="light",
+        sector_map={},
+        lookup_query_value="",
+        has_sector_export_indicators=True,
+        sector_export_history={
+            "Sector A": pd.Series(range(20), index=export_index, dtype="float64"),
+            "Sector B": pd.Series(range(100, 120), index=export_index, dtype="float64"),
+        },
+    )
+
+    assert [0.86, 1.16, 1.0] not in column_specs
+    assert [0.92, 1.58] in column_specs
+    assert not any("상위/하위 변화" in markup for markup in markdown_calls)
+    trend_title_index = next(index for index, markup in enumerate(markdown_calls) if "섹터 상대강도 추이" in markup)
+    export_title_index = next(index for index, markup in enumerate(markdown_calls) if "섹터별 수출 YoY 월별 추이" in markup)
+    assert trend_title_index < export_title_index
+    assert len(plotly_calls) == 2
+    assert plotly_calls[1].layout.xaxis.dtick == "M2"
+    assert plotly_calls[1].layout.height == 360
 
 
 def test_build_sector_export_trend_figure_renders_monthly_series():
@@ -2377,6 +2693,42 @@ def test_build_overview_review_candidate_groups_keeps_buy_and_sell_visible():
     assert groups["sell"][0]["action_policy"] == "KR_MOMENTUM_ONLY"
 
 
+def test_build_overview_review_candidate_groups_uses_theme_taxonomy_display():
+    signal = _signal("5044", "Strong Buy", 1.10, 1.00, action_policy="KR_MOMENTUM_ONLY")
+    signal.sector_name = "KRX 반도체"
+    signal.mom_percentile = 88.0
+    signal.flow_state = "supportive"
+    signal.flow_score = 1.0
+    taxonomy_context = _taxonomy_model(
+        SimpleNamespace(
+            sector_code="5044",
+            sector_name="KRX 반도체",
+            taxonomy_label="KRX 반도체",
+            base_labels=("반도체",),
+            cross_labels=("AI반도체",),
+            theme_labels=("반도체",),
+        )
+    )
+    frame = panels_module._build_overview_sector_frame(
+        [signal],
+        sort_key="모멘텀 점수",
+        taxonomy_context=taxonomy_context,
+        use_taxonomy_display=True,
+    )
+
+    groups = panels_module._build_overview_review_candidate_groups(
+        [signal],
+        frame,
+        taxonomy_context=taxonomy_context,
+    )
+
+    candidate = groups["buy"][0]
+    assert candidate["sector_name"] == "KRX 반도체"
+    assert candidate["display_sector_name"] == "반도체"
+    assert candidate["runtime_sector_name"] == "KRX 반도체"
+    assert candidate["taxonomy_subtext"] == "런타임: KRX 반도체 · 기본: 반도체 · 크로스: AI반도체"
+
+
 def test_overview_review_candidate_group_does_not_default_neutral_to_buy():
     assert panels_module._overview_review_candidate_group(
         {"action": "Hold", "edge_proxy": 0.0, "turning_point_state": "Flat"}
@@ -2440,6 +2792,36 @@ def test_render_overview_review_candidates_renders_reasons_and_guardrail_copy(mo
     assert "다음 검토 시까지" in markup
     for forbidden in ("brokerage", "order", "매수 ETF", "실시간 거래", "보장"):
         assert forbidden not in markup
+
+
+def test_render_overview_review_candidates_prefers_theme_taxonomy_display(monkeypatch):
+    markdown_calls: list[str] = []
+    candidates = [
+        {
+            "sector_name": "KRX 반도체",
+            "display_sector_name": "반도체",
+            "runtime_sector_name": "KRX 반도체",
+            "taxonomy_subtext": "런타임: KRX 반도체 · 기본: 반도체 · 크로스: AI반도체",
+            "decision": "신규 검토 후보",
+            "reason_parts": ["변곡 Continuation up", "엣지 +64.5"],
+            "invalidation": "",
+            "action": "Strong Buy",
+            "candidate_policy": "COMPOSITE_REVIEW_CANDIDATE",
+            "candidate_score": 75.625,
+            "metrics": [("상방 proxy", "84.2")],
+        }
+    ]
+
+    monkeypatch.setattr(panels_module.st, "markdown", lambda text, **_: markdown_calls.append(text))
+
+    panels_module._render_overview_review_candidates(candidates)
+
+    assert markdown_calls
+    markup = markdown_calls[0]
+    assert '<div class="overview-review-card__sector">반도체' in markup
+    assert "런타임: KRX 반도체" in markup
+    assert "기본: 반도체" in markup
+    assert "크로스: AI반도체" in markup
 
 
 def test_render_overview_review_candidates_renders_buy_and_sell_groups(monkeypatch):

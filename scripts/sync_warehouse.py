@@ -17,6 +17,7 @@ import pandas as pd
 from config.markets import load_market_configs
 from src.data_sources.krx_indices import warm_sector_price_cache
 from src.data_sources.macro_sync import sync_macro_warehouse
+from src.data_sources.theme_taxonomy_sync import sync_theme_taxonomy_warehouse
 from src.data_sources.warehouse import (
     get_market_latest_dates,
     macro_row_count,
@@ -44,6 +45,16 @@ def _all_sector_codes(sector_map: dict) -> list[str]:
     return codes
 
 
+def _merge_codes(*groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    for group in groups:
+        for code in group:
+            token = str(code or "").strip()
+            if token and token not in merged:
+                merged.append(token)
+    return merged
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--market", choices=["KR", "US"], default="KR")
@@ -63,6 +74,10 @@ def _resolve_market_sync_start(index_codes: list[str], fallback_start: date, *, 
     except TypeError:
         latest_dates = get_market_latest_dates(index_codes)
     if not latest_dates:
+        return fallback_start
+    requested_codes = {str(code).strip() for code in index_codes if str(code).strip()}
+    covered_codes = {str(code).strip() for code in latest_dates if str(code).strip()}
+    if requested_codes - covered_codes:
         return fallback_start
 
     parsed_dates = [
@@ -111,7 +126,12 @@ def main() -> int:
         calendar_provider = "YFINANCE" if market_id == "US" else "OPENAPI"
         end_date = get_last_business_day(provider=calendar_provider, benchmark_code=benchmark_code)
 
-    codes = _all_sector_codes(sector_map)
+    taxonomy_status, taxonomy_frame, taxonomy_summary = sync_theme_taxonomy_warehouse(
+        reason="sync_warehouse",
+        market=market_id,
+    )
+    taxonomy_codes = [str(code) for code in taxonomy_summary.get("index_codes", [])]
+    codes = _merge_codes(taxonomy_codes, _all_sector_codes(sector_map))
     existing_market_end = _resolve_existing_market_end(codes, market=market_id)
     if existing_market_end is not None and existing_market_end > end_date:
         end_date = existing_market_end
@@ -171,6 +191,14 @@ def main() -> int:
         and not market_frame.empty
         and macro_status in {"LIVE", "CACHED"}
         and not macro_frame.empty
+        and (
+            market_id != "KR"
+            or (
+                taxonomy_status in {"LIVE", "CACHED"}
+                and not taxonomy_frame.empty
+                and bool(taxonomy_summary.get("coverage_complete"))
+            )
+        )
     )
 
     output = {
@@ -189,8 +217,14 @@ def main() -> int:
             "warehouse_rows": macro_row_count(market=market_id),
             "warehouse_status": read_dataset_status("macro_data", market=market_id),
         },
+        "theme_taxonomy": {
+            "status": taxonomy_status,
+            "rows": int(len(taxonomy_frame)),
+            "summary": taxonomy_summary,
+            "warehouse_status": read_dataset_status("theme_taxonomy", market=market_id),
+        },
     }
-    print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))
+    print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True, default=str))
     return 0 if success else 1
 
 

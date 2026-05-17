@@ -72,8 +72,10 @@ from src.dashboard.state import (
     normalize_session_state,
     parse_asof_default,
 )
+from src.dashboard.theme_taxonomy_adapter import build_taxonomy_dashboard_model
 from src.dashboard.tabs import (
     build_dashboard_page_options,
+    normalize_dashboard_page_id,
     render_analysis_canvas,
     render_dashboard_tabs,
     render_sidebar_controls,
@@ -281,7 +283,11 @@ def _load_config(market_id: str, config_cache_token: tuple[tuple[str, float], ..
 
 
 selected_market_id = str(st.session_state.get("_nav_market_id", "KR")).strip().upper() or "KR"
-selected_dashboard_page = str(st.session_state.get("_nav_page_id", "overview")).strip() or "overview"
+selected_dashboard_page = normalize_dashboard_page_id(
+    st.session_state.get("_nav_page_id", "overview"),
+    selected_market_id,
+)
+st.session_state["_nav_page_id"] = selected_dashboard_page
 if str(st.session_state.get("market_id", selected_market_id)).strip().upper() != selected_market_id:
     st.session_state["market_id"] = selected_market_id
     invalidate_dashboard_caches("all")
@@ -633,11 +639,8 @@ dashboard_data_date_label = market_data_reference_date or dashboard_query_date_l
 render_page_header(
     title=resolve_dashboard_page_title(selected_dashboard_page, selected_market_id),
     description={
-        "overview": "국면, 수급, 상대강도 기준의 섹터 리서치 화면입니다.",
-        "signals": "섹터 액션과 필터 결과를 검토하는 랭킹 중심 페이지입니다.",
+        "overview": "국면, 수급, taxonomy, 상대강도 원장을 한 화면에서 확인하는 통합 작업 화면입니다.",
         "research": "기간, 국면, 섹터를 바꿔가며 신호의 근거를 검증합니다.",
-        "constituents": "Strong Buy 섹터의 구성종목과 ETF 실행 참고 정보를 확인합니다.",
-        "flow": "투자자 수급 또는 ETF proxy flow를 신호 해석의 보조 맥락으로 확인합니다.",
         "quality": "데이터 수집 상태, 캐시, provider, 오류 이력을 점검합니다.",
     }.get(selected_dashboard_page, "섹터 로테이션 대시보드"),
     pills=[
@@ -850,6 +853,10 @@ held_sector_options = sorted({str(signal.sector_name) for signal in signals if s
 shared_flow_summary_map = _resolve_shared_flow_summary_map(runtime_payload)
 flow_short_window = int(settings.get("investor_flow_short_window", 20))
 flow_long_window = int(settings.get("investor_flow_long_window", 60))
+taxonomy_context = build_taxonomy_dashboard_model(
+    sector_map=sector_map,
+    market=context.market_id,
+)
 analysis_canvas_kwargs = {
     "heatmap_return_display": heatmap_return_display,
     "heatmap_strength_display": heatmap_strength_display,
@@ -889,7 +896,11 @@ if selected_dashboard_page == "overview":
         lookup_query_value=str(st.session_state.get("stock_lookup_query", "")),
         lookup_status=str(st.session_state.get("stock_lookup_status", "")),
         lookup_message=str(st.session_state.get("stock_lookup_message", "")),
-        lookup_display_model=build_stock_lookup_display_model(st.session_state.get("stock_lookup_result"), sector_map),
+        lookup_display_model=build_stock_lookup_display_model(
+            st.session_state.get("stock_lookup_result"),
+            sector_map,
+            taxonomy_context,
+        ),
         export_growth_val=export_growth_val,
         trade_indicators=trade_indicators,
         sector_export_trends=sector_export_trends,
@@ -897,6 +908,7 @@ if selected_dashboard_page == "overview":
         sector_trade_lens=sector_trade_lens,
         has_trade_indicators=has_trade_indicators,
         has_sector_export_indicators=has_sector_export_indicators,
+        taxonomy_context=taxonomy_context,
         locale=context.ui_locale,
         is_mobile=mobile_client,
     )
@@ -988,6 +1000,7 @@ elif selected_dashboard_page != "overview":
         shared_flow_summary_map=bundle.shared_flow_summary_map,
         theme_lens_status=bundle.theme_lens_status,
         theme_lens_rows=bundle.theme_lens_rows,
+        taxonomy_context=taxonomy_context,
         sector_map=sector_map,
         ui_locale=context.ui_locale,
         selected_page_id=selected_dashboard_page,

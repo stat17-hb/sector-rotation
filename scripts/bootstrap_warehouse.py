@@ -18,6 +18,7 @@ import pandas as pd
 from config.markets import load_market_configs
 from src.data_sources.krx_indices import warm_sector_price_cache
 from src.data_sources.macro_sync import sync_macro_warehouse
+from src.data_sources.theme_taxonomy_sync import sync_theme_taxonomy_warehouse
 from src.data_sources.warehouse import (
     is_market_coverage_complete,
     macro_row_count,
@@ -43,6 +44,16 @@ def _all_sector_codes(sector_map: dict) -> list[str]:
     if benchmark_code and benchmark_code not in codes:
         codes.append(benchmark_code)
     return codes
+
+
+def _merge_codes(*groups: list[str]) -> list[str]:
+    merged: list[str] = []
+    for group in groups:
+        for code in group:
+            token = str(code or "").strip()
+            if token and token not in merged:
+                merged.append(token)
+    return merged
 
 
 def _parse_args() -> argparse.Namespace:
@@ -180,7 +191,12 @@ def main() -> int:
     macro_end = _last_complete_month(end_date)
     macro_start = (end_date - timedelta(days=365 * int(args.macro_years))).strftime("%Y%m")
 
-    codes = _all_sector_codes(sector_map)
+    taxonomy_status, taxonomy_frame, taxonomy_summary = sync_theme_taxonomy_warehouse(
+        reason="bootstrap_warehouse",
+        market=market_id,
+    )
+    taxonomy_codes = [str(code) for code in taxonomy_summary.get("index_codes", [])]
+    codes = _merge_codes(taxonomy_codes, _all_sector_codes(sector_map))
     if market_id == "US":
         from src.data_sources.yfinance_sectors import load_sector_prices
 
@@ -232,6 +248,14 @@ def main() -> int:
         and macro_status in {"LIVE", "CACHED"}
         and not macro_frame.empty
         and bool(macro_summary.get("coverage_complete"))
+        and (
+            market_id != "KR"
+            or (
+                taxonomy_status in {"LIVE", "CACHED"}
+                and not taxonomy_frame.empty
+                and bool(taxonomy_summary.get("coverage_complete"))
+            )
+        )
     )
 
     output = {
@@ -250,8 +274,14 @@ def main() -> int:
             "warehouse_rows": macro_row_count(market=market_id),
             "warehouse_status": read_dataset_status("macro_data", market=market_id),
         },
+        "theme_taxonomy": {
+            "status": taxonomy_status,
+            "rows": int(len(taxonomy_frame)),
+            "summary": taxonomy_summary,
+            "warehouse_status": read_dataset_status("theme_taxonomy", market=market_id),
+        },
     }
-    print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True))
+    print(json.dumps(output, ensure_ascii=False, indent=2, sort_keys=True, default=str))
     return 0 if success else 1
 
 

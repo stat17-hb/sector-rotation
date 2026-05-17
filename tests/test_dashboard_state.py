@@ -251,3 +251,28 @@ def test_build_stock_lookup_display_model_enriches_code_only_names_from_sector_m
         "KRX 반도체",
         "KOSPI200 정보기술",
     ]
+
+
+def test_build_stock_lookup_display_model_adds_taxonomy_traceability():
+    from config.markets import load_market_configs
+    from src.dashboard.theme_taxonomy_adapter import build_taxonomy_dashboard_model
+
+    _, sector_map, _, _ = load_market_configs("KR")
+    taxonomy_context = build_taxonomy_dashboard_model(sector_map=sector_map, market="KR")
+
+    model = state.build_stock_lookup_display_model(
+        {
+            "status": "success",
+            "sector_code": "5044",
+            "sector_name": "5044",
+            "matched_sector_candidates": [
+                {"sector_code": "5044", "sector_name": "5044", "lookup_priority": 10},
+            ],
+        },
+        sector_map,
+        taxonomy_context,
+    )
+
+    assert model["canonical_sector"]["taxonomy_label"] == "KRX 반도체"
+    assert model["canonical_sector"]["taxonomy_base_labels"] == ["반도체"]
+    assert model["matched_sectors"][0]["taxonomy_theme_labels"] == ["반도체"]

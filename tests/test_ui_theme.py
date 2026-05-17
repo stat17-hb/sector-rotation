@@ -223,8 +223,22 @@ def test_inject_css_includes_new_dashboard_layout_classes(monkeypatch):
     assert ".status-strip" in css
     assert ".command-bar" in css
     assert ".research-page-frame" in css
+    assert ".overview-workbench-header" in css
+    assert ".overview-evidence-shell" in css
     assert ".overview-review-candidates" in css
+    assert ".overview-taxonomy-surface" in css
+    assert ".overview-taxonomy-row" in css
+    assert ".sector-momentum-decision-boards" in css
+    assert ".theme-lens-panel" in css
     assert ".research-page-frame__summary" in css
+    assert "--section-gap:" in css
+    assert "--section-gap-loose:" in css
+    assert "margin-bottom: var(--section-gap)" in css
+    assert "[data-testid=\"stForm\"]" in css
+    assert "width: fit-content" in css
+    assert "width: max-content" in css
+    assert "table-layout: auto" in css
+    assert "overflow-x: auto" in css
     assert ".top-bar-summary" in css
     assert ".analysis-toolbar" in css
     assert ".analysis-toolbar__summary" in css

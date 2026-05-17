@@ -46,6 +46,7 @@ from src.ui.components import (
     render_status_card_row,
     render_top_bar_filters,
     render_top_picks_table,
+    render_taxonomy_context_panel,
 )
 
 
@@ -74,6 +75,7 @@ def _format_collection_dataset_label(dataset: object) -> str:
         "market_prices": "시장데이터",
         "macro_data": "매크로데이터",
         "investor_flow": "수급데이터",
+        "theme_taxonomy": "테마분류",
     }
     normalized = str(dataset or "").strip()
     return labels.get(normalized, normalized or "—")
@@ -296,6 +298,20 @@ def _collection_bounds_for_dataset(bounds: dict[str, Any], dataset: str, provide
 
 
 def _format_collection_data_range(dataset: str, bounds: dict[str, Any], fallback_end: object = "") -> str:
+    if dataset == "theme_taxonomy":
+        version = str(bounds.get("taxonomy_version", "") or "").strip()
+        status = str(bounds.get("verification_status", "") or "").strip()
+        verified = _format_collection_date(
+            bounds.get("last_verified_at", bounds.get("max_trade_date", fallback_end))
+        )
+        parts = []
+        if version:
+            parts.append(f"v{version}")
+        if verified != "—":
+            parts.append(f"검증 {verified}")
+        if status:
+            parts.append(status)
+        return " · ".join(parts) if parts else "—"
     monthly = dataset == "macro_data"
     if dataset == "macro_data":
         start = bounds.get("min_period_month", "")
@@ -454,18 +470,8 @@ def build_dashboard_page_options(market_id: str) -> list[DashboardPageOption]:
     normalized_market = str(market_id).strip().upper() or "KR"
     options = [
         DashboardPageOption("overview", "대시보드", f"{normalized_market.lower()}-overview"),
-        DashboardPageOption("signals", "섹터 모멘텀", f"{normalized_market.lower()}-signals"),
         DashboardPageOption("research", "상대강도 분석", f"{normalized_market.lower()}-research"),
-        DashboardPageOption("constituents", "구성종목", f"{normalized_market.lower()}-constituents"),
     ]
-    if normalized_market in {"KR", "US"}:
-        options.append(
-            DashboardPageOption(
-                "flow",
-                "투자자 수급" if normalized_market == "KR" else "ETF 수급 프록시",
-                f"{normalized_market.lower()}-flow",
-            )
-        )
     if normalized_market == "KR":
         options.append(DashboardPageOption("quality", "데이터 수집 이력", "kr-quality"))
     return options
@@ -1122,6 +1128,7 @@ def render_all_signals_tab(
     market_id: str = "KR",
     theme_lens_status: str = "UNAVAILABLE",
     theme_lens_rows: list[dict[str, Any]] | None = None,
+    taxonomy_context: Any | None = None,
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
     with tab:
@@ -1139,6 +1146,7 @@ def render_all_signals_tab(
                 {"label": "알림", "value": f"{active_alert_count}개 활성"},
             ],
         )
+        render_taxonomy_context_panel(taxonomy_context, page="signals", expanded=False)
         render_sector_momentum_decision_boards(
             signals,
             held_sectors=held_sectors,
@@ -1270,6 +1278,7 @@ def render_screening_tab(
     settings: dict[str, Any],
     benchmark_code: str = "1001",
     etf_map: dict[str, list] | None = None,
+    taxonomy_context: Any | None = None,
 ) -> None:
     """Render the 종목 스크리닝 tab: constituent stocks of Strong Buy sectors."""
     from src.data_sources.krx_stock_screening import (
@@ -1292,6 +1301,7 @@ def render_screening_tab(
                 {"label": "ETF 매핑", "value": f"{len(etf_map or {})}개"},
             ],
         )
+        render_taxonomy_context_panel(taxonomy_context, page="constituents", expanded=False)
         render_panel_header(
             eyebrow="종목 스크리닝",
             title="Strong Buy 섹터 구성종목",
@@ -1535,6 +1545,7 @@ def render_investor_flow_tab(
     flow_short_window: int = 20,
     flow_long_window: int = 60,
     market_id: str = "KR",
+    taxonomy_context: Any | None = None,
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
     with tab:
@@ -1552,6 +1563,8 @@ def render_investor_flow_tab(
                 {"label": "레코드", "value": f"{flow_frame_rows:,}건"},
             ],
         )
+        if normalized_market == "KR":
+            render_taxonomy_context_panel(taxonomy_context, page="flow", expanded=False)
         if normalized_market == "US":
             state_labels = {
                 "elevated": "활동 확대",
@@ -1798,7 +1811,7 @@ def _cached_monitoring_data(market_id: str) -> dict:
     }
     history = read_collection_run_history(
         market=market_id,
-        reasons=("manual_refresh",),
+        reasons=("manual_refresh", "sync_warehouse", "bootstrap_warehouse"),
         sample_per_dataset=True,
         sample_size=10,
     )
@@ -1840,35 +1853,40 @@ def render_monitoring_tab(
     investor_flow_fresh: bool | None = None,
     investor_flow_detail: dict[str, Any] | None = None,
     investor_flow_frame: pd.DataFrame | None = None,
+    taxonomy_context: Any | None = None,
     ui_locale: str = DEFAULT_UI_LOCALE,
 ) -> None:
     """Render the dataset collection history and health page."""
     with tab:
-        render_research_page_frame(
-            page_key="quality",
-            eyebrow="Data Quality",
-            title="데이터 수집 이력 관리",
-            description="시장, 매크로, 수급 데이터의 수집 상태와 오류 이력을 같은 기준으로 점검합니다.",
-            summary_items=[
-                {"label": "시장", "value": market_id},
-                {"label": "데이터셋", "value": "3개"},
-                {"label": "로그", "value": "최신 10건"},
-                {"label": "기준", "value": "warehouse"},
-            ],
-        )
-        render_panel_header(
-            eyebrow="운영 현황",
-            title="데이터셋별 수집 상태",
-            description="시장데이터, 매크로데이터, 수급데이터의 최신 실행 상태를 같은 열 구조로 비교합니다.",
-            badge=market_id,
-        )
-
-        data = _cached_monitoring_data(str(market_id).strip().upper())
+        normalized_market = str(market_id).strip().upper() or "KR"
+        data = _cached_monitoring_data(normalized_market)
         dataset_order: list[str] = list(data.get("dataset_order") or [])
         statuses: dict[str, dict[str, Any]] = {
             str(key): dict(value or {})
             for key, value in dict(data.get("statuses") or {}).items()
         }
+        fallback_dataset_order = ["market_prices", "macro_data", "investor_flow", "theme_taxonomy"]
+        dataset_count = len(dataset_order) if dataset_order else len(dict.fromkeys([*statuses.keys(), *fallback_dataset_order]))
+        render_research_page_frame(
+            page_key="quality",
+            eyebrow="Data Quality",
+            title="데이터 수집 이력 관리",
+            description="시장, 매크로, 수급, 테마분류 데이터의 수집 상태와 오류 이력을 같은 기준으로 점검합니다.",
+            summary_items=[
+                {"label": "시장", "value": market_id},
+                {"label": "데이터셋", "value": f"{dataset_count}개"},
+                {"label": "로그", "value": "최신 10건"},
+                {"label": "기준", "value": "warehouse"},
+            ],
+        )
+        if normalized_market == "KR":
+            render_taxonomy_context_panel(taxonomy_context, page="quality", expanded=False)
+        render_panel_header(
+            eyebrow="운영 현황",
+            title="데이터셋별 수집 상태",
+            description="시장데이터, 매크로데이터, 수급데이터, 테마분류의 최신 실행 상태를 같은 열 구조로 비교합니다.",
+            badge=market_id,
+        )
         if not statuses and isinstance(data.get("warm"), dict):
             statuses["investor_flow"] = dict(data.get("warm") or {})
         runtime_detail = dict(investor_flow_detail or {})
@@ -1887,7 +1905,7 @@ def render_monitoring_tab(
             flow_status["coverage_complete"] = bool(runtime_detail_coverage)
         statuses["investor_flow"] = flow_status
         if not dataset_order:
-            dataset_order = list(dict.fromkeys([*statuses.keys(), "market_prices", "macro_data", "investor_flow"]))
+            dataset_order = list(dict.fromkeys([*statuses.keys(), *fallback_dataset_order]))
 
         history: pd.DataFrame = data["history"]
         used_runtime_history_fallback = False
@@ -2037,6 +2055,7 @@ def render_dashboard_tabs(
     selected_page_id: str = DEFAULT_DASHBOARD_PAGE_ID,
     theme_lens_status: str = "UNAVAILABLE",
     theme_lens_rows: list[dict[str, Any]] | None = None,
+    taxonomy_context: Any | None = None,
 ) -> None:
     etf_map = _build_etf_map(sector_map)
     normalized_market = str(market_id).strip().upper() or "KR"
@@ -2103,6 +2122,7 @@ def render_dashboard_tabs(
             market_id=normalized_market,
             theme_lens_status=theme_lens_status,
             theme_lens_rows=theme_lens_rows,
+            taxonomy_context=taxonomy_context,
             ui_locale=ui_locale,
         )
     elif selected_page_id == "constituents":
@@ -2112,6 +2132,7 @@ def render_dashboard_tabs(
             settings=settings,
             benchmark_code=str(settings.get("benchmark_code", "1001")),
             etf_map=etf_map,
+            taxonomy_context=taxonomy_context,
         )
     elif selected_page_id == "flow":
         render_investor_flow_tab(
@@ -2126,6 +2147,7 @@ def render_dashboard_tabs(
             flow_short_window=int(settings.get("investor_flow_short_window", 20)),
             flow_long_window=int(settings.get("investor_flow_long_window", 60)),
             market_id=normalized_market,
+            taxonomy_context=taxonomy_context,
             ui_locale=ui_locale,
         )
     elif selected_page_id == "quality":
@@ -2136,5 +2158,6 @@ def render_dashboard_tabs(
             investor_flow_fresh=investor_flow_fresh,
             investor_flow_detail=investor_flow_detail,
             investor_flow_frame=investor_flow_frame if investor_flow_frame is not None else pd.DataFrame(),
+            taxonomy_context=taxonomy_context,
             ui_locale=ui_locale,
         )

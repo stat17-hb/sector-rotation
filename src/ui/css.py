@@ -252,6 +252,9 @@ def inject_css(theme_mode: str) -> None:
         --space-5: {layout_tokens['space_5']};
         --space-6: {layout_tokens['space_6']};
         --space-7: {layout_tokens['space_7']};
+        --section-gap: {layout_tokens['section_gap']};
+        --section-gap-tight: {layout_tokens['section_gap_tight']};
+        --section-gap-loose: {layout_tokens['section_gap_loose']};
         --font-display: {display_font_css};
         --font-ui: {ui_font_css};
         --font-body: {body_font_css};
@@ -787,7 +790,7 @@ def inject_css(theme_mode: str) -> None:
         box-shadow: none;
         border-radius: 0;
         padding: {layout_tokens['page_shell_padding']};
-        margin-bottom: 0.24rem;
+        margin-bottom: var(--section-gap);
         animation: riseIn 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
     }}
 
@@ -907,7 +910,7 @@ def inject_css(theme_mode: str) -> None:
         box-shadow: none;
         border-radius: var(--radius-md);
         padding: 0.6rem 0.78rem;
-        margin-bottom: 0.62rem;
+        margin-bottom: var(--section-gap);
         transition: none;
         animation: riseIn 480ms cubic-bezier(0.16, 1, 0.3, 1) both;
     }}
@@ -976,11 +979,11 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     .overview-reference-shell {{
-        margin-bottom: 0.48rem;
+        margin-bottom: var(--section-gap);
     }}
 
     .overview-command-surface {{
-        margin-bottom: 0.4rem;
+        margin-bottom: var(--section-gap);
     }}
 
     .overview-command-surface__header {{
@@ -988,7 +991,7 @@ def inject_css(theme_mode: str) -> None:
         grid-template-columns: minmax(150px, 0.48fr) minmax(0, 2fr);
         gap: 0.86rem;
         align-items: start;
-        margin-bottom: 0.62rem;
+        margin-bottom: var(--section-gap-tight);
     }}
 
     .overview-command-surface__copy {{
@@ -998,20 +1001,270 @@ def inject_css(theme_mode: str) -> None:
         margin-top: 0.18rem;
     }}
 
+    .overview-workbench-header {{
+        display: grid;
+        grid-template-columns: minmax(260px, 0.8fr) minmax(0, 1.2fr);
+        gap: 1.24rem;
+        align-items: start;
+        padding-bottom: var(--section-gap);
+        margin-bottom: var(--section-gap-loose);
+        border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+    }}
+
+    .overview-workbench-header__eyebrow {{
+        color: var(--primary);
+        font-family: var(--font-mono);
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
+        line-height: 1.15;
+        margin-bottom: 0.16rem;
+    }}
+
+    .overview-workbench-header__title {{
+        color: var(--text);
+        font-family: var(--font-display);
+        font-size: 1.62rem;
+        font-weight: {display_font_weight};
+        line-height: 1.08;
+        letter-spacing: 0;
+    }}
+
+    .overview-workbench-header__copy {{
+        max-width: 62ch;
+        color: var(--text-muted);
+        font-size: {body_small_font_size};
+        line-height: {body_line_height};
+        margin-top: 0.32rem;
+    }}
+
+    .overview-workbench-header__meta {{
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.42rem;
+    }}
+
+    .overview-workbench-header__meta span {{
+        min-width: 0;
+        border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+        border-radius: var(--radius-sm);
+        background: color-mix(in srgb, var(--surface) 86%, var(--surface-tint) 14%);
+        color: var(--text);
+        font-family: var(--font-mono);
+        font-size: {caption_font_size};
+        font-weight: 680;
+        line-height: 1.15;
+        padding: 0.5rem 0.56rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }}
+
+    .overview-workbench-header__meta b {{
+        display: block;
+        color: var(--text-muted);
+        font-family: var(--font-ui);
+        font-size: 0.68rem;
+        font-weight: 620;
+        line-height: 1.1;
+        margin-bottom: 0.14rem;
+    }}
+
+    .overview-evidence-shell {{
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: var(--section-gap);
+        padding-bottom: var(--section-gap);
+        margin-bottom: var(--section-gap);
+        border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+    }}
+
+    .overview-taxonomy-surface {{
+        display: grid;
+        gap: var(--section-gap);
+        margin-bottom: var(--section-gap-loose);
+    }}
+
+    .overview-taxonomy-surface__header {{
+        display: grid;
+        grid-template-columns: minmax(260px, 0.74fr) minmax(0, 1.26fr);
+        gap: 1rem;
+        align-items: start;
+    }}
+
+    .overview-taxonomy-surface__eyebrow {{
+        color: var(--primary);
+        font-family: var(--font-mono);
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
+        line-height: 1.15;
+        margin-bottom: 0.18rem;
+    }}
+
+    .overview-taxonomy-surface__title {{
+        color: var(--text);
+        font-family: var(--font-display);
+        font-size: 1.72rem;
+        font-weight: {display_font_weight};
+        line-height: 1.06;
+        letter-spacing: 0;
+    }}
+
+    .overview-taxonomy-surface__copy {{
+        max-width: 54ch;
+        color: var(--text-muted);
+        font-size: {body_small_font_size};
+        line-height: {body_line_height};
+        margin-top: 0.36rem;
+    }}
+
+    .overview-taxonomy-stats {{
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.42rem;
+    }}
+
+    .overview-taxonomy-stat {{
+        min-width: 0;
+        border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
+        border-radius: var(--radius-sm);
+        background: color-mix(in srgb, var(--surface) 86%, var(--surface-tint) 14%);
+        padding: 0.52rem 0.58rem;
+    }}
+
+    .overview-taxonomy-stat span {{
+        display: block;
+        color: var(--text-muted);
+        font-size: {caption_font_size};
+        font-weight: 620;
+        line-height: 1.12;
+        margin-bottom: 0.16rem;
+    }}
+
+    .overview-taxonomy-stat strong {{
+        display: block;
+        color: var(--text);
+        font-family: var(--font-mono);
+        font-size: 0.82rem;
+        font-weight: 680;
+        line-height: 1.16;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }}
+
+    .overview-taxonomy-map {{
+        border: 1px solid color-mix(in srgb, var(--primary) 24%, var(--border));
+        border-radius: var(--radius-sm);
+        overflow: hidden;
+        background: color-mix(in srgb, var(--surface) 90%, var(--surface-tint) 10%);
+    }}
+
+    .overview-taxonomy-map__header {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 0.72rem;
+        padding: 0.58rem 0.68rem;
+        border-bottom: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
+        color: var(--text-muted);
+        font-size: {caption_font_size};
+        font-weight: {badge_font_weight};
+        line-height: 1.2;
+    }}
+
+    .overview-taxonomy-map__header strong {{
+        color: var(--primary);
+        font-family: var(--font-mono);
+        font-weight: 680;
+    }}
+
+    .overview-taxonomy-row {{
+        display: grid;
+        grid-template-columns: minmax(170px, 1.1fr) minmax(120px, 0.72fr) minmax(120px, 0.72fr) minmax(120px, 0.72fr) minmax(92px, 0.38fr);
+        gap: 0.54rem;
+        align-items: center;
+        padding: 0.54rem 0.68rem;
+        border-bottom: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+    }}
+
+    .overview-taxonomy-row:last-child {{
+        border-bottom: 0;
+    }}
+
+    .overview-taxonomy-row__sector,
+    .overview-taxonomy-row__cell,
+    .overview-taxonomy-row__action {{
+        min-width: 0;
+    }}
+
+    .overview-taxonomy-row__sector strong,
+    .overview-taxonomy-row__cell strong,
+    .overview-taxonomy-row__action strong {{
+        display: block;
+        color: var(--text);
+        font-size: {body_small_font_size};
+        font-weight: 680;
+        line-height: 1.2;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }}
+
+    .overview-taxonomy-row__sector span,
+    .overview-taxonomy-row__cell span {{
+        display: block;
+        color: var(--text-muted);
+        font-size: {caption_font_size};
+        font-weight: 560;
+        line-height: 1.18;
+        margin-bottom: 0.12rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }}
+
+    .overview-taxonomy-row__action strong {{
+        color: var(--primary);
+        font-family: var(--font-mono);
+        text-align: right;
+    }}
+
+    .overview-taxonomy-empty,
+    .overview-taxonomy-diagnostics {{
+        color: var(--text-muted);
+        font-size: {body_small_font_size};
+        line-height: {body_line_height};
+        padding: 0.72rem;
+    }}
+
+    .overview-taxonomy-diagnostics {{
+        border: 1px solid color-mix(in srgb, var(--warning) 34%, var(--border));
+        border-radius: var(--radius-sm);
+        background: color-mix(in srgb, var(--warning) 8%, transparent);
+        color: var(--warning);
+        padding: 0.52rem 0.62rem;
+    }}
+
     .overview-section-title {{
         color: var(--text);
         font-family: var(--font-ui);
         font-size: {section_title_size};
         font-weight: {heading_font_weight};
         line-height: {heading_line_height};
-        margin-bottom: 0.42rem;
+        margin-bottom: 0.78rem;
         letter-spacing: 0;
+    }}
+
+    .overview-section-title--sub {{
+        margin-top: var(--section-gap);
+        font-size: {body_small_font_size};
     }}
 
     .overview-market-grid {{
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 0.5rem;
+        gap: 0.92rem;
     }}
 
     .overview-market-card {{
@@ -1112,8 +1365,9 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     .overview-review-candidates {{
-        margin-top: 0.72rem;
-        padding-top: 0.72rem;
+        margin-top: var(--section-gap);
+        padding-top: var(--section-gap-tight);
+        margin-bottom: var(--section-gap-loose);
         border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
     }}
 
@@ -1121,12 +1375,25 @@ def inject_css(theme_mode: str) -> None:
         padding-bottom: 0.18rem;
     }}
 
+    .sector-momentum-decision-boards {{
+        margin-top: var(--section-gap);
+        margin-bottom: var(--section-gap);
+    }}
+
+    .sector-momentum-decision-boards + .sector-momentum-decision-boards {{
+        margin-top: var(--section-gap-loose);
+    }}
+
+    .theme-lens-panel {{
+        margin-bottom: var(--section-gap);
+    }}
+
     .overview-review-candidates__header {{
         display: flex;
         align-items: flex-start;
         justify-content: space-between;
-        gap: 0.72rem;
-        margin-bottom: 0.58rem;
+        gap: var(--section-gap-tight);
+        margin-bottom: var(--section-gap);
     }}
 
     .overview-review-candidates__basis {{
@@ -1145,7 +1412,7 @@ def inject_css(theme_mode: str) -> None:
     .overview-review-candidates__grid {{
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 0.52rem;
+        gap: var(--section-gap-tight);
     }}
 
     .overview-review-card {{
@@ -1153,7 +1420,7 @@ def inject_css(theme_mode: str) -> None:
         border: 1px solid var(--border);
         background: color-mix(in srgb, var(--surface) 90%, var(--surface-tint) 10%);
         border-radius: var(--radius-sm);
-        padding: 0.68rem 0.72rem;
+        padding: 0.84rem 0.9rem;
         animation: riseIn 420ms cubic-bezier(0.16, 1, 0.3, 1) both;
         transition: border-color 0.18s ease, background-color 0.18s ease;
     }}
@@ -1239,15 +1506,20 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     .overview-sector-table-wrap {{
-        max-height: 462px;
-        overflow: auto;
+        width: 100%;
+        max-width: 100%;
+        max-height: 392px;
+        overflow-y: auto;
+        overflow-x: auto;
         border: 1px solid var(--border);
         border-radius: var(--radius-sm);
         background: var(--surface);
     }}
 
     .overview-sector-table {{
-        width: 100%;
+        width: max-content;
+        max-width: 100%;
+        table-layout: auto;
         border-collapse: collapse;
         font-size: {caption_font_size};
         color: var(--text);
@@ -1278,11 +1550,12 @@ def inject_css(theme_mode: str) -> None:
         font-family: var(--font-mono);
         font-variant-numeric: tabular-nums;
         text-align: right;
+        white-space: nowrap;
     }}
 
     .overview-sector-table td:nth-child(2) {{
         font-weight: 650;
-        min-width: 8rem;
+        line-height: 1.25;
     }}
 
     .overview-sector-subtext {{
@@ -1304,58 +1577,21 @@ def inject_css(theme_mode: str) -> None:
         font-weight: 650;
     }}
 
-    .overview-heatmap-grid {{
-        display: grid;
-        grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 0.35rem;
-    }}
-
-    .overview-heatmap-tile {{
-        min-height: 3.75rem;
-        border: 1px solid var(--border);
-        border-radius: var(--radius-sm);
-        padding: 0.62rem;
-        display: flex;
-        flex-direction: column;
-        justify-content: center;
-        gap: 0.18rem;
-        text-align: center;
-    }}
-
-    .overview-heatmap-tile[data-tone="positive"] {{
-        background: color-mix(in srgb, var(--success) var(--tile-strength), #ffffff);
-        color: #ffffff;
-        border-color: color-mix(in srgb, var(--success) 42%, var(--border));
-    }}
-
-    .overview-heatmap-tile[data-tone="negative"] {{
-        background: color-mix(in srgb, var(--danger) var(--tile-strength), #ffffff);
-        color: #ffffff;
-        border-color: color-mix(in srgb, var(--danger) 42%, var(--border));
-    }}
-
-    .overview-heatmap-tile span {{
-        font-size: {caption_font_size};
-        font-weight: {badge_font_weight};
-        line-height: 1.24;
-    }}
-
-    .overview-heatmap-tile strong {{
-        font-family: var(--font-mono);
-        font-size: 0.98rem;
-        font-weight: 680;
-        font-variant-numeric: tabular-nums;
-    }}
-
     div[data-testid="stVerticalBlockBorderWrapper"] {{
         border-color: var(--border) !important;
         background: {card_background_css};
         box-shadow: {card_shadow_css};
         border-radius: var(--radius-lg) !important;
+        margin-bottom: var(--section-gap-loose);
+    }}
+
+    [data-testid="stForm"] {{
+        margin-top: var(--section-gap-tight);
+        margin-bottom: var(--section-gap);
     }}
 
     .command-bar {{
-        margin-bottom: 0.62rem;
+        margin-bottom: var(--section-gap-tight);
     }}
 
     .command-bar--compact {{
@@ -1425,6 +1661,7 @@ def inject_css(theme_mode: str) -> None:
         line-height: {body_line_height};
         padding: 0.86rem 1rem;
         min-height: 3.35rem;
+        margin-bottom: var(--section-gap);
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
         gap: 0.65rem;
@@ -1456,7 +1693,7 @@ def inject_css(theme_mode: str) -> None:
         box-shadow: none;
         border-radius: var(--radius-lg);
         padding: {layout_tokens['panel_padding']};
-        margin-bottom: 0.86rem;
+        margin-bottom: var(--section-gap);
     }}
 
     .analysis-toolbar__eyebrow {{
@@ -1490,7 +1727,7 @@ def inject_css(theme_mode: str) -> None:
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 0.68rem;
-        margin-top: 0.7rem;
+        margin-top: var(--section-gap-tight);
     }}
 
     .analysis-toolbar__summary-item {{
@@ -1519,15 +1756,15 @@ def inject_css(theme_mode: str) -> None:
     }}
 
     .phase-chip-row {{
-        margin-bottom: 0.55rem;
+        margin-bottom: var(--section-gap-tight);
     }}
 
     .cycle-palette {{
         display: flex;
         flex-wrap: wrap;
         align-items: center;
-        gap: 0.7rem;
-        margin-bottom: 0.7rem;
+        gap: 0.74rem;
+        margin-bottom: var(--section-gap-tight);
     }}
 
     .cycle-palette__label {{
@@ -1629,13 +1866,13 @@ def inject_css(theme_mode: str) -> None:
     .decision-hero {{
         display: grid;
         grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.85fr);
-        gap: 0.95rem;
+        gap: 1.08rem;
         border: 1px solid var(--border);
         background: var(--surface);
         box-shadow: none;
         border-radius: var(--radius-lg);
         padding: 1rem 1.08rem 0.98rem;
-        margin-bottom: 0.9rem;
+        margin-bottom: var(--section-gap);
         position: relative;
         overflow: hidden;
         animation: riseIn 520ms cubic-bezier(0.16, 1, 0.3, 1) both;
@@ -1723,7 +1960,7 @@ def inject_css(theme_mode: str) -> None:
     .status-card-grid,
     .summary-kpi-grid {{
         display: grid;
-        gap: 0.58rem;
+        gap: 0.68rem;
     }}
 
     .decision-hero__stats {{
@@ -1735,12 +1972,12 @@ def inject_css(theme_mode: str) -> None:
 
     .status-card-grid {{
         grid-template-columns: repeat(4, minmax(0, 1fr));
-        margin-bottom: 0.72rem;
+        margin-bottom: var(--section-gap);
     }}
 
     .summary-kpi-grid {{
         grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-        margin-bottom: 0.72rem;
+        margin-bottom: var(--section-gap);
     }}
 
     .decision-hero__stat,
@@ -1807,7 +2044,7 @@ def inject_css(theme_mode: str) -> None:
         background: color-mix(in srgb, var(--surface) 94%, transparent);
         border-radius: var(--radius-md);
         padding: 0.88rem 1rem;
-        margin-bottom: 0.9rem;
+        margin-bottom: var(--section-gap);
     }}
 
     .compact-note b {{
@@ -1818,13 +2055,13 @@ def inject_css(theme_mode: str) -> None:
     .research-page-frame {{
         display: grid;
         grid-template-columns: minmax(0, 1.35fr) minmax(260px, 0.65fr);
-        gap: 0.9rem;
+        gap: 1.08rem;
         align-items: stretch;
         border: 1px solid var(--border);
         border-radius: var(--radius-sm);
         background: color-mix(in srgb, var(--surface) 96%, var(--surface-tint) 4%);
         padding: 0.9rem 1rem;
-        margin: 0 0 0.82rem;
+        margin: 0 0 var(--section-gap);
     }}
 
     .research-page-frame__copy {{
@@ -1892,7 +2129,7 @@ def inject_css(theme_mode: str) -> None:
         align-items: flex-start;
         justify-content: space-between;
         gap: 1rem;
-        margin-bottom: 0.68rem;
+        margin-bottom: var(--section-gap-tight);
     }}
 
     .panel-header__eyebrow {{
@@ -1937,8 +2174,8 @@ def inject_css(theme_mode: str) -> None:
     .top-picks-container {{
         display: flex;
         flex-direction: column;
-        gap: 0.52rem;
-        margin-bottom: 0.6rem;
+        gap: 0.68rem;
+        margin-bottom: var(--section-gap-tight);
     }}
 
     .top-pick-card {{
@@ -2054,8 +2291,8 @@ def inject_css(theme_mode: str) -> None:
     .flow-container {{
         display: flex;
         flex-direction: column;
-        gap: 0.52rem;
-        margin-bottom: 0.6rem;
+        gap: 0.68rem;
+        margin-bottom: var(--section-gap-tight);
     }}
 
     .flow-card {{
@@ -2387,14 +2624,14 @@ def inject_css(theme_mode: str) -> None:
         }}
 
         .page-shell {{
-            padding: 0.46rem 0 0.58rem;
+            padding: 0.46rem 0 0.72rem;
             border-bottom: 1px solid var(--border);
-            margin-bottom: 0.18rem;
+            margin-bottom: var(--section-gap-tight);
         }}
 
         .page-shell__grid {{
             grid-template-columns: 1fr;
-            gap: 0.34rem;
+            gap: 0.52rem;
         }}
 
         .page-shell__meta {{
@@ -2445,7 +2682,7 @@ def inject_css(theme_mode: str) -> None:
             grid-template-columns: auto 1fr auto;
             gap: 0.38rem;
             padding: 0.42rem 0.52rem;
-            margin-bottom: 0.42rem;
+            margin-bottom: var(--section-gap-tight);
             border-radius: var(--radius-sm);
         }}
 
@@ -2513,24 +2750,76 @@ def inject_css(theme_mode: str) -> None:
         }}
 
         .overview-reference-shell {{
-            margin-bottom: 0.28rem;
+            margin-bottom: var(--section-gap);
         }}
 
         .overview-command-surface {{
-            margin-bottom: 0.28rem;
+            margin-bottom: var(--section-gap);
         }}
 
         .overview-command-surface__header {{
-            gap: 0.38rem;
-            margin-bottom: 0.36rem;
+            gap: var(--section-gap-tight);
+            margin-bottom: var(--section-gap);
         }}
 
         .overview-command-surface__copy {{
             display: none;
         }}
 
-        .overview-heatmap-grid {{
+        .overview-workbench-header,
+        .overview-evidence-shell {{
             grid-template-columns: 1fr;
+            display: grid;
+            gap: var(--section-gap);
+            padding-bottom: var(--section-gap);
+            margin-bottom: var(--section-gap-loose);
+        }}
+
+        .overview-workbench-header__title {{
+            font-size: 1.34rem;
+        }}
+
+        .overview-workbench-header__copy {{
+            display: none;
+        }}
+
+        .overview-workbench-header__meta {{
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }}
+
+        .overview-taxonomy-surface__header {{
+            grid-template-columns: 1fr;
+            gap: var(--section-gap-tight);
+        }}
+
+        .overview-taxonomy-surface__title {{
+            font-size: 1.42rem;
+        }}
+
+        .overview-taxonomy-surface__copy {{
+            display: none;
+        }}
+
+        .overview-taxonomy-stats {{
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+        }}
+
+        .overview-taxonomy-row {{
+            grid-template-columns: 1fr;
+            gap: 0.3rem;
+            padding: 0.58rem 0.62rem;
+        }}
+
+        .overview-taxonomy-row__sector strong,
+        .overview-taxonomy-row__cell strong,
+        .overview-taxonomy-row__action strong,
+        .overview-taxonomy-row__sector span,
+        .overview-taxonomy-row__cell span {{
+            white-space: normal;
+        }}
+
+        .overview-taxonomy-row__action strong {{
+            text-align: left;
         }}
 
         .overview-market-grid {{
@@ -2557,14 +2846,15 @@ def inject_css(theme_mode: str) -> None:
         }}
 
         .overview-review-candidates {{
-            margin-top: 0.56rem;
-            padding-top: 0.58rem;
+            margin-top: var(--section-gap);
+            padding-top: var(--section-gap);
+            margin-bottom: var(--section-gap-loose);
         }}
 
         .overview-review-candidates__header {{
             flex-direction: column;
-            gap: 0.42rem;
-            margin-bottom: 0.48rem;
+            gap: var(--section-gap-tight);
+            margin-bottom: var(--section-gap);
         }}
 
         .overview-review-candidates__basis {{
@@ -2573,11 +2863,11 @@ def inject_css(theme_mode: str) -> None:
 
         .overview-review-candidates__grid {{
             grid-template-columns: 1fr;
-            gap: 0.42rem;
+            gap: var(--section-gap-tight);
         }}
 
         .overview-review-card {{
-            padding: 0.58rem 0.62rem;
+            padding: 0.72rem 0.78rem;
         }}
 
         .overview-review-card__invalidation {{
@@ -2608,7 +2898,7 @@ def inject_css(theme_mode: str) -> None:
 
         .panel-header {{
             flex-direction: column;
-            gap: 0.7rem;
+            gap: var(--section-gap-tight);
         }}
 
         [data-testid="stTabs"] [data-baseweb="tab"] {{

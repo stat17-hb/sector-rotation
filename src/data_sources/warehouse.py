@@ -21,6 +21,7 @@ WarehouseDataset = Literal[
     "market_prices",
     "macro_data",
     "investor_flow",
+    "theme_taxonomy",
     "investor_flow_operational_complete",
     "investor_flow_backfill_progress",
 ]
@@ -32,6 +33,7 @@ DEFAULT_PRICE_EXPORT_PATH_US = Path("data/curated/sector_prices_us.parquet")
 DEFAULT_MACRO_EXPORT_PATH_US = Path("data/curated/macro_monthly_us.parquet")
 KR_SECTOR_MAP_PATH = Path("config/sector_map.yml")
 INVESTOR_FLOW_DATASET = "investor_flow"
+THEME_TAXONOMY_DATASET = "theme_taxonomy"
 INVESTOR_FLOW_OPERATIONAL_COMPLETE_DATASET = "investor_flow_operational_complete"
 INVESTOR_FLOW_BACKFILL_PROGRESS_DATASET = "investor_flow_backfill_progress"
 
@@ -54,19 +56,30 @@ class _CachedROConn:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._conn: duckdb.DuckDBPyConnection | None = None
+        self._path: str = ""
         self._mtime: float = 0.0
 
     def get(self) -> "_NoopCloseConn":
         with self._lock:
+            current_path = str(WAREHOUSE_PATH)
             current_mtime = WAREHOUSE_PATH.stat().st_mtime if WAREHOUSE_PATH.exists() else 0.0
-            if self._conn is None or self._mtime != current_mtime:
+            if self._conn is None or self._path != current_path or self._mtime != current_mtime:
                 if self._conn is not None:
                     try:
                         self._conn.close()
                     except Exception:
                         pass
                 connect_kwargs = {"read_only": True} if WAREHOUSE_PATH.exists() else {}
-                self._conn = duckdb.connect(str(WAREHOUSE_PATH), **connect_kwargs)
+                try:
+                    self._conn = duckdb.connect(current_path, **connect_kwargs)
+                except duckdb.ConnectionException as exc:
+                    if not _is_same_database_different_config_error(exc):
+                        raise
+                    # A same-process write/default connection is already open.
+                    # Match that configuration so interactive status probes do
+                    # not crash while the existing connection is still alive.
+                    self._conn = duckdb.connect(current_path, read_only=False)
+                self._path = current_path
                 self._mtime = current_mtime
         return _NoopCloseConn(self._conn)
 
@@ -79,6 +92,7 @@ class _CachedROConn:
                 except Exception:
                     pass
                 self._conn = None
+            self._path = ""
             self._mtime = 0.0
 
 
@@ -98,6 +112,15 @@ class _NoopCloseConn:
 
 
 _ro_cache = _CachedROConn()
+
+
+def _is_same_database_different_config_error(exc: BaseException) -> bool:
+    message = str(exc)
+    return (
+        "same database file" in message
+        and "different configuration" in message
+        and "existing connections" in message
+    )
 
 
 def _connect_ro() -> _NoopCloseConn:
@@ -2428,6 +2451,7 @@ def read_dataset_status(dataset: WarehouseDataset, *, market: str = "KR") -> dic
                 abort_reason,
                 predicted_requests,
                 processed_requests,
+                row_count,
                 created_at
             FROM ingest_runs
             WHERE dataset = ? AND market = ?
@@ -2481,16 +2505,21 @@ def read_dataset_status(dataset: WarehouseDataset, *, market: str = "KR") -> dic
                 "abort_reason": str(run_row[10] or "").strip(),
                 "predicted_requests": int(run_row[11] or 0),
                 "processed_requests": int(run_row[12] or 0),
-                "created_at": run_row[13],
+                "row_count": int(run_row[13] or 0),
+                "created_at": run_row[14],
             }
         )
     if watermark_row is not None:
+        details = dict(_deserialize_json(watermark_row[4], {}))
         result.setdefault("status", str(watermark_row[2] or "").strip().upper())
         result.setdefault("provider", str(watermark_row[3] or "").strip().upper())
         watermark_key = str(watermark_row[0] or "").strip()
         if len("".join(ch for ch in watermark_key if ch.isdigit())) >= 6:
             result.setdefault("end", "".join(ch for ch in watermark_key if ch.isdigit())[:8])
         result.setdefault("coverage_complete", bool(watermark_row[1]))
+        if "row_count" not in result and details:
+            result["row_count"] = int(details.get("row_count", details.get("runtime_index_count", 0)) or 0)
+        result["details"] = details
         result["watermark_key"] = watermark_key
         result["updated_at"] = watermark_row[5]
     return result
@@ -2509,6 +2538,20 @@ def read_dataset_data_bounds(
     _ensure_schema_for_readers()
     normalized_market = _normalize_market_id(market)
     dataset_key = str(dataset or "").strip()
+    if dataset_key == THEME_TAXONOMY_DATASET:
+        status = read_dataset_status(dataset, market=normalized_market)
+        details = dict(status.get("details") or {})
+        verified_at = str(details.get("last_verified_at", status.get("end", "")) or "")
+        verified_digits = "".join(ch for ch in verified_at if ch.isdigit())[:8]
+        row_count = int(details.get("row_count", details.get("runtime_index_count", status.get("row_count", 0))) or 0)
+        return {
+            "min_trade_date": verified_digits,
+            "max_trade_date": verified_digits,
+            "row_count": row_count,
+            "taxonomy_version": details.get("taxonomy_version", ""),
+            "last_verified_at": details.get("last_verified_at", verified_at),
+            "verification_status": details.get("verification_status", ""),
+        } if status or details else {}
     if dataset_key == "market_prices":
         table = "fact_krx_index_daily"
         date_col = "trade_date"
@@ -2588,6 +2631,20 @@ def probe_dataset_mode(dataset: WarehouseDataset, *, market: str = "KR") -> str:
             table = "fact_krx_index_daily"
         elif dataset == "macro_data":
             table = "fact_macro_monthly"
+        elif dataset == THEME_TAXONOMY_DATASET:
+            if not _table_exists(con, "ingest_watermarks"):
+                return "SAMPLE"
+            row = con.execute(
+                """
+                SELECT status, coverage_complete
+                FROM ingest_watermarks
+                WHERE dataset = ? AND market = ?
+                """,
+                [THEME_TAXONOMY_DATASET, normalized_market],
+            ).fetchone()
+            if row is None:
+                return "SAMPLE"
+            return "CACHED" if str(row[0] or "").strip().upper() in {"LIVE", "CACHED"} and bool(row[1]) else "SAMPLE"
         else:
             table = "fact_investor_flow_sector_daily"
         if not _table_exists(con, table):
@@ -2643,6 +2700,7 @@ COLLECTION_HISTORY_DATASETS: tuple[WarehouseDataset, ...] = (
     "market_prices",
     "macro_data",
     "investor_flow",
+    THEME_TAXONOMY_DATASET,
 )
 
 
