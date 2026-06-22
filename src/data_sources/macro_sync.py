@@ -9,6 +9,7 @@ from typing import Any, Callable, Literal
 import pandas as pd
 
 from src.contracts.validators import normalize_then_validate
+from src.data_sources.macro_freshness import build_macro_freshness_payload
 from src.data_sources.warehouse import (
     close_cached_read_only_connection,
     export_macro_parquet,
@@ -213,6 +214,14 @@ def sync_provider_macro(
         )
         if not fallback.empty:
             validated = normalize_then_validate(fallback, "macro_monthly")
+            fallback_latest = get_macro_latest_periods(aliases, market=market)
+            freshness_payload = build_macro_freshness_payload(
+                requested_end=normalized_end,
+                provider_configs={provider: active_config},
+                latest_periods=fallback_latest,
+                failed_aliases={},
+                write_lock_fallback=True,
+            )
             return "CACHED", validated, {
                 "provider": provider,
                 "status": "CACHED",
@@ -222,6 +231,7 @@ def sync_provider_macro(
                 "start": normalized_start,
                 "end": normalized_end,
                 "reason": reason,
+                **freshness_payload,
             }
         raise
     delta_aliases: list[str] = []
@@ -284,6 +294,13 @@ def sync_provider_macro(
         validated = normalize_then_validate(final_frame, "macro_monthly")
         export_macro_parquet(market=market)
         status = "LIVE" if delta_aliases else "CACHED"
+        final_latest = get_macro_latest_periods(aliases, market=market)
+        freshness_payload = build_macro_freshness_payload(
+            requested_end=normalized_end,
+            provider_configs={provider: active_config},
+            latest_periods=final_latest,
+            failed_aliases=failed_aliases,
+        )
         summary = {
             "provider": provider,
             "status": status,
@@ -294,6 +311,7 @@ def sync_provider_macro(
             "end": normalized_end,
             "reason": reason,
             "rows": int(len(validated)),
+            **freshness_payload,
         }
         record_ingest_run(
             dataset="macro_data",
@@ -335,6 +353,7 @@ def sync_provider_macro(
                 "reason": reason,
                 "delta_aliases": delta_aliases,
                 "failed_aliases": failed_aliases,
+                **freshness_payload,
             },
             market=market,
         )
@@ -350,6 +369,12 @@ def sync_provider_macro(
         "end": normalized_end,
         "reason": reason,
         "rows": 0,
+        **build_macro_freshness_payload(
+            requested_end=normalized_end,
+            provider_configs={provider: active_config},
+            latest_periods=get_macro_latest_periods(aliases, market=market),
+            failed_aliases=failed_aliases,
+        ),
     }
     record_ingest_run(
         dataset="macro_data",
@@ -484,6 +509,26 @@ def sync_macro_warehouse(
     frames = [payload[1] for payload in provider_results.values() if not payload[1].empty]
     combined = pd.concat(frames).sort_index() if frames else pd.DataFrame()
     provider_summaries = {name: payload[2] for name, payload in provider_results.items()}
+    combined_failed_aliases: dict[str, str] = {}
+    for payload in provider_summaries.values():
+        combined_failed_aliases.update(dict(payload.get("failed_aliases") or {}))
+    combined_active_config: dict[str, dict[str, Any]] = {}
+    for name, cfg in (("ECOS", ecos_cfg), ("KOSIS", kosis_cfg), ("FRED", fred_cfg)):
+        if cfg:
+            combined_active_config[name] = cfg
+    combined_aliases = sorted(
+        {
+            alias
+            for cfg in combined_active_config.values()
+            for alias in cfg
+        }
+    )
+    combined_freshness = build_macro_freshness_payload(
+        requested_end=_normalize_month_token(end_ym),
+        provider_configs=combined_active_config,
+        latest_periods=get_macro_latest_periods(combined_aliases, market=market),
+        failed_aliases=combined_failed_aliases,
+    )
     summary = {
         "status": status,
         "coverage_complete": all(bool(item.get("coverage_complete")) for item in provider_summaries.values()),
@@ -492,5 +537,6 @@ def sync_macro_warehouse(
         "start": _normalize_month_token(start_ym),
         "end": _normalize_month_token(end_ym),
         "reason": reason,
+        **combined_freshness,
     }
     return status, combined, summary

@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Literal, Mapping, TypedDict
 
+from src.data_sources.macro_freshness import summarize_macro_freshness
+
 
 PriceCacheBannerCase = Literal[
     "fresh_cache",
@@ -185,10 +187,12 @@ def resolve_dashboard_status_banner(
     openapi_key_warning: bool = False,
     preflight_status: Mapping[str, Mapping[str, Any]] | None = None,
     price_warm_status: Mapping[str, Any] | None = None,
+    macro_status_detail: Mapping[str, Any] | None = None,
 ) -> DashboardStatusBanner | None:
     """Return the highest-priority dashboard status banner payload."""
     price_status = str(data_status.get("price", "")).strip().upper()
     macro_status = str(data_status.get("macro", "")).strip().upper()
+    macro_detail = dict(macro_status_detail or {})
     preflight_details = _summarize_preflight_issues(preflight_status)
     warm_details = _summarize_warm_failures(price_warm_status)
 
@@ -263,8 +267,21 @@ def resolve_dashboard_status_banner(
             ],
         }
 
+    if macro_status == "LIVE" and macro_detail and not bool(macro_detail.get("coverage_complete", True)):
+        details = summarize_macro_freshness(macro_detail)
+        if not details:
+            details = ["요청한 월까지 모든 매크로 계열이 도달하지 않았습니다."]
+        details.extend(preflight_details)
+        return {
+            "level": "warning",
+            "title": "매크로 데이터 부분 커버리지",
+            "message": "매크로 갱신은 실행됐지만 일부 계열은 공급자 최신 반영이 늦거나 설정되지 않았습니다.",
+            "details": details,
+        }
+
     if macro_status == "CACHED":
         details = ["매크로 데이터는 현재 로컬 warehouse cache를 사용 중입니다."]
+        details.extend(summarize_macro_freshness(macro_detail))
         details.extend(preflight_details)
         return {
             "level": "warning",
@@ -282,3 +299,20 @@ def resolve_dashboard_status_banner(
         }
 
     return None
+
+
+def resolve_macro_status_display(
+    *,
+    macro_status: str,
+    macro_status_detail: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    """Return a compact value/tone pair for macro status pills."""
+    normalized = str(macro_status or "").strip().upper() or "SAMPLE"
+    detail = dict(macro_status_detail or {})
+    if normalized == "SAMPLE":
+        return {"value": normalized, "tone": "danger"}
+    if normalized == "LIVE" and detail and not bool(detail.get("coverage_complete", True)):
+        return {"value": "PARTIAL", "tone": "warning"}
+    if normalized == "CACHED":
+        return {"value": normalized, "tone": "warning"}
+    return {"value": normalized, "tone": "success"}

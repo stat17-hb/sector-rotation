@@ -1,3 +1,203 @@
+# 2026-06-15 - MOTIE Trade Dashboard HTML Demo
+
+## Goal
+- 산업부 수출입 자료를 대시보드에 어떻게 노출할지 정적 HTML 데모로 보여준다.
+- `MOTIE_TRADE_RELEASE`와 ECOS 섹터 export proxy의 freshness 분리를 UI에서 확인 가능하게 만든다.
+- 실제 구현 전, 레이아웃/상태/데이터 흐름을 빠르게 검토할 수 있게 한다.
+
+## Frontend Notes
+- Visual thesis: 투자 리서치 터미널처럼 조용한 표면, 강한 숫자 대비, 얇은 구분선으로 데이터 출처 차이를 즉시 읽게 한다.
+- Content plan: 상단 status strip, 산업부 속보 영역, ECOS proxy 지연 영역, ingest/data model 흐름, 구현 단계.
+- Interaction thesis: source toggle, schema lane hover, scroll reveal로 경계와 흐름을 명확히 한다.
+
+## Checklist
+- [x] 기존 ralplan 결정사항 확인
+- [x] 정적 HTML 데모 작성
+- [ ] HTML 파일 존재/핵심 문구 검증
+- [ ] 결과 경로 공유
+
+## Review
+- In progress.
+
+# 2026-06-15 - Ralplan MOTIE Trade Dashboard Implementation Plan
+
+## Goal
+- `$autoresearch` 결과를 바탕으로 산업부 수출입 동향 자료를 대시보드에 보여주는 구현 계획을 작성한다.
+- 기존 ECOS 섹터별 수출 proxy와 산업부 aggregate release의 경계를 계획 단계에서 고정한다.
+- `$ralplan` consensus 형식에 맞춰 계획, 검토, 검증 결과를 남긴다.
+
+## Checklist
+- [x] stale autoresearch 상태 확인
+- [x] `$ralplan` / `$plan` skill 지침 확인
+- [x] 공식 산업부/공공데이터포털 근거 재확인
+- [x] 관련 코드 접점과 기존 테스트 경로 확인
+- [x] context snapshot 및 ralplan draft 작성
+- [x] Architect 검토 반영
+- [x] Critic 검토 반영
+- [x] 최종 계획 파일 저장 및 검증
+
+## Review
+- Output:
+  `.omx/plans/motie-trade-dashboard-implementation.md`
+  `.omx/context/motie-trade-dashboard-implementation-20260615T102911Z.md`
+- Consensus:
+  Architect returned `REVISE`; the plan now forbids writing MOTIE rows to `fact_macro_monthly`, separates release status from macro freshness, standardizes `source_provider="MOTIE_TRADE_RELEASE"`, and adds latest-table plus append-only revision history.
+  Critic returned `APPROVE`; Architect feedback was considered sufficiently applied.
+- Recommendation:
+  Implement dedicated MOTIE trade release storage/status/UI, not macro alias reuse.
+- Verification:
+  Required plan sections exist.
+  Plan contains source-boundary tests, revision-history acceptance criteria, status separation from macro freshness, full pytest, and Streamlit smoke verification.
+
+# 2026-06-14 - Autoresearch MOTIE Trade Dashboard Research
+
+## Goal
+- 산업부 월별 수출입 동향 자료를 대시보드에 보여주기 위한 원천/수집/UI/검증 방식을 연구한다.
+- 산업부 aggregate 수출입 속보와 ECOS 섹터별 수출 proxy를 분리하는 기준을 세운다.
+- `$autoresearch` completion artifact를 남겨 hook validation을 완료한다.
+
+## Checklist
+- [x] `$autoresearch` skill 지침 확인 및 prompt-architect validation mode 설정
+- [x] 산업부 2026년 5월 수출입 동향 공식 페이지 확인
+- [x] 공공데이터포털 산업부 수출입동향 정보의 monthly feed 적합성 검토
+- [x] 기존 macro/sector export 코드 경로와 UI 접점 확인
+- [x] 연구 보고서, sandbox note, completion result 작성
+- [x] JSON parse 및 output artifact 존재 검증
+
+## Review
+- Output:
+  `.omx/specs/autoresearch-motie-trade-dashboard/report.md`
+  `.omx/specs/autoresearch-motie-trade-dashboard/result.json`
+- Recommendation:
+  산업부 자료는 `MOTIE_TRADE_RELEASE` aggregate 수출입 속보로 별도 노출하고, 기존 `섹터별 수출 YoY 월별 추이` ECOS proxy와 섞지 않는다.
+- Key finding:
+  산업부 공식 보도자료는 2026년 5월 수출입 동향을 2026-06-01에 게시했다.
+  공공데이터포털 산업부 수출입동향 정보는 공식 후보지만 확인된 메타데이터상 연간 갱신/70행이라 월별 속보 primary feed로 단정하기 어렵다.
+- Verification:
+  Completion artifact JSON parse passed.
+  `architect_review.verdict` is `approved`.
+  `output_artifact_path` exists.
+
+# 2026-06-14 - Ralph Macro Freshness Diagnostics Implementation
+
+## Goal
+- `.omx/plans/trade-data-refresh-implementation.md`의 diagnostics-first 범위를 구현한다.
+- KR 수출입 미갱신 원인을 `LIVE/CACHED`만으로 숨기지 않고 `SOURCE_LAG`, `NOT_CONFIGURED`, partial coverage로 노출한다.
+- 공식 수입 source ID가 확정되기 전까지 import는 `NOT_CONFIGURED` stop gate로 처리한다.
+
+## Checklist
+- [x] `$autoresearch` 잔여 상태 clear 및 `$ralph` 지침 확인
+- [x] Ralph state 시작 및 기존 계획/컨텍스트 재사용
+- [x] macro freshness pure helper 추가
+- [x] macro sync summary/watermark freshness payload 연결
+- [x] refresh toast, top banner, monitoring attention에 partial freshness 노출
+- [x] 상단 macro pill을 `LIVE + coverage_complete=False`에서 `PARTIAL` warning으로 표시
+- [x] regression tests 추가
+- [x] deslop pass 및 post-deslop regression 실행
+- [x] architect 재검증 완료
+- [x] 전체 pytest 및 Streamlit UI smoke 실행
+
+## Review
+- Changed:
+  `src/data_sources/macro_freshness.py` pure helper를 추가해 required signal inventory, reason precedence, group/alias freshness JSON을 생성한다.
+  `src/data_sources/macro_sync.py`가 provider/combined summary와 watermark details에 freshness payload를 싣는다.
+  `src/dashboard/data.py`, `src/ui/data_status.py`, `src/dashboard/tabs.py`, `app.py`가 partial macro coverage를 refresh notice, top banner, monitoring attention, header pill에 노출한다.
+- Stop gate:
+  공식 KR import source ID가 확정되지 않은 상태에서는 import를 임의 추가하지 않고 `aggregate_imports: NOT_CONFIGURED`로 표현한다.
+- Verification:
+  `python -m py_compile src\data_sources\macro_freshness.py src\data_sources\macro_sync.py src\dashboard\data.py src\ui\data_status.py src\dashboard\tabs.py app.py` -> passed
+  `python -m pytest -q tests/test_macro_freshness.py tests/test_data_status.py tests/test_dashboard_runtime.py tests/test_macro_sync.py --basetemp "$env:TEMP\pytest-freshness-architect-fix"` -> `56 passed`
+  `python -m pytest -q --basetemp "$env:TEMP\pytest-full-freshness-architect-fix"` -> `727 passed`
+  `python scripts\capture_streamlit_screenshot.py --output .omx\artifacts\macro-freshness-smoke-after-architect-fix-20260614.png --app app.py --port 8562 --debug-port 9282 --url http://127.0.0.1:8562 --width 1440 --height 1000 --timeout 120 --min-text-len 300` -> passed
+  Architect re-review -> `APPROVED`.
+
+# 2026-06-14 - Ralplan Trade Data Refresh Implementation Plan
+
+## Goal
+- `$autoresearch` 결과를 바탕으로 KR 수출입 데이터 freshness 개선 구현 계획을 세운다.
+- ralplan 형식에 맞춰 코드 근거, 대안, 수용 기준, 검증 경로를 포함한다.
+- 구현은 시작하지 않고, 실행 가능한 계획 산출물만 남긴다.
+
+## Checklist
+- [x] 잔여 autoresearch 상태 clear
+- [x] ralplan/plan skill 지침 확인
+- [x] 관련 코드 경로와 테스트 구조 재확인
+- [x] Architect 검토 반영
+- [x] Critic 검토 반영
+- [x] 최종 계획 파일 저장 및 검증
+
+## Review
+- Output:
+  `.omx/plans/trade-data-refresh-implementation.md`
+  `.omx/context/trade-data-refresh-implementation-20260614T082821Z.md`
+- Consensus:
+  Architect initially rated the draft `WATCH`; the plan now treats freshness as a durable contract, not just an internal helper.
+  Critic returned `ITERATE`; the plan now includes the exact freshness JSON shape, reason precedence, required signal inventory, banner data threading, required full pytest/UI smoke, and a clean stop gate when import source IDs remain unresolved.
+- Verification:
+  Required plan sections exist.
+  `omx state list-active --json` returned no active modes.
+  Plan file contains required signal inventory, reason precedence, `summary_json`/`details_json` persistence, full pytest, and required UI smoke.
+
+# 2026-06-14 - Autoresearch Trade Data Refresh Improvements
+
+## Goal
+- 2026년 5월 수출입 데이터 지연 진단을 바탕으로 개선 방안을 연구한다.
+- 단기/중기/장기 개선안을 데이터 원천, 코드 영향, 검증 방법 기준으로 나눈다.
+- `$autoresearch` completion artifact를 남겨 연구 산출물의 검토 가능성을 확보한다.
+
+## Checklist
+- [x] `$autoresearch` validation mode 설정
+- [x] 현재 KR 수출입 데이터 경로와 결함 재확인
+- [x] 공식/구조화 데이터 원천 후보 조사
+- [x] 개선안 우선순위와 테스트 전략 작성
+- [x] completion artifact 작성
+
+## Review
+- Output:
+  `.omx/specs/autoresearch-trade-data-refresh/report.md`
+  `.omx/specs/autoresearch-trade-data-refresh/result.json`
+- Recommendation:
+  우선순위는 `freshness diagnostics` -> `KR import aliases` -> `MOTIE/KOSIS structured aggregate trade provider` -> `preliminary/revised row semantics` 순서다.
+- Key finding:
+  2026-05 수출입 이슈는 retry 실패가 아니라 원천 레이어 문제다.
+  산업부 보도자료는 빠르지만 현재 앱은 ECOS 수출 계열을 사용하고, KR 수입 계열은 설정되어 있지 않다.
+- Verification:
+  Completion artifact JSON parse passed.
+  `architect_review.verdict` is `approved`.
+  `output_artifact_path` exists.
+
+# 2026-06-14 - 2026-05 Export/Import Data Refresh Diagnostic
+
+## Goal
+- 2026년 5월 수출입 데이터가 공개됐는데 대시보드에 갱신되지 않는 원인을 파악한다.
+- 코드 변경 전, 설정/수집 경로/warehouse 저장 상태/갱신 이력을 증거로 분리한다.
+- 실제 데이터 최신 월과 UI가 읽는 최신 월이 어디에서 갈라지는지 확인한다.
+
+## Checklist
+- [x] KR 수출입 지표 설정과 provider 경로 확인
+- [x] macro warehouse/cache 최신 월과 row 상태 확인
+- [x] 갱신 버튼/runtime 경로가 macro refresh를 수행하는지 확인
+- [x] 원인과 검증 증거 정리
+
+## Review
+- Finding:
+  2026-05 수출입 동향은 산업부 보도자료로 공개됐지만, 앱의 KR 수출 신호는 산업부 보도자료를 직접 읽지 않는다.
+  현재 KR 설정은 ECOS `export_amount` 및 품목별 ECOS export index 계열을 읽고, `export_amount` level series에서 YoY를 계산한다.
+  KR import alias는 설정과 warehouse 양쪽에 없다.
+- Evidence:
+  `config/macro_series.yml` has ECOS `export_amount`, `export_it`, `export_semiconductor`, `export_chemicals`, `export_steel`, `export_auto`, `export_machinery`, `export_pharma`; KOSIS `export_growth` is disabled.
+  `src/dashboard/runtime.py` manual macro refresh requests the month of `context.market_end_date_str`, so 2026-06-14 context requested through `202606`.
+  `data/warehouse.duckdb` latest KR macro fetch at 2026-06-14 14:35 has `export_*` aliases only through `202604`; base rate and USD/KRW reached `202605`, bond yield reached `202606`.
+  Direct `src.data_sources.ecos.fetch_series(..., start_ym="202604", end_ym="202606")` returned only `2026-04` rows for `901Y118/T002`, `403Y001/309AA`, and `403Y001/30911AA`.
+  Latest macro ingest rows show `status=LIVE`, `failed_aliases={}`, `requested_end=202606`, `coverage_complete=False`; this indicates source-lagged incomplete coverage, not a failed refresh.
+- Conclusion:
+  The main cause is data-source mismatch/lag: public 2026-05 trade release exists, but the configured ECOS export series used by the app has not exposed 2026-05 yet.
+  A secondary gap is that KR imports are not modeled at all in the current configuration, so import data cannot update in the KR dashboard.
+- Verification:
+  DuckDB read-only queries over `fact_macro_monthly`, `dim_macro_series`, `ingest_runs`, and `ingest_watermarks`.
+  Direct ECOS fetch smoke for `export_amount`, `export_it`, `export_semiconductor`, `base_rate`, and `usdkrw`.
+  Web check: MOTIE search result shows `2026년 5월 수출입 동향` posted on 2026-06-01.
+
 # 2026-05-17 - Remove Low-Value Overview Change Heatmap
 
 ## Goal
@@ -2673,3 +2873,27 @@
   actual theme overview smoke -> theme proxy monitor lists `전력/AI전력인프라`, `원자력`, `우주항공/UAM`, `로봇`, `방산`, `조선`, `화장품/K-뷰티`; buy candidates with desktop limit 6 include `전력/AI전력인프라`, `원자력`, `로봇`.
   cleanup -> removed two agent-created zero-row no-op smoke history rows; latest market history row remains row_count `109088`.
   Streamlit restart -> single conda process PID `16648`, `http://localhost:8501` returned HTTP 200.
+
+# 2026-06-22 - Sector Export YoY Chart Readability
+
+## Goal
+- `섹터별 수출 YoY 월별 추이` 차트에서 고성장 시리즈와 보합권 시리즈를 동시에 읽을 수 있게 한다.
+- 끝 라벨 겹침과 과도한 우측 혼잡을 줄인다.
+- 데이터 계약과 표시 대상 시리즈는 바꾸지 않는다.
+
+## Checklist
+- [x] 현재 차트 렌더링 경로와 테스트 계약 확인
+- [x] 극단값이 있는 경우의 시각적 분리 방식 적용
+- [x] 끝 라벨 배치와 y축 여백 보정
+- [x] focused UI 테스트 갱신
+- [x] 검증 결과 기록
+
+## Review
+- `src/ui/panels.py`의 `섹터별 수출 YoY 월별 추이` figure builder만 수정했다.
+- 최신값 분포가 넓은 경우에만 고성장/보합권 2단 패널로 나누고, 일반 분포는 기존 단일 차트를 유지한다.
+- 끝 라벨 간격 기준을 수출 YoY 차트에서는 최소 6%p로 높여 우측 라벨 겹침을 줄였다.
+- 표시 대상 시리즈, hover 데이터, trace 이름 계약은 유지했다.
+- Verification:
+  `python -m py_compile src\ui\panels.py tests\test_ui_components.py` -> passed
+  `python -m pytest -q tests/test_ui_components.py -k "sector_export_trend_figure or overview_chart_layout_places_export_trend_below_primary_charts" --basetemp "$env:TEMP\pytest-sector-export-readability-2"` -> `3 passed, 105 deselected`
+  `python -m pytest -q tests/test_ui_components.py --basetemp "$env:TEMP\pytest-sector-export-readability-ui-2"` -> `108 passed`

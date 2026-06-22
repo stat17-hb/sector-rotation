@@ -5,6 +5,7 @@ from src.ui.data_status import (
     get_button_states,
     is_sample_mode,
     resolve_dashboard_status_banner,
+    resolve_macro_status_display,
     resolve_price_cache_banner_case,
 )
 
@@ -207,3 +208,47 @@ class TestDataStatus:
         assert banner["level"] == "info"
         assert banner["title"] == "API 사전 점검 참고"
         assert "ECOS: HTTP_ERROR (timeout)" in banner["details"]
+
+    def test_resolve_dashboard_status_banner_warns_on_live_partial_macro_freshness(self):
+        banner = resolve_dashboard_status_banner(
+            data_status={"price": "LIVE", "macro": "LIVE"},
+            macro_status_detail={
+                "status": "LIVE",
+                "coverage_complete": False,
+                "freshness": {
+                    "requested_end": "202606",
+                    "overall_reason": "SOURCE_LAG",
+                    "groups": {
+                        "aggregate_exports": {
+                            "required": True,
+                            "configured": True,
+                            "latest_period": "202604",
+                            "reason": "SOURCE_LAG",
+                            "aliases": ["export_amount"],
+                        },
+                        "aggregate_imports": {
+                            "required": True,
+                            "configured": False,
+                            "latest_period": "",
+                            "reason": "NOT_CONFIGURED",
+                            "aliases": [],
+                        },
+                    },
+                    "aliases": {},
+                },
+            },
+        )
+
+        assert banner is not None
+        assert banner["level"] == "warning"
+        assert banner["title"] == "매크로 데이터 부분 커버리지"
+        assert "수출: 소스 최신월 지연 최신 2026-04" in banner["details"]
+        assert "수입: 미설정" in banner["details"]
+
+    def test_resolve_macro_status_display_marks_live_incomplete_as_partial_warning(self):
+        display = resolve_macro_status_display(
+            macro_status="LIVE",
+            macro_status_detail={"coverage_complete": False},
+        )
+
+        assert display == {"value": "PARTIAL", "tone": "warning"}

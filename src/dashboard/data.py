@@ -13,6 +13,7 @@ import pandas as pd
 import streamlit as st
 
 from src.data_sources.common import shift_month_token
+from src.data_sources.macro_freshness import summarize_macro_freshness
 from src.data_sources.krx_sector_authority import canonicalize_kr_sector_universe_rows
 from src.signals.flow import summarize_sector_investor_flow
 from src.macro.series_utils import (
@@ -717,13 +718,20 @@ def _build_macro_refresh_notice(summary: dict[str, object]) -> tuple[str, str]:
     status = str(summary.get("status", "")).strip().upper()
     coverage_complete = bool(summary.get("coverage_complete"))
     rows = int(summary.get("rows", 0) or 0)
+    freshness_details = summarize_macro_freshness(summary)
+    freshness_suffix = f" ({'; '.join(freshness_details[:3])})" if freshness_details else ""
 
-    if status == "LIVE":
+    if status == "LIVE" and coverage_complete:
         return ("success", f"Macro data refresh completed ({rows} rows available).")
+    if status == "LIVE":
+        return (
+            "warning",
+            f"Macro data refresh completed with partial source coverage ({rows} rows available).{freshness_suffix}",
+        )
     if status == "CACHED" and coverage_complete:
         return ("info", "Macro data already current in the local warehouse.")
     if status == "CACHED":
-        return ("warning", "Macro data refresh fell back to warehouse cache.")
+        return ("warning", f"Macro data refresh fell back to warehouse cache.{freshness_suffix}")
     return ("error", "Macro data refresh did not complete successfully.")
 
 

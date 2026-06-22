@@ -1196,6 +1196,49 @@ def test_build_sector_export_trend_figure_renders_monthly_series():
     assert "섹터별 수출 YoY 월별 추이" in str(fig.layout.title.text)
 
 
+def test_build_sector_export_trend_figure_splits_extreme_growth_from_compact_series():
+    index = pd.period_range("2024-12", periods=18, freq="M")
+    signals = [
+        type("Signal", (), {"sector_name": "KRX 반도체", "action": "Buy", "returns": {}, "mom_percentile": 90.0})(),
+        type("Signal", (), {"sector_name": "KOSPI200 정보기술", "action": "Buy", "returns": {}, "mom_percentile": 82.0})(),
+    ]
+
+    fig = panels_module._build_sector_export_trend_figure(
+        sector_export_history={
+            "KRX 반도체": pd.Series([30, 7, -4, 11, 17, 21, 12, 32, 28, 22, 26, 39, 45, 106, 165, 155, 179, 173], index=index, dtype="float64"),
+            "KOSPI200 정보기술": pd.Series([10, 12, 14, 13, 17, 19, 21, 27, 29, 31, 35, 41, 45, 76, 105, 121, 136, 140], index=index, dtype="float64"),
+            "KOSPI200 경기소비재": pd.Series([8, 4, 1, -2, 2, 5, 6, 4, 3, 2, 1, 0, -1, -3, -4, -3, -4, -5], index=index, dtype="float64"),
+            "KRX 산업재": pd.Series([4, 3, 2, 1, 0, -1, 1, 3, 4, 6, 7, 5, 3, 1, -1, 0, -2, -1], index=index, dtype="float64"),
+        },
+        signals=signals,
+        theme_mode="light",
+        window_months=18,
+    )
+
+    assert fig.layout.height == 430
+    assert fig.layout.yaxis.title.text == "고성장"
+    assert fig.layout.yaxis2.title.text == "보합권"
+    assert fig.data[0].yaxis == "y"
+    assert fig.data[2].yaxis == "y2"
+    assert fig.layout.xaxis2.dtick == "M2"
+    assert any("반도체 수출 173%" in str(annotation.text) for annotation in fig.layout.annotations)
+    assert any("자동차 수출 -5%" in str(annotation.text) for annotation in fig.layout.annotations)
+
+
+def test_build_sector_export_trend_figure_handles_empty_series():
+    index = pd.period_range("2025-01", periods=3, freq="M")
+
+    fig = panels_module._build_sector_export_trend_figure(
+        sector_export_history={"KRX 반도체": pd.Series([None, None, None], index=index, dtype="float64")},
+        signals=[],
+        theme_mode="light",
+        window_months=3,
+    )
+
+    assert len(fig.data) == 0
+    assert "표시할 섹터별 수출 시계열이 없습니다." in str(fig.layout.annotations[0].text)
+
+
 def test_build_overview_trend_figure_labels_line_ends_and_month_ticks():
     dates = pd.date_range("2026-01-02", periods=45, freq="B")
     prices = pd.DataFrame(

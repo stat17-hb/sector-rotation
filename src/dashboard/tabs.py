@@ -13,6 +13,7 @@ import streamlit as st
 
 from config.theme import set_theme_mode
 from src.dashboard.analysis import _extract_heatmap_selection, top_pick_sort_key
+from src.data_sources.macro_freshness import summarize_macro_freshness
 from src.ui.components import (
     ALL_ACTION_KEY,
     DEFAULT_UI_LOCALE,
@@ -344,6 +345,10 @@ def _summarize_collection_attention(row: pd.Series | dict[str, Any]) -> str:
     error_summary = _summarize_collection_errors(series)
     if error_summary != "없음":
         return error_summary
+    freshness_payload = series.to_dict() if isinstance(series, pd.Series) else dict(series)
+    freshness_summary = summarize_macro_freshness(freshness_payload)
+    if freshness_summary:
+        return "; ".join(freshness_summary[:2])
     if bool(series.get("coverage_complete", False)):
         return "없음"
     pct = pd.to_numeric(pd.Series([series.get("completion_pct", pd.NA)]), errors="coerce").iloc[0]

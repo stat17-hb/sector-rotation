@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
-from pathlib import Path
+
+import src.dashboard.data as dashboard_data
 
 from config.markets import load_market_configs
 
@@ -376,6 +378,34 @@ def test_run_macro_refresh_does_not_bypass_provider_series_policy(monkeypatch):
     assert notice == ("info", "CACHED")
     assert calls
     assert calls[0]["start_ym"] == "201605"
+
+
+def test_build_macro_refresh_notice_warns_on_live_partial_coverage():
+    notice = dashboard_data.build_macro_refresh_notice(
+        {
+            "status": "LIVE",
+            "coverage_complete": False,
+            "rows": 10,
+            "freshness": {
+                "requested_end": "202606",
+                "overall_reason": "SOURCE_LAG",
+                "groups": {
+                    "aggregate_exports": {
+                        "required": True,
+                        "configured": True,
+                        "latest_period": "202604",
+                        "reason": "SOURCE_LAG",
+                        "aliases": ["export_amount"],
+                    }
+                },
+                "aliases": {},
+            },
+        }
+    )
+
+    assert notice[0] == "warning"
+    assert "partial source coverage" in notice[1]
+    assert "수출: 소스 최신월 지연 최신 2026-04" in notice[1]
 
 
 def test_run_investor_flow_refresh_returns_notice_and_invalidates(monkeypatch):

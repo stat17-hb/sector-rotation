@@ -4,6 +4,8 @@ from __future__ import annotations
 from contextlib import nullcontext
 import math
 
+from plotly.subplots import make_subplots
+
 from src.ui.base import *
 
 
@@ -1110,7 +1112,9 @@ def _build_overview_trend_figure(
     return fig
 
 
-def _stagger_line_end_annotations(annotations: list[dict[str, object]]) -> None:
+def _stagger_line_end_annotations(
+    annotations: list[dict[str, object]], *, min_threshold: float = 0.025
+) -> None:
     numeric_annotations: list[tuple[float, dict[str, object]]] = []
     for annotation in annotations:
         try:
@@ -1121,7 +1125,7 @@ def _stagger_line_end_annotations(annotations: list[dict[str, object]]) -> None:
         return
 
     values = [value for value, _ in numeric_annotations]
-    threshold = max((max(values) - min(values)) * 0.045, 0.025)
+    threshold = max((max(values) - min(values)) * 0.045, min_threshold)
     offsets = [0, -12, 12, -24, 24, -36, 36]
     cluster: list[dict[str, object]] = []
     previous_value: float | None = None
@@ -1181,7 +1185,7 @@ def _build_sector_export_trend_figure(
     ]
     ordered_names.extend(sector_name for sector_name in history if sector_name not in ordered_names)
 
-    line_end_annotations: list[dict[str, object]] = []
+    trace_records: list[dict[str, object]] = []
     month_count = max(1, int(window_months))
     x_axis_dtick = "M2" if month_count > 12 else "M1"
     for trace_index, sector_name in enumerate(dict.fromkeys(ordered_names).keys()):
@@ -1193,35 +1197,81 @@ def _build_sector_export_trend_figure(
         month_labels = [pd.Timestamp(value).strftime("%Y-%m") if isinstance(value, pd.Timestamp) else str(value) for value in x_values]
         color = str(colorway[trace_index % len(colorway)])
         trace_name = _format_export_trace_name(sector_name)
-        fig.add_trace(
-            go.Scatter(
-                x=x_values,
-                y=visible.values,
-                mode="lines+markers",
-                name=trace_name,
-                line={"color": color, "width": 1.9},
-                marker={"color": color, "size": 4.2, "line": {"color": chart_tokens["background"], "width": 0.8}},
-                customdata=[[sector_name, month_label] for month_label in month_labels],
-                hovertemplate="%{fullData.name}<br>%{customdata[0]}<br>%{customdata[1]}<br>수출 YoY %{y:.1f}%<extra></extra>",
-            )
-        )
-        line_end_annotations.append(
+        trace_records.append(
             {
-                "x": x_values[-1],
-                "y": float(visible.iloc[-1]),
-                "text": f"{trace_name} {visible.iloc[-1]:.0f}%",
-                "xref": "x",
-                "yref": "y",
-                "showarrow": False,
-                "xanchor": "left",
-                "xshift": 8,
-                "font": {"size": 11, "color": color},
-                "bgcolor": chart_tokens["legend_bg"],
-                "bordercolor": color,
-                "borderwidth": 1,
-                "borderpad": 2,
+                "sector_name": sector_name,
+                "trace_name": trace_name,
+                "x_values": x_values,
+                "month_labels": month_labels,
+                "y_values": visible.values,
+                "latest": float(visible.iloc[-1]),
+                "color": color,
             }
         )
+
+    latest_values = [float(record["latest"]) for record in trace_records]
+    should_split_scale = (
+        bool(latest_values)
+        and len(latest_values) >= 4
+        and max(latest_values) >= 130.0
+        and (max(latest_values) - min(latest_values)) >= 100.0
+    )
+    high_growth_records = [record for record in trace_records if float(record["latest"]) >= 60.0]
+    compact_records = [record for record in trace_records if float(record["latest"]) < 60.0]
+    use_split_layout = should_split_scale and bool(high_growth_records) and bool(compact_records)
+
+    if use_split_layout:
+        fig = make_subplots(
+            rows=2,
+            cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.09,
+            row_heights=[0.56, 0.44],
+        )
+
+    line_end_annotations: list[dict[str, object]] = []
+    grouped_annotations: dict[int, list[dict[str, object]]] = {1: [], 2: []}
+    for record in trace_records:
+        row = 1
+        if use_split_layout and float(record["latest"]) < 60.0:
+            row = 2
+        xref = "x" if row == 1 else "x2"
+        yref = "y" if row == 1 else "y2"
+        sector_name = str(record["sector_name"])
+        trace_name = str(record["trace_name"])
+        x_values = record["x_values"]
+        color = str(record["color"])
+        trace = go.Scatter(
+            x=x_values,
+            y=record["y_values"],
+            mode="lines+markers",
+            name=trace_name,
+            line={"color": color, "width": 1.9},
+            marker={"color": color, "size": 4.2, "line": {"color": chart_tokens["background"], "width": 0.8}},
+            customdata=[[sector_name, month_label] for month_label in record["month_labels"]],
+            hovertemplate="%{fullData.name}<br>%{customdata[0]}<br>%{customdata[1]}<br>수출 YoY %{y:.1f}%<extra></extra>",
+        )
+        if use_split_layout:
+            fig.add_trace(trace, row=row, col=1)
+        else:
+            fig.add_trace(trace)
+        annotation = {
+            "x": x_values[-1],
+            "y": float(record["latest"]),
+            "text": f"{trace_name} {float(record['latest']):.0f}%",
+            "xref": xref,
+            "yref": yref,
+            "showarrow": False,
+            "xanchor": "left",
+            "xshift": 8,
+            "font": {"size": 11, "color": color},
+            "bgcolor": chart_tokens["legend_bg"],
+            "bordercolor": color,
+            "borderwidth": 1,
+            "borderpad": 2,
+        }
+        line_end_annotations.append(annotation)
+        grouped_annotations[row].append(annotation)
 
     if not fig.data:
         fig.add_annotation(
@@ -1234,27 +1284,49 @@ def _build_sector_export_trend_figure(
             font={"size": 13, "color": tokens["text"]},
         )
 
-    _stagger_line_end_annotations(line_end_annotations)
+    if use_split_layout:
+        _stagger_line_end_annotations(grouped_annotations[1], min_threshold=6.0)
+        _stagger_line_end_annotations(grouped_annotations[2], min_threshold=6.0)
+    else:
+        _stagger_line_end_annotations(line_end_annotations, min_threshold=6.0)
     fig.update_layout(**template)
     fig.update_layout(
         title="섹터별 수출 YoY 월별 추이",
-        height=360,
+        height=430 if use_split_layout else 360,
         margin={"l": 42, "r": 150, "t": 42, "b": 66},
         hovermode="x unified",
         legend={"orientation": "h", "x": 0.0, "y": -0.22, "xanchor": "left"},
         annotations=line_end_annotations,
     )
-    fig.add_hline(y=0, line_width=1, line_dash="dot", line_color=chart_tokens["axis"])
-    fig.update_yaxes(title="", ticksuffix="%", fixedrange=True)
-    fig.update_xaxes(
-        title="",
-        tickformat="%b\n%Y",
-        dtick=x_axis_dtick,
-        showspikes=True,
-        spikemode="across",
-        spikecolor=chart_tokens["axis"],
-        spikethickness=1,
-    )
+    if use_split_layout:
+        fig.add_hline(y=0, line_width=1, line_dash="dot", line_color=chart_tokens["axis"], row=1, col=1)
+        fig.add_hline(y=0, line_width=1, line_dash="dot", line_color=chart_tokens["axis"], row=2, col=1)
+        fig.update_yaxes(title="고성장", ticksuffix="%", fixedrange=True, row=1, col=1)
+        fig.update_yaxes(title="보합권", ticksuffix="%", fixedrange=True, row=2, col=1)
+        fig.update_xaxes(title="", showticklabels=False, row=1, col=1)
+        fig.update_xaxes(
+            title="",
+            tickformat="%b\n%Y",
+            dtick=x_axis_dtick,
+            showspikes=True,
+            spikemode="across",
+            spikecolor=chart_tokens["axis"],
+            spikethickness=1,
+            row=2,
+            col=1,
+        )
+    else:
+        fig.add_hline(y=0, line_width=1, line_dash="dot", line_color=chart_tokens["axis"])
+        fig.update_yaxes(title="", ticksuffix="%", fixedrange=True)
+        fig.update_xaxes(
+            title="",
+            tickformat="%b\n%Y",
+            dtick=x_axis_dtick,
+            showspikes=True,
+            spikemode="across",
+            spikecolor=chart_tokens["axis"],
+            spikethickness=1,
+        )
     return fig
 
 

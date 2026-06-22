@@ -113,6 +113,7 @@ from src.ui.components import (
 from src.ui.data_status import (
     get_button_states,
     resolve_dashboard_status_banner,
+    resolve_macro_status_display,
     resolve_price_cache_banner_case,
 )
 from src.ui.styles import inject_css
@@ -538,6 +539,7 @@ finally:
 
 price_warm_status: dict[str, object] = {}
 price_cache_case = None
+macro_status_detail = {}
 if price_status == "CACHED":
     if context.market_id == "US":
         from src.data_sources.yfinance_sectors import read_warm_status
@@ -566,6 +568,14 @@ except Exception as exc:
         }
     }
 
+try:
+    from src.data_sources.warehouse import read_dataset_status
+
+    macro_status_detail = read_dataset_status("macro_data", market=context.market_id)
+except Exception as exc:
+    logger.warning("Macro dataset status lookup failed: %s", exc)
+    macro_status_detail = {}
+
 openapi_missing_key_warning_shown = (
     context.market_id == "KR" and context.provider_configured == "OPENAPI" and not context.openapi_key_present
 )
@@ -580,6 +590,7 @@ dashboard_status_banner = resolve_dashboard_status_banner(
     openapi_key_warning=openapi_missing_key_warning_shown,
     preflight_status=preflight_status,
     price_warm_status=price_warm_status,
+    macro_status_detail=macro_status_detail,
 )
 
 current_regime = "Indeterminate"
@@ -635,6 +646,10 @@ if context.market_id == "US" and (trade_indicators or has_trade_indicators):
 
 dashboard_query_date_label = context.market_end_date.strftime("%Y-%m-%d")
 dashboard_data_date_label = market_data_reference_date or dashboard_query_date_label
+macro_status_display = resolve_macro_status_display(
+    macro_status=macro_status,
+    macro_status_detail=macro_status_detail,
+)
 
 render_page_header(
     title=resolve_dashboard_page_title(selected_dashboard_page, selected_market_id),
@@ -646,7 +661,7 @@ render_page_header(
     pills=[
         {"label": "국면", "value": current_regime, "tone": "success" if regime_is_confirmed else "warning"},
         {"label": "시장", "value": price_status, "tone": "danger" if price_status == "SAMPLE" else "warning" if price_status == "CACHED" else "success"},
-        {"label": "매크로", "value": macro_status, "tone": "danger" if macro_status == "SAMPLE" else "warning" if macro_status == "CACHED" else "success"},
+        {"label": "매크로", **macro_status_display},
         {"label": "조회 기준일", "value": dashboard_data_date_label, "tone": "info"},
         {"label": "목표일", "value": dashboard_query_date_label, "tone": "warning" if dashboard_data_date_label != dashboard_query_date_label else "info"},
         {"label": "제공자", "value": context.provider_effective, "tone": "info"},
